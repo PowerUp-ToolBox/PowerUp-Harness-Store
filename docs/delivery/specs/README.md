@@ -49,3 +49,9 @@ Rules: use `CONTEXT.md` vocabulary; respect ADRs; cite requirement IDs from `doc
 | P2-02 | P2-01 |
 | P2-03 | P0-07, P0-10 |
 | P2-04 | P2-03 |
+
+## Tickets
+
+Each spec is broken into tracer-bullet tickets, published as native GitHub sub-issues of the spec issue (issues #30–#112), labelled `ticket` + phase + `ready-for-agent`, with native "blocked by" links between tickets. A ticket's body is self-contained: What to build, Key decisions (inline, not just links — the target implementer is a cheaper model that won't reliably follow doc links), Acceptance criteria, How to verify, Constraints. Open a spec issue on GitHub and its sub-issues list is the ticket breakdown; the dependency graph is native GitHub issue dependencies, not re-documented here.
+
+Pick the lowest-numbered open ticket whose blockers are all closed.
