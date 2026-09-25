@@ -9,7 +9,7 @@ import { ArchiveSource, InMemorySource } from '../../src/index.js';
 import type { RandomAccessReader } from '../../src/index.js';
 import { DirectorySource } from '../../src/node/index.js';
 import { fixturesRoot, loadFixture } from '../helpers.js';
-import { buildZip, sparseReader } from './zip-writer.js';
+import { buildZip, zipReader } from './zip-writer.js';
 import type { ZipEntrySpec } from './zip-writer.js';
 
 export function fixtureDir(name: string): string {
@@ -72,9 +72,19 @@ export async function fixtureSources(
 export function hostileArchive(name: string): Uint8Array | RandomAccessReader {
   const recipe = loadFixture(name).expected.archive?.recipe;
   if (recipe === undefined) throw new Error(`fixtures/${name} has no archive recipe`);
-  const entries = folderEntries(fixtureDir(name));
+  const entries: ZipEntrySpec[] = [
+    ...(recipe.unlistedEntries ?? []).map(({ name: entryName, text }) => ({
+      name: entryName,
+      data: text,
+      unlisted: true,
+    })),
+    ...folderEntries(fixtureDir(name)),
+  ];
   for (const { name: entryName, text } of recipe.addEntries ?? []) {
     entries.push({ name: entryName, data: text });
+  }
+  for (const { name: entryName, localName, text } of recipe.localNames ?? []) {
+    entries.push({ name: entryName, localName, data: text });
   }
   for (const { name: linkName, target } of recipe.symlinks ?? []) {
     entries.push({ name: linkName, data: target, method: 0, unixMode: 0o120777 });
@@ -82,8 +92,10 @@ export function hostileArchive(name: string): Uint8Array | RandomAccessReader {
   for (let i = 0; i < (recipe.fillerFiles ?? 0); i++) {
     entries.push({ name: `filler/${String(i)}.txt` });
   }
-  const offset = recipe.offsetBytes ?? 0;
-  const zip = buildZip(entries, { offset });
-  if (offset > 0) return sparseReader(zip, offset);
+  for (const { name: fileName, bytes } of recipe.largeFiles ?? []) {
+    entries.push({ name: fileName, zeros: bytes });
+  }
+  if (recipe.largeFiles !== undefined) return zipReader(entries);
+  const zip = buildZip(entries);
   return zip.subarray(0, zip.length - (recipe.truncateBytes ?? 0));
 }

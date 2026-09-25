@@ -1,0 +1,22 @@
+{
+  "description": "A clean folder; its archive starts with an entry ../../orphan.txt that the central directory does not list: only an unpacker reading the zip in order finds it.",
+  "problems": [],
+  "warnings": [],
+  "archive": {
+    "recipe": {
+      "unlistedEntries": [
+        {
+          "name": "../../orphan.txt",
+          "text": "written outside the package by a streaming unpacker"
+        }
+      ]
+    },
+    "problems": [
+      {
+        "code": "archive_invalid",
+        "path": "$"
+      }
+    ],
+    "warnings": []
+  }
+}

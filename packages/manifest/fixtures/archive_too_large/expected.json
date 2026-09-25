@@ -1,10 +1,15 @@
 {
-  "description": "A clean folder; its archive is a sparse file of just over 500 MB.",
+  "description": "A clean folder; its archive adds a stored file of 500 MB of zeros, so it is just over 500 MB.",
   "problems": [],
   "warnings": [],
   "archive": {
     "recipe": {
-      "offsetBytes": 524288000
+      "largeFiles": [
+        {
+          "name": "data/padding.bin",
+          "bytes": 524288000
+        }
+      ]
     },
     "problems": [
       {

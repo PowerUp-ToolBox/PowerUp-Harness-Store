@@ -1,10 +1,8 @@
 import { Inflate } from 'fflate';
 import { crc32 } from './crc32.js';
-import { viewOf, ZipFormatError } from './central-directory.js';
+import { ZipFormatError } from './central-directory.js';
 import type { RandomAccessReader, ZipEntry } from './central-directory.js';
-
-const LOCAL_HEADER_SIGNATURE = 0x04034b50;
-const LOCAL_HEADER_SIZE = 30;
+import { FLAG_ENCRYPTED } from './local-headers.js';
 
 export const METHOD_STORED = 0;
 export const METHOD_DEFLATE = 8;
@@ -12,29 +10,34 @@ export const METHOD_DEFLATE = 8;
 /**
  * Compressed bytes are inflated a slice at a time, so a small slice of a "zip bomb" cannot expand
  * into more than about a thousand times its size (Deflate's maximum ratio) before the limits
- * below are checked. The first slices are small because most reads only need a few bytes.
+ * below are checked. The first slices are small because most reads only need a few bytes: a read
+ * of `n` bytes (the first `n`, or a whole entry of `n` bytes) starts with a slice of `n`
+ * compressed bytes (at least {@link MIN_SLICE}, at most {@link FIRST_SLICE}), doubling while more
+ * are needed, so checking a signature costs kilobytes of inflating, not a megabyte, however well
+ * the entry compresses and whatever size it declares.
  */
+const MIN_SLICE = 16;
 const FIRST_SLICE = 1024;
 const MAX_SLICE = 16 * 1024;
 
 /**
  * Reads an entry's content into memory, up to `maxBytes` bytes. Nothing is written anywhere.
+ * `dataStart` comes from the entry's local header, already checked against the central directory
+ * (see readLocalHeaders()).
  *
- * The local header must name the same file as the central directory (a mismatch is a classic way
- * to make two unpackers see two different files). When the whole entry is read, its size and
- * CRC-32 must match the central directory; inflating stops as soon as it produces more bytes than
- * declared, so a lying entry costs at most one slice of work.
+ * When the whole entry is read, its size and CRC-32 must match the central directory; inflating
+ * stops as soon as it produces more bytes than declared, so a lying entry costs at most one slice
+ * of work. A read of the first bytes only is not checked against the CRC-32.
  *
  * @throws {ZipFormatError} when the entry cannot be read.
  */
 export async function readEntry(
   reader: RandomAccessReader,
   entry: ZipEntry,
-  centralDirectoryOffset: number,
+  dataStart: number,
   maxBytes: number,
 ): Promise<Uint8Array> {
-  if (entry.flags & 0x0001) throw new ZipFormatError('it is encrypted');
-  const dataStart = await locateData(reader, entry, centralDirectoryOffset);
+  if (entry.flags & FLAG_ENCRYPTED) throw new ZipFormatError('it is encrypted');
   const wanted = Math.min(maxBytes, entry.uncompressedSize);
 
   if (entry.method === METHOD_STORED) {
@@ -54,51 +57,28 @@ export async function readEntry(
   return inflateEntry(reader, entry, dataStart, maxBytes);
 }
 
-async function locateData(
-  reader: RandomAccessReader,
-  entry: ZipEntry,
-  centralDirectoryOffset: number,
-): Promise<number> {
-  const offset = entry.localHeaderOffset;
-  if (offset + LOCAL_HEADER_SIZE > centralDirectoryOffset) {
-    throw new ZipFormatError('its local header lies outside the archive');
-  }
-  const header = viewOf(await reader.read(offset, LOCAL_HEADER_SIZE));
-  if (header.getUint32(0, true) !== LOCAL_HEADER_SIGNATURE) {
-    throw new ZipFormatError('its local header is corrupt');
-  }
-  const nameLength = header.getUint16(26, true);
-  const extraLength = header.getUint16(28, true);
-  const dataStart = offset + LOCAL_HEADER_SIZE + nameLength + extraLength;
-  if (dataStart + entry.compressedSize > centralDirectoryOffset) {
-    throw new ZipFormatError('its data runs past the end of the archive');
-  }
-  const localName = await reader.read(offset + LOCAL_HEADER_SIZE, nameLength);
-  if (!sameBytes(localName, entry.rawName)) {
-    throw new ZipFormatError('its local header names a different file than the central directory');
-  }
-  return dataStart;
-}
-
 async function inflateEntry(
   reader: RandomAccessReader,
   entry: ZipEntry,
   dataStart: number,
   maxBytes: number,
 ): Promise<Uint8Array> {
+  // A prefix read stops once it has enough bytes; a full read is checked against the size and CRC.
+  const prefixOnly = maxBytes < entry.uncompressedSize;
   const chunks: Uint8Array[] = [];
   let produced = 0;
   let crc = 0;
   const inflater = new Inflate((chunk) => {
     chunks.push(chunk);
     produced += chunk.length;
-    crc = crc32(chunk, crc);
+    if (!prefixOnly) crc = crc32(chunk, crc);
   });
 
-  // A prefix read stops once it has enough bytes; a full read is checked against the size and CRC.
-  const prefixOnly = maxBytes < entry.uncompressedSize;
+  // Start with about as many compressed bytes as bytes are wanted: an entry that inflates far
+  // beyond its declared size is caught after a small slice too.
   let consumed = 0;
-  let slice = FIRST_SLICE;
+  const wanted = Math.min(maxBytes, entry.uncompressedSize);
+  let slice = Math.min(FIRST_SLICE, Math.max(MIN_SLICE, wanted));
   while (consumed < entry.compressedSize) {
     const length = Math.min(slice, entry.compressedSize - consumed);
     const input = await reader.read(dataStart + consumed, length);
@@ -132,10 +112,4 @@ function concat(chunks: readonly Uint8Array[], maxBytes: number): Uint8Array {
     at += part.length;
   }
   return out;
-}
-
-function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
 }

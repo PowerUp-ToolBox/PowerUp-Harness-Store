@@ -120,6 +120,32 @@ describe('P0-01.3 acceptance criteria', () => {
     expect(existsSync(join(scratch, 'absolute.txt'))).toBe(false);
   });
 
+  it('2. a ../ name only an unpacker reading the zip in order would use is rejected too, unwritten', async () => {
+    const work = join(scratch, 'uploads', 'incoming');
+    mkdirSync(work, { recursive: true });
+    const cases = [
+      // The local header of dist/helper.js names it ../../evil.js.
+      [
+        'archive-local-header-name',
+        ['archive_invalid@dist/helper.js', 'archive_path_traversal@dist/helper.js'],
+      ],
+      // ../../orphan.txt is in the zip, but not in its central directory.
+      ['archive-unlisted-entry', ['archive_invalid@$']],
+    ] as const;
+    for (const [name, expected] of cases) {
+      const zipPath = join(work, `${name}.zip`);
+      writeFileSync(zipPath, hostileArchive(name) as Uint8Array);
+      const before = snapshot(scratch);
+      const { problems } = await codesAndPaths(await openArchiveFile(zipPath));
+      expect(problems).toEqual(expected);
+      expect(snapshot(scratch)).toEqual(before);
+    }
+    for (const dir of [work, dirname(work), scratch, process.cwd(), packageRoot]) {
+      expect(existsSync(join(dir, 'evil.js'))).toBe(false);
+      expect(existsSync(join(dir, 'orphan.txt'))).toBe(false);
+    }
+  });
+
   it('3. a zip with a symlink entry is rejected with archive_symlink', async () => {
     const source = await ArchiveSource.open(hostileArchive('archive_symlink'));
     expect(await codesAndPaths(source)).toEqual({

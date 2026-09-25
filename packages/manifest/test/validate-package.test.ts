@@ -2,6 +2,7 @@
  * validatePackage(): each rule on top of validateManifest(), on packages built in memory (and
  * as zips where only an archive can hold the case).
  */
+import { crc32, deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import {
   ArchiveSource,
@@ -20,7 +21,13 @@ import type {
 } from '../src/index.js';
 import { binaryManifest, findings, minimalManifest, problemsOf } from './helpers.js';
 import { jpeg, png } from './support/images.js';
-import { buildZip, extraField, sparseReader } from './support/zip-writer.js';
+import {
+  buildZip,
+  extraField,
+  localRecord,
+  sparseReader,
+  zipReader,
+} from './support/zip-writer.js';
 import type { ZipEntrySpec } from './support/zip-writer.js';
 
 type Files = Record<string, Uint8Array | string>;
@@ -291,6 +298,30 @@ describe('screenshots in assets/', () => {
     expect(result.ok).toBe(true);
     expect(warnings).toEqual(['screenshots_too_many@assets']);
     expect(only(result, 'screenshots_too_many').params).toEqual({ actual: 6, limit: 5 });
+  });
+
+  it('are each checked from their first bytes, cheaply even when they compress 1 000 to 1', async () => {
+    // 8 MB of zeros, 8 KB deflated: 2 000 of them are a hostile upload within the limits, half
+    // declaring their size, half declaring none (a lie, found when the first slice inflates).
+    const zeros = new Uint8Array(8 * 1024 * 1024);
+    const bomb = { method: 8, compressedData: deflateRawSync(zeros), crc: crc32(zeros) };
+    const entries: ZipEntrySpec[] = [
+      ...[...packageFiles()].map(([name, data]) => ({ name, data })),
+      ...Array.from({ length: 2000 }, (_, i) => ({
+        name: `assets/s${String(i)}.png`,
+        ...bomb,
+        declaredSize: i % 2 === 0 ? zeros.length : 0,
+      })),
+    ];
+    const reader = sparseReader(buildZip(entries), 0);
+    const source = await ArchiveSource.open(reader);
+    const opened = reader.bytesRead;
+    const started = performance.now();
+    const { problems } = await check(source);
+    expect(problems).toHaveLength(2000); // file_type (not PNGs) or archive_invalid (lying size)
+    // Before, each check inflated a 1 KB slice (about 1 MB) and took about 8 ms.
+    expect(performance.now() - started).toBeLessThan(4000);
+    expect(reader.bytesRead - opened).toBeLessThan(2000 * 64);
   });
 
   it('give a warning when one is over 2 MB', async () => {
@@ -567,6 +598,139 @@ describe('archive safety', () => {
     expect(only(result, 'archive_invalid').messageKey).toBe('archive_invalid.encrypted');
   });
 
+  it('rejects an entry whose local header names another file, and checks that name too', async () => {
+    const hostile = await zipped({}, [
+      { name: 'dist/helper.js', data: 'x', localName: '../../evil.js' },
+    ]);
+    const { result, problems } = await check(hostile);
+    expect(problems).toEqual([
+      'archive_invalid@dist/helper.js',
+      'archive_path_traversal@dist/helper.js',
+    ]);
+    expect(problemsOf(result).map((problem) => [problem.messageKey, problem.params])).toEqual([
+      ['archive_path_traversal.local_name', { name: '"../../evil.js"' }],
+      ['archive_invalid.local_name', { name: '"../../evil.js"' }],
+    ]);
+    const renamed = await zipped({}, [
+      { name: 'dist/helper.js', data: 'x', localName: 'dist/other.js' },
+    ]);
+    expect((await check(renamed)).problems).toEqual(['archive_invalid@dist/helper.js']);
+  });
+
+  it('reports a manifest.json whose local header names another file once, without reading it', async () => {
+    const source = await zipped(
+      {},
+      [{ name: 'manifest.json', data: '{', localName: 'manifest.jsom' }],
+      ['manifest.json'],
+    );
+    const { result, problems } = await check(source);
+    expect(problems).toEqual(['archive_invalid@manifest.json']);
+    expect(only(result, 'archive_invalid').messageKey).toBe('archive_invalid.local_name');
+  });
+
+  it('rejects an entry whose local header disagrees with the central directory', async () => {
+    const source = await zipped({}, [{ name: 'dist/x.js', data: 'x = 1;', local: { crc: 7 } }]);
+    const { result, problems } = await check(source);
+    expect(problems).toEqual(['archive_invalid@dist/x.js']);
+    expect(only(result, 'archive_invalid')).toMatchObject({
+      messageKey: 'archive_invalid.inconsistent',
+      message:
+        'The zip entry is inconsistent: its local header gives another CRC-32 than its central directory record. Different unpackers could see different files here.',
+    });
+  });
+
+  it('rejects bytes of the archive that belong to no entry, such as a hidden ../ entry', async () => {
+    const hidden: ZipEntrySpec = { name: '../../orphan.txt', data: 'x', unlisted: true };
+    const entries = [...packageFiles()].map(([name, data]) => ({ name, data }));
+    const source = await ArchiveSource.open(buildZip([hidden, ...entries]));
+    const { result, problems } = await check(source);
+    expect(problems).toEqual(['archive_invalid@$']);
+    expect(only(result, 'archive_invalid')).toMatchObject({
+      messageKey: 'archive_invalid.unlisted_data',
+      params: { offset: 0, length: localRecord(hidden).length },
+    });
+  });
+
+  it('rejects a special file (device, pipe, socket) in a zip', async () => {
+    const modes = { 'dev/pipe': 0o010644, 'dev/tty': 0o020644, 'dev/disk': 0o060644 };
+    const source = await zipped(
+      {},
+      Object.entries(modes).map(([name, unixMode]) => ({ name, unixMode })),
+    );
+    const { result, problems } = await check(source);
+    expect(problems).toEqual(['file_type@dev/disk', 'file_type@dev/pipe', 'file_type@dev/tty']);
+    expect(new Set(problemsOf(result).map((problem) => problem.messageKey))).toEqual(
+      new Set(['file_type.special']),
+    );
+  });
+
+  it('a required file that is a special file is reported as that only', async () => {
+    const source = await zipped({}, [{ name: 'README.md', unixMode: 0o010644 }], ['README.md']);
+    expect((await check(source)).problems).toEqual(['file_type@README.md']);
+  });
+
+  it.each([
+    ['dist\\helper.js', '"\\"'],
+    ['manifest.json::$DATA', '":"'],
+    ['dist/index.js:evil', '":"'],
+  ])('rejects the name %s, which Windows reads differently', async (name, character) => {
+    const { result, problems } = await check(await zipped({}, [{ name, data: 'x' }]));
+    expect(problems).toEqual([`archive_invalid@${name}`]);
+    expect(only(result, 'archive_invalid')).toMatchObject({
+      messageKey: 'archive_invalid.name_character',
+      params: { character },
+    });
+  });
+
+  it('rejects paths that differ only in letter case, Unicode form or trailing dots and spaces', async () => {
+    const source = await zipped({
+      'readme.md': '# lower case',
+      'dist/caf\u00e9.js': 'composed',
+      'dist/cafe\u0301.js': 'decomposed',
+      'manifest.json. ': '{"a manifest.json on Windows": true}',
+    });
+    const { result, problems } = await check(source);
+    expect(problems).toEqual([
+      'archive_invalid@dist/cafe\u0301.js',
+      'archive_invalid@manifest.json. ',
+      'archive_invalid@readme.md',
+    ]);
+    expect(problemsOf(result).map((problem) => [problem.messageKey, problem.params])).toEqual([
+      ['archive_invalid.case_conflict', { other: '"README.md"' }],
+      ['archive_invalid.case_conflict', { other: '"dist/caf\u00e9.js"' }],
+      ['archive_invalid.case_conflict', { other: '"manifest.json"' }],
+    ]);
+    // Files in memory and folders are checked the same way.
+    expect((await check(inMemory({ 'README.MD': 'x' }))).problems).toEqual([
+      'archive_invalid@README.MD',
+    ]);
+  });
+
+  it('rejects a file at the path of a folder that other entries need', async () => {
+    const source = await zipped({}, [
+      { name: 'Dist', data: 'a file where the folder dist/ is' },
+      { name: 'lib/' },
+      { name: 'lib', data: 'a file where the folder lib/ is' },
+    ]);
+    const { result, problems } = await check(source);
+    expect(problems).toEqual(['archive_invalid@Dist', 'archive_invalid@lib']);
+    expect(problemsOf(result).map((problem) => [problem.messageKey, problem.params])).toEqual([
+      ['archive_invalid.file_folder_conflict', { other: '"dist/index.js"' }],
+      ['archive_invalid.file_folder_conflict', { other: '"lib/"' }],
+    ]);
+  });
+
+  it('accepts paths that only look alike', async () => {
+    const source = await zipped({
+      'dist.js': 'x',
+      'dist-old/index.js': 'x',
+      'distx/index.js': 'x',
+      'DIST/other.js': 'a file in the same folder as dist/index.js on macOS, but another file',
+      'assets/icon.png.bak/x': 'x',
+    });
+    expect((await check(source)).problems).toEqual([]);
+  });
+
   it('cuts a hostile entry name to 1 024 characters in the problem path', async () => {
     const name = `../${'x'.repeat(5000)}`;
     const [problem] = problemsOf((await check(await zipped({}, [{ name, data: 'x' }]))).result);
@@ -620,16 +784,18 @@ describe('archive limits', () => {
   });
 
   it('rejects an archive over 500 MB, compressed', async () => {
-    const zip = (offset: number) =>
-      buildZip(
-        [...packageFiles()].map(([name, data]) => ({ name, data })),
-        { offset },
-      );
+    // The package plus a stored file of zeros (never allocated) that brings it to the size.
+    const zip = (padding: number) =>
+      zipReader([
+        ...[...packageFiles()].map(([name, data]) => ({ name, data })),
+        { name: 'data/padding.bin', zeros: padding },
+      ]);
     const limit = PACKAGE_LIMITS.maxArchiveBytes;
-    const exact = zip(0).length;
-    const atLimit = await ArchiveSource.open(sparseReader(zip(limit - exact), limit - exact));
+    const base = zip(0).size;
+    const atLimit = await ArchiveSource.open(zip(limit - base));
+    expect(atLimit.listEntries().archiveSize).toBe(limit);
     expect((await check(atLimit)).result.ok).toBe(true);
-    const over = await ArchiveSource.open(sparseReader(zip(limit - exact + 1), limit - exact + 1));
+    const over = await ArchiveSource.open(zip(limit - base + 1));
     const { result, problems } = await check(over);
     expect(problems).toEqual(['archive_too_large@$']);
     expect(only(result, 'archive_too_large')).toMatchObject({

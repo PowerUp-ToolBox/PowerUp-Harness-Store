@@ -1,0 +1,27 @@
+{
+  "description": "A clean folder; its archive adds dist/helper.js, whose local header names it ../../evil.js: the name an unpacker reading the zip in order would use.",
+  "problems": [],
+  "warnings": [],
+  "archive": {
+    "recipe": {
+      "localNames": [
+        {
+          "name": "dist/helper.js",
+          "localName": "../../evil.js",
+          "text": "written outside the package by a streaming unpacker"
+        }
+      ]
+    },
+    "problems": [
+      {
+        "code": "archive_path_traversal",
+        "path": "dist/helper.js"
+      },
+      {
+        "code": "archive_invalid",
+        "path": "dist/helper.js"
+      }
+    ],
+    "warnings": []
+  }
+}

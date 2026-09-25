@@ -5,12 +5,22 @@
  * give the same answer for all three.
  */
 
-/** What an entry of a Harness Package is. Anything else (a device, a pipe) is not listed. */
-export type PackageEntryKind = 'file' | 'directory' | 'symlink';
+/**
+ * What an entry of a Harness Package is. `special` is anything that is neither a regular file, a
+ * folder nor a symbolic link: a device, a named pipe or a socket. Only files are ever read.
+ */
+export type PackageEntryKind = 'file' | 'directory' | 'symlink' | 'special';
 
-/** Why an archive entry could be listed but not unpacked. */
+/**
+ * Why an archive entry could be listed but not unpacked safely. `inconsistent`: the zip describes
+ * the entry in two ways that disagree (its local header and its central directory record, or its
+ * bytes overlap another entry's), so different unpackers could see different files; `detail`
+ * completes the sentence "The zip entry is inconsistent: ...".
+ */
 export type UnsupportedEntry =
-  { reason: 'encrypted' } | { reason: 'compression_method'; method: number };
+  | { reason: 'encrypted' }
+  | { reason: 'compression_method'; method: number }
+  | { reason: 'inconsistent'; detail: string };
 
 /** One entry of a Harness Package, as listed without reading any content. */
 export interface PackageEntry {
@@ -24,6 +34,12 @@ export interface PackageEntry {
    * The archive-safety rules check them too.
    */
   otherNames?: readonly string[];
+  /**
+   * The name in a zip entry's local header, when its bytes differ from the central directory's.
+   * Unpackers that read a zip in order (streaming unpackers) use this name; the archive-safety
+   * rules reject the mismatch and check this name too.
+   */
+  localName?: string;
   kind: PackageEntryKind;
   /** Size in bytes, uncompressed (for a zip entry: as its central directory declares). */
   size: number;
@@ -41,6 +57,12 @@ export interface PackageListing {
   archiveSize?: number;
   /** More entries exist than were listed: listing stops after `PACKAGE_LIMITS.maxListedEntries`. */
   truncated: boolean;
+  /**
+   * The first stretch of a zip, before its central directory, that belongs to no listed entry.
+   * An unpacker that reads the zip in order could find files there that the rules never saw,
+   * so the archive-safety rules reject it.
+   */
+  unlistedData?: { offset: number; length: number };
   /**
    * Set when the archive cannot be read at all (not a zip, a corrupt central directory); the
    * text completes the sentence "The Harness Package is not a readable zip archive: ...".

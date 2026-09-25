@@ -3,14 +3,21 @@ import { indexFiles, maxBytesOf, PackageReadError } from './source.js';
 import type { PackageEntry, PackageListing, PackageSource, ReadFileOptions } from './source.js';
 import { readCentralDirectory, ZipFormatError } from './zip/central-directory.js';
 import type { CentralDirectory, RandomAccessReader, ZipEntry } from './zip/central-directory.js';
+import { FLAG_ENCRYPTED, readLocalHeaders } from './zip/local-headers.js';
+import type { LocalHeader, LocalLayout } from './zip/local-headers.js';
 import { METHOD_DEFLATE, METHOD_STORED, readEntry } from './zip/read-entry.js';
 
 export type { RandomAccessReader } from './zip/central-directory.js';
 
 /**
- * A Harness Package in a zip archive. Opening it reads only the central directory (the zip's
- * list of entries); {@link readFile} inflates one entry into memory, up to the bytes asked for.
- * Nothing is ever extracted or written to disk, so it is safe on an untrusted upload.
+ * A Harness Package in a zip archive. Opening it reads the central directory (the zip's list of
+ * entries) and every entry's local header, never any content; {@link readFile} inflates one entry
+ * into memory, up to the bytes asked for. Nothing is ever extracted or written to disk, so it is
+ * safe on an untrusted upload.
+ *
+ * The listing is what every unpacker would find: an entry whose local header disagrees with the
+ * central directory, and bytes that belong to no entry (where a streaming unpacker could find
+ * files the central directory hides), are listed for the archive-safety rules to reject.
  *
  * The archive is given as bytes (the Store's `publish` Edge Function, the renderer) or as a
  * {@link RandomAccessReader} that reads by position (`fileReader()` from
@@ -18,34 +25,48 @@ export type { RandomAccessReader } from './zip/central-directory.js';
  */
 export class ArchiveSource implements PackageSource {
   readonly #reader: RandomAccessReader;
-  readonly #directory: CentralDirectory | undefined;
+  readonly #entries: readonly ZipEntry[];
+  readonly #headers: readonly LocalHeader[];
   readonly #listing: PackageListing;
   readonly #files: Map<string, number>;
 
-  private constructor(reader: RandomAccessReader, directory: CentralDirectory | string) {
+  private constructor(
+    reader: RandomAccessReader,
+    zip: { directory: CentralDirectory; layout: LocalLayout } | string,
+  ) {
     this.#reader = reader;
-    if (typeof directory === 'string') {
-      this.#directory = undefined;
+    if (typeof zip === 'string') {
+      this.#entries = [];
+      this.#headers = [];
       this.#listing = Object.freeze({
         entries: Object.freeze([]),
         archiveSize: reader.size,
         truncated: false,
-        unreadable: directory,
+        unreadable: zip,
       });
     } else {
-      this.#directory = directory;
-      this.#listing = Object.freeze({
-        entries: Object.freeze(directory.entries.map(toPackageEntry)),
+      const { directory, layout } = zip;
+      this.#entries = directory.entries;
+      this.#headers = layout.headers;
+      const listing: PackageListing = {
+        entries: Object.freeze(
+          directory.entries.map((entry, index) =>
+            toPackageEntry(entry, layout.headers[index] ?? { otherNames: [] }),
+          ),
+        ),
         archiveSize: reader.size,
         truncated: directory.truncated,
-      });
+      };
+      if (layout.unlisted !== undefined) listing.unlistedData = Object.freeze(layout.unlisted);
+      this.#listing = Object.freeze(listing);
     }
     this.#files = indexFiles(this.#listing.entries);
   }
 
   /**
-   * Reads the archive's central directory. An archive that is not a readable zip still opens:
-   * its listing says why (`unreadable`), and validatePackage() reports `archive_invalid`.
+   * Reads the archive's central directory and local headers. An archive that is not a readable
+   * zip still opens: its listing says why (`unreadable`), and validatePackage() reports
+   * `archive_invalid`.
    *
    * @throws {TypeError} when `archive` is neither bytes nor a reader; otherwise only what the
    *   reader throws (an I/O error), never because of the archive's content.
@@ -59,7 +80,8 @@ export class ArchiveSource implements PackageSource {
         maxEntries: PACKAGE_LIMITS.maxListedEntries,
         maxCentralDirectoryBytes: PACKAGE_LIMITS.maxCentralDirectoryBytes,
       });
-      return new ArchiveSource(reader, directory);
+      const layout = await readLocalHeaders(reader, directory);
+      return new ArchiveSource(reader, { directory, layout });
     } catch (error) {
       if (error instanceof ZipFormatError) return new ArchiveSource(reader, error.message);
       throw error;
@@ -77,12 +99,20 @@ export class ArchiveSource implements PackageSource {
   async readFile(path: string, options?: ReadFileOptions): Promise<Uint8Array> {
     const maxBytes = maxBytesOf(options);
     const index = this.#files.get(path);
-    const entry = index === undefined ? undefined : this.#directory?.entries[index];
-    if (entry === undefined || this.#directory === undefined) {
+    const entry = index === undefined ? undefined : this.#entries[index];
+    const header = index === undefined ? undefined : this.#headers[index];
+    if (entry === undefined || header === undefined) {
       throw new Error(`"${path}" is not a file in this Harness Package`);
     }
+    // An entry that unpackers could see differently is never read.
+    if (header.inconsistency !== undefined) throw new PackageReadError(header.inconsistency);
+    if (header.name !== undefined || header.dataStart === undefined) {
+      throw new PackageReadError(
+        'its local header names a different file than the central directory',
+      );
+    }
     try {
-      return await readEntry(this.#reader, entry, this.#directory.centralDirectoryOffset, maxBytes);
+      return await readEntry(this.#reader, entry, header.dataStart, maxBytes);
     } catch (error) {
       if (error instanceof ZipFormatError) throw new PackageReadError(error.message);
       throw error;
@@ -90,12 +120,16 @@ export class ArchiveSource implements PackageSource {
   }
 }
 
-function toPackageEntry(entry: ZipEntry): PackageEntry {
+function toPackageEntry(entry: ZipEntry, header: LocalHeader): PackageEntry {
   const listed: PackageEntry = { name: entry.name, kind: entry.kind, size: entry.uncompressedSize };
-  if (entry.otherNames.length > 0) listed.otherNames = Object.freeze([...entry.otherNames]);
-  // Directories and links carry no content an unpacker needs to inflate.
-  if (entry.kind === 'file') {
-    if (entry.flags & 0x0001) listed.unsupported = { reason: 'encrypted' };
+  const otherNames = [...entry.otherNames, ...header.otherNames];
+  if (otherNames.length > 0) listed.otherNames = Object.freeze(otherNames);
+  if (header.name !== undefined) listed.localName = header.name;
+  if (header.inconsistency !== undefined) {
+    listed.unsupported = Object.freeze({ reason: 'inconsistent', detail: header.inconsistency });
+  } else if (entry.kind === 'file') {
+    // Directories and links carry no content an unpacker needs to inflate.
+    if (entry.flags & FLAG_ENCRYPTED) listed.unsupported = { reason: 'encrypted' };
     else if (entry.method !== METHOD_STORED && entry.method !== METHOD_DEFLATE) {
       listed.unsupported = { reason: 'compression_method', method: entry.method };
     }

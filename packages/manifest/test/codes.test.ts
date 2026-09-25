@@ -239,6 +239,7 @@ const EXAMPLES: Record<MessageKey, Example | PackageExample | 'fallback' | 'smal
   },
   'file_type.icon': packageExample([{ name: 'assets/icon.png', data: 'not a png' }]),
   'file_type.screenshot': packageExample([{ name: 'assets/shot.gif', data: 'GIF89a' }]),
+  'file_type.special': packageExample([{ name: 'pipe', unixMode: 0o010644 }]),
   icon_dimensions: packageExample([{ name: 'assets/icon.png', data: png(256, 256) }]),
   archive_symlink: fixtureArchive('archive_symlink'),
   archive_path_traversal: fixtureArchive('archive_path_traversal'),
@@ -246,6 +247,7 @@ const EXAMPLES: Record<MessageKey, Example | PackageExample | 'fallback' | 'smal
   'archive_path_traversal.other_name': packageExample([
     { name: 'x.txt', data: 'x', extra: unicodePath('../x.txt') },
   ]),
+  'archive_path_traversal.local_name': fixtureArchive('archive-local-header-name'),
   archive_too_large: fixtureArchive('archive_too_large'),
   archive_too_many_files: fixtureArchive('archive_too_many_files'),
   'archive_too_many_files.not_counted': {
@@ -267,6 +269,12 @@ const EXAMPLES: Record<MessageKey, Example | PackageExample | 'fallback' | 'smal
   ]),
   'archive_invalid.encrypted': packageExample([{ name: 'secret.bin', data: 'x', flags: 1 }]),
   'archive_invalid.compression_method': packageExample([{ name: 'a.bz2', data: 'x', method: 12 }]),
+  'archive_invalid.local_name': packageExample([{ name: 'x.txt', data: 'x', localName: 'y.txt' }]),
+  'archive_invalid.inconsistent': packageExample([{ name: 'x.txt', data: 'x', local: { crc: 1 } }]),
+  'archive_invalid.unlisted_data': fixtureArchive('archive-unlisted-entry'),
+  'archive_invalid.name_character': packageExample([{ name: 'dist\\x.js', data: 'x' }]),
+  'archive_invalid.case_conflict': packageExample([{ name: 'readme.md', data: 'x' }]),
+  'archive_invalid.file_folder_conflict': packageExample([{ name: 'DIST', data: 'x' }]),
   'file_too_large.readme': packageExample([{ name: 'README.md', data: 'x'.repeat(60_000) }]),
   'file_too_large.screenshot': packageExample([
     { name: 'assets/big.png', data: Buffer.concat([png(8, 8), Buffer.alloc(3 << 20)]) },

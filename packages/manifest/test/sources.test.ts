@@ -3,7 +3,7 @@
  * reading with limits, and every way a zip can be malformed or hostile.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32 as nodeCrc32, deflateRawSync } from 'node:zlib';
@@ -14,8 +14,14 @@ import { DirectorySource, fileReader, openArchiveFile } from '../src/node/index.
 import { crc32 } from '../src/zip/crc32.js';
 import { CP437_HIGH, decodeName } from '../src/zip/central-directory.js';
 import { fixtureDir, zipFolder } from './support/packages.js';
-import { buildZip, extraField, sparseReader } from './support/zip-writer.js';
-import type { ZipEntrySpec } from './support/zip-writer.js';
+import {
+  buildZip,
+  extraField,
+  localRecord,
+  sparseReader,
+  writeZipFile,
+} from './support/zip-writer.js';
+import type { DataDescriptorSpec, ZipEntrySpec } from './support/zip-writer.js';
 
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 const open = (entries: ZipEntrySpec[], options?: Parameters<typeof buildZip>[1]) =>
@@ -210,8 +216,9 @@ describe('ArchiveSource: reading', () => {
   /** A reader over `zip` that counts its reads. */
   const countingReader = (zip: Uint8Array) => sparseReader(zip, 0);
 
-  it('stops inflating a zip bomb at the bytes asked for', async () => {
-    // 64 MB of zeros deflate to 64 KB; the first 1 KB slice alone inflates to about 1 MB.
+  it('stops inflating a zip bomb at the bytes asked for, after a slice sized to them', async () => {
+    // 64 MB of zeros deflate to 64 KB: a 1 KB slice would inflate to about 1 MB, a slice of a few
+    // dozen bytes to a few dozen KB.
     const zeros = new Uint8Array(64 * 1024 * 1024);
     const bomb: ZipEntrySpec = {
       name: 'assets/icon.png',
@@ -222,11 +229,15 @@ describe('ArchiveSource: reading', () => {
     };
     const reader = countingReader(buildZip([bomb]));
     const source = await ArchiveSource.open(reader);
-    const opened = reader.reads;
+    const { reads, bytesRead } = reader;
     const started = performance.now();
     expect(await source.readFile('assets/icon.png', { maxBytes: 33 })).toEqual(new Uint8Array(33));
-    expect(performance.now() - started).toBeLessThan(500);
-    expect(reader.reads - opened).toBe(3); // local header, local name, one 1 KB slice
+    expect(await source.readFile('assets/icon.png', { maxBytes: 8 })).toEqual(new Uint8Array(8));
+    expect(performance.now() - started).toBeLessThan(100);
+    // A slice or two of a few dozen bytes each: the local header was read when the archive was
+    // opened.
+    expect(reader.reads - reads).toBeLessThanOrEqual(4);
+    expect(reader.bytesRead - bytesRead).toBeLessThanOrEqual(200);
   });
 
   it('stops inflating as soon as an entry exceeds its declared size', async () => {
@@ -242,7 +253,7 @@ describe('ArchiveSource: reading', () => {
     const source = await ArchiveSource.open(reader);
     const opened = reader.reads;
     await expect(source.readFile('manifest.json')).rejects.toThrow(/more than its declared size/);
-    expect(reader.reads - opened).toBe(3);
+    expect(reader.reads - opened).toBe(1); // one 1 KB slice
   });
 
   it.each<[string, ZipEntrySpec, RegExp]>([
@@ -291,24 +302,244 @@ describe('ArchiveSource: reading', () => {
     new DataView(zip.buffer, zip.byteOffset).setUint32(cd + 20, 5000, true);
     new DataView(zip.buffer, zip.byteOffset).setUint32(cd + 24, 5000, true);
     const source = await ArchiveSource.open(zip);
-    await expect(source.readFile('f')).rejects.toThrow(/past the end/);
+    expect(source.listEntries().entries[0]?.unsupported).toEqual({
+      reason: 'inconsistent',
+      detail: 'its data runs into the central directory',
+    });
+    await expect(source.readFile('f')).rejects.toThrow(/runs into the central directory/);
+  });
+});
+
+/**
+ * Unpackers that read a zip in order take names and sizes from the local headers, never from
+ * the central directory: every local header must say what the central directory says, and every
+ * byte before the central directory must belong to a listed entry.
+ */
+describe('ArchiveSource: local headers', () => {
+  const listingOf = async (entries: ZipEntrySpec[]) => (await open(entries)).listEntries();
+  const recordLength = (spec: ZipEntrySpec) => localRecord(spec).length;
+
+  it('lists an archive whose local headers match its central directory, with nothing unlisted', async () => {
+    const listing = await listingOf([
+      { name: 'a/' },
+      { name: 'a/b.txt', data: 'hello '.repeat(50) },
+      { name: 'c.bin', data: 'x', method: 0 },
+      { name: 'd.txt', data: 'd', zip64: true },
+    ]);
+    expect(listing.unlistedData).toBeUndefined();
+    for (const entry of listing.entries) {
+      expect(entry).not.toHaveProperty('localName');
+      expect(entry).not.toHaveProperty('unsupported');
+    }
+  });
+
+  it.each<[string, DataDescriptorSpec]>([
+    ['with a signature', {}],
+    ['without a signature', { signature: false }],
+    ['with 8-byte sizes', { wide: true }],
+    ['with the sizes in the local header too', { localSizes: true }],
+  ])('reads entries followed by a data descriptor %s', async (_name, dataDescriptor) => {
+    const source = await open([
+      { name: 'empty/', dataDescriptor },
+      { name: 'a.txt', data: 'alpha '.repeat(100), dataDescriptor },
+      { name: 'b.txt', data: 'beta', method: 0, dataDescriptor },
+      { name: 'c.txt', data: 'gamma', zip64: true, dataDescriptor },
+      { name: 'd.txt', data: 'delta' },
+    ]);
+    const listing = source.listEntries();
+    expect(listing.unlistedData).toBeUndefined();
+    expect(listing.entries.map((entry) => entry.unsupported)).toEqual(Array(5).fill(undefined));
+    expect(text(await source.readFile('a.txt'))).toBe('alpha '.repeat(100));
+    expect(text(await source.readFile('b.txt'))).toBe('beta');
+    expect(text(await source.readFile('c.txt'))).toBe('gamma');
+    expect(text(await source.readFile('d.txt'))).toBe('delta');
+  });
+
+  it.each<[string, ZipEntrySpec, string]>([
+    [
+      'another compression method',
+      { name: 'f', data: 'hello hello', local: { method: 0 } },
+      'its local header gives compression method 0, its central directory record 8',
+    ],
+    [
+      'another encryption flag',
+      { name: 'f', data: 'x', local: { flags: 0x0001 } },
+      'its local header and its central directory record disagree about encryption',
+    ],
+    [
+      'another CRC-32',
+      { name: 'f', data: 'x', local: { crc: 1 } },
+      'its local header gives another CRC-32 than its central directory record',
+    ],
+    [
+      'another compressed size',
+      { name: 'f', data: 'x', method: 0, local: { compressedSize: 0 } },
+      'its local header gives another compressed size than its central directory record',
+    ],
+    [
+      'another size',
+      { name: 'f', data: 'hello', local: { size: 4 } },
+      'its local header gives another size than its central directory record',
+    ],
+    [
+      'another size beside a data descriptor',
+      { name: 'f', data: 'hello', dataDescriptor: { localSizes: true }, local: { size: 3 } },
+      'its local header gives another size than its central directory record',
+    ],
+    [
+      'saturated sizes without a ZIP64 field',
+      { name: 'f', data: 'x', local: { size: 0xffffffff } },
+      'its local header lacks the ZIP64 sizes it refers to',
+    ],
+    [
+      'a data descriptor that does not match',
+      { name: 'f', data: 'x', dataDescriptor: { crc: 1 } },
+      'its data descriptor does not match its central directory record',
+    ],
+    [
+      'no local header at all',
+      { name: 'f', data: 'x', listedAt: 1 },
+      'there is no local header where the central directory says',
+    ],
+  ])('lists an entry with %s as inconsistent, and never reads it', async (_name, spec, detail) => {
+    const source = await open([{ name: 'a.txt', data: 'a' }, spec]);
+    expect(source.listEntries().entries[1]?.unsupported).toEqual({
+      reason: 'inconsistent',
+      detail,
+    });
+    const error = await source.readFile('f').catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PackageReadError);
+    expect((error as Error).message).toBe(detail);
+  });
+
+  it('lists the name in the local header when its bytes differ, and never reads the entry', async () => {
+    const source = await open([{ name: 'dist/app.js', data: 'x', localName: '../../app.js' }]);
+    expect(source.listEntries().entries).toEqual([
+      { name: 'dist/app.js', localName: '../../app.js', kind: 'file', size: 1 },
+    ]);
+    await expect(source.readFile('dist/app.js')).rejects.toThrow(/different file/);
+  });
+
+  it('adds a Unicode Path name found only in the local header to the other names', async () => {
+    const unicodePath = extraField(
+      0x7075,
+      Buffer.concat([Buffer.from([1, 0, 0, 0, 0]), Buffer.from('../evil.txt')]),
+    );
+    const listing = await listingOf([{ name: 'x.txt', data: 'x', local: { extra: unicodePath } }]);
+    expect(listing.entries[0]?.otherNames).toEqual(['../evil.txt']);
+  });
+
+  const orphan: ZipEntrySpec = { name: '../orphan.txt', data: 'hidden', unlisted: true };
+  const a: ZipEntrySpec = { name: 'a.txt', data: 'a' };
+  it.each<[string, () => Uint8Array | RandomAccessReader, { offset: number; length: number }]>([
+    [
+      'an entry the central directory leaves out, first',
+      () => buildZip([orphan, a]),
+      { offset: 0, length: recordLength(orphan) },
+    ],
+    [
+      'an entry the central directory leaves out, between two others',
+      () => buildZip([a, orphan, { name: 'b.txt', data: 'b' }]),
+      { offset: recordLength(a), length: recordLength(orphan) },
+    ],
+    [
+      'an entry the central directory leaves out, last',
+      () => buildZip([a, orphan]),
+      { offset: recordLength(a), length: recordLength(orphan) },
+    ],
+    [
+      'bytes before the first entry',
+      () => sparseReader(buildZip([a], { offset: 100 }), 100),
+      {
+        offset: 0,
+        length: 100,
+      },
+    ],
+  ])('lists %s as unlisted data', async (_name, make, unlistedData) => {
+    const source = await ArchiveSource.open(make());
+    expect(source.listEntries().unlistedData).toEqual(unlistedData);
+    expect(text(await source.readFile('a.txt'))).toBe('a');
+  });
+
+  it('lists entries that share a local header as inconsistent', async () => {
+    const source = await open([a, { name: 'b.txt', data: 'a', listedAt: 0 }]);
+    expect(source.listEntries().entries[1]).toMatchObject({
+      localName: 'a.txt',
+      unsupported: {
+        reason: 'inconsistent',
+        detail: 'it shares bytes of the archive with "a.txt"',
+      },
+    });
+  });
+
+  it('lists an entry hidden inside the data of another (overlapping files) as inconsistent', async () => {
+    const inner: ZipEntrySpec = { name: 'inner.txt', data: 'hidden', method: 0 };
+    const source = await open([
+      { name: 'outer.bin', data: localRecord(inner), method: 0 },
+      { ...inner, listedAt: 30 + 'outer.bin'.length },
+    ]);
+    const [outer, hidden] = source.listEntries().entries;
+    expect(outer?.unsupported).toBeUndefined();
+    expect(hidden?.unsupported).toEqual({
+      reason: 'inconsistent',
+      detail: 'it shares bytes of the archive with "outer.bin"',
+    });
+    expect(source.listEntries().unlistedData).toBeUndefined();
+  });
+
+  it('reads the local headers of many small files in a few large reads', async () => {
+    const entries = Array.from({ length: 5000 }, (_, i) => ({
+      name: `lib/${String(i)}.js`,
+      data: `export default ${String(i)};`,
+    }));
+    const reader = sparseReader(buildZip(entries), 0);
+    const source = await ArchiveSource.open(reader);
+    expect(source.listFiles()).toHaveLength(5000);
+    expect(source.listEntries().unlistedData).toBeUndefined();
+    // The end record, the central directory, then one read per 64 KB of local headers and data.
+    expect(reader.reads).toBeLessThan(12);
   });
 });
 
 describe('ArchiveSource: the end of central directory record and ZIP64', () => {
-  it('reads an archive with a comment, even one that contains the record signature', async () => {
+  it('reads an archive with a comment', async () => {
     const signature = String.fromCharCode(0x50, 0x4b, 0x05, 0x06);
-    for (const comment of ['hello', `${signature}${'x'.repeat(30)}`, signature]) {
+    // A signature in the last 21 bytes cannot start a record, so no tool takes it for one.
+    for (const comment of ['hello', signature, `${'x'.repeat(10)}${signature}`]) {
       const source = await open([{ name: 'a.txt', data: 'a' }], { comment });
       expect(source.listEntries().unreadable).toBeUndefined();
       expect(source.listFiles()).toEqual(['a.txt']);
     }
   });
 
-  it('reads an archive followed by trailing bytes', async () => {
-    const zip = buildZip([{ name: 'a.txt', data: 'a' }]);
-    const padded = Buffer.concat([zip, Buffer.from('trailing')]);
-    expect((await ArchiveSource.open(padded)).listFiles()).toEqual(['a.txt']);
+  // Zip tools take the last end of central directory record they find: a second one after the
+  // real record (in its comment, or appended) could give them another list of files.
+  it.each<[string, () => Uint8Array]>([
+    [
+      'a comment that holds another end record',
+      () => {
+        const signature = String.fromCharCode(0x50, 0x4b, 0x05, 0x06);
+        return buildZip([{ name: 'a.txt', data: 'a' }], {
+          comment: `${signature}${'x'.repeat(30)}`,
+        });
+      },
+    ],
+    [
+      'trailing bytes',
+      () => Buffer.concat([buildZip([{ name: 'a.txt', data: 'a' }]), Buffer.from('trailing')]),
+    ],
+  ])('refuses an archive whose end record is followed by %s', async (_name, make) => {
+    expect(await unreadable(make())).toMatch(/followed by other bytes/);
+  });
+
+  it('reads a ZIP64 end record whose values the end record repeats', async () => {
+    const zip = buildZip([{ name: 'a.txt', data: 'a' }], { zip64End: true });
+    const view = new DataView(zip.buffer, zip.byteOffset);
+    view.setUint16(zip.length - 22 + 8, 1, true);
+    view.setUint16(zip.length - 22 + 10, 1, true);
+    const source = await ArchiveSource.open(zip);
+    expect(source.listEntries().unreadable).toBeUndefined();
+    expect(source.listFiles()).toEqual(['a.txt']);
   });
 
   it('reads ZIP64 entries and a ZIP64 end record', async () => {
@@ -393,6 +624,52 @@ describe('ArchiveSource: the end of central directory record and ZIP64', () => {
       },
       /ZIP64/,
     ],
+    [
+      // Info-ZIP would take the gap for bytes prepended to the archive and shift every offset.
+      'a gap between its central directory and its end record',
+      () => {
+        const zip = buildZip([{ name: 'a', data: 'a' }]);
+        return Buffer.concat([zip.subarray(0, -22), Buffer.from('gap'), zip.subarray(-22)]);
+      },
+      /does not end where its end of central directory record starts/,
+    ],
+    [
+      // Some tools read records until the signature stops matching, not the count.
+      'more central directory records than its end record counts',
+      () => {
+        const zip = buildZip([
+          { name: 'a', data: 'a' },
+          { name: 'b', data: 'b' },
+        ]);
+        const view = new DataView(zip.buffer, zip.byteOffset);
+        view.setUint16(zip.length - 22 + 8, 1, true);
+        view.setUint16(zip.length - 22 + 10, 1, true);
+        return zip;
+      },
+      /holds more than its end record says/,
+    ],
+    [
+      // Python's zipfile reads the ZIP64 record whenever its locator is there; Go only when needed.
+      'a ZIP64 end record that disagrees with its end record',
+      () => {
+        const zip = buildZip([{ name: 'a', data: 'a' }], { zip64End: true });
+        const view = new DataView(zip.buffer, zip.byteOffset);
+        view.setUint16(zip.length - 22 + 8, 2, true);
+        view.setUint16(zip.length - 22 + 10, 2, true);
+        return zip;
+      },
+      /disagrees/,
+    ],
+    [
+      'a ZIP64 end record that does not end at its locator',
+      () => {
+        const zip = buildZip([{ name: 'a', data: 'a' }], { zip64End: true });
+        const recordOffset = zip.length - 22 - 20 - 56;
+        new DataView(zip.buffer, zip.byteOffset).setUint32(recordOffset + 4, 40, true);
+        return zip;
+      },
+      /ZIP64 end of central directory record is corrupt/,
+    ],
   ])('reports %s as unreadable, without throwing', async (_name, make, message) => {
     expect(await unreadable(make())).toMatch(message);
   });
@@ -421,6 +698,8 @@ describe('ArchiveSource: the end of central directory record and ZIP64', () => {
     }));
     const listing: PackageListing = (await open(entries, { zip64End: true })).listEntries();
     expect(listing.truncated).toBe(true);
+    // The entries past the limit were never read, so their bytes are not unlisted data.
+    expect(listing.unlistedData).toBeUndefined();
     expect(listing.entries).toHaveLength(PACKAGE_LIMITS.maxListedEntries);
   });
 
@@ -519,6 +798,32 @@ describe('DirectorySource', () => {
     expect(source.listFiles()).toEqual([]);
   });
 
+  const mkfifo = spawnSync('mkfifo', ['--version']).status === 0;
+
+  it.skipIf(!mkfifo)(
+    'lists a named pipe as a special entry, never read, as its zip lists it',
+    async () => {
+      const dir = join(scratch, 'fifo');
+      mkdirSync(dir);
+      writeFileSync(join(dir, 'a.txt'), 'a');
+      expect(spawnSync('mkfifo', [join(dir, 'pipe')]).status).toBe(0);
+      const source = await DirectorySource.open(dir);
+      expect(source.listEntries().entries).toEqual([
+        { name: 'a.txt', kind: 'file', size: 1 },
+        { name: 'pipe', kind: 'special', size: 0 },
+      ]);
+      expect(source.listFiles()).toEqual(['a.txt']);
+      await expect(source.readFile('pipe')).rejects.toThrow(/not a file/);
+      const zip = await open([
+        { name: 'a.txt', data: 'a' },
+        { name: 'pipe', unixMode: 0o010644 },
+      ]);
+      expect(zip.listEntries().entries.map(({ name, kind }) => ({ name, kind }))).toEqual(
+        source.listEntries().entries.map(({ name, kind }) => ({ name, kind })),
+      );
+    },
+  );
+
   it('refuses to read a file that was replaced by a link after listing', async ({ skip }) => {
     if (process.platform === 'win32') skip();
     const dir = join(scratch, 'swap');
@@ -550,14 +855,15 @@ describe('zip files on disk', () => {
 
   it('reads a sparse zip file of over 500 MB without allocating it', async () => {
     const path = join(scratch, 'sparse.zip');
-    const zip = buildZip([{ name: 'a.txt', data: 'a' }], { offset: 600 * 1024 * 1024 });
-    writeFileSync(path, new Uint8Array(0));
-    truncateSync(path, 600 * 1024 * 1024);
-    const { appendFileSync } = await import('node:fs');
-    appendFileSync(path, zip);
+    const size = writeZipFile(path, [
+      { name: 'big.bin', zeros: 600 * 1024 * 1024 },
+      { name: 'a.txt', data: 'a' },
+    ]);
     const source = await openArchiveFile(path);
-    expect(source.listEntries().archiveSize).toBe(600 * 1024 * 1024 + zip.length);
+    expect(source.listEntries().archiveSize).toBe(size);
+    expect(source.listEntries().unlistedData).toBeUndefined();
     expect(text(await source.readFile('a.txt'))).toBe('a');
+    expect(await source.readFile('big.bin', { maxBytes: 4 })).toEqual(new Uint8Array(4));
   });
 
   const zipTool = spawnSync('zip', ['-v'], { encoding: 'utf8' }).status === 0;
@@ -585,6 +891,75 @@ describe('zip files on disk', () => {
       // The same folder listed directly agrees on files and links.
       const folder = await DirectorySource.open(dir);
       expect(folder.listFiles().sort()).toEqual(source.listFiles().sort());
+    },
+  );
+
+  /** A small Harness-like folder for the tools below to archive. */
+  const toolFolder = (name: string) => {
+    const dir = join(scratch, name);
+    mkdirSync(join(dir, 'dist'), { recursive: true });
+    mkdirSync(join(dir, 'empty'), { recursive: true });
+    writeFileSync(join(dir, 'dist/index.js'), 'console.log(1);\n'.repeat(100));
+    writeFileSync(join(dir, 'README.md'), '# Hello\n');
+    writeFileSync(join(dir, 'stored.bin'), new Uint8Array(0));
+    return dir;
+  };
+
+  /** Every file of the archive reads back, and nothing is inconsistent or unlisted. */
+  const expectClean = async (archive: string) => {
+    const source = await openArchiveFile(archive);
+    const listing = source.listEntries();
+    expect(listing.unreadable).toBeUndefined();
+    expect(listing.unlistedData).toBeUndefined();
+    for (const entry of listing.entries) {
+      expect(entry).not.toHaveProperty('unsupported');
+      expect(entry).not.toHaveProperty('localName');
+    }
+    expect(source.listFiles().sort()).toEqual(['README.md', 'dist/index.js', 'stored.bin']);
+    expect(text(await source.readFile('dist/index.js'))).toBe('console.log(1);\n'.repeat(100));
+  };
+
+  it.skipIf(!zipTool)(
+    'reads archives Info-ZIP zip writes to a pipe, with data descriptors, deflated or stored',
+    async () => {
+      const dir = toolFolder('info-zip-stream');
+      for (const [file, flags] of [
+        ['stream.zip', '-qr'],
+        ['stream-stored.zip', '-qr0'],
+      ] as const) {
+        const archive = join(scratch, file);
+        const result = spawnSync('sh', ['-c', `zip ${flags} - . | cat > "${archive}"`], {
+          cwd: dir,
+        });
+        expect(result.status).toBe(0);
+        await expectClean(archive);
+      }
+    },
+  );
+
+  const python = spawnSync('python3', ['--version']).status === 0;
+
+  it.skipIf(!python)(
+    "reads archives Python's zipfile writes to a stream, with data descriptors, deflated or stored",
+    async () => {
+      const dir = toolFolder('python-stream');
+      const script = [
+        'import io, os, sys, zipfile',
+        'class Pipe(io.RawIOBase):',
+        '    def __init__(self, f): self.f = f',
+        '    def writable(self): return True',
+        '    def write(self, b): return self.f.write(b)',
+        'for path, method in ((sys.argv[1], zipfile.ZIP_DEFLATED), (sys.argv[2], zipfile.ZIP_STORED)):',
+        "    with open(path, 'wb') as f, zipfile.ZipFile(Pipe(f), 'w', method) as z:",
+        "        for root, dirs, files in os.walk('.'):",
+        '            for name in sorted(dirs) + sorted(files):',
+        '                full = os.path.join(root, name)',
+        '                z.write(full, os.path.relpath(full))',
+      ].join('\n');
+      const archives = [join(scratch, 'python.zip'), join(scratch, 'python-stored.zip')];
+      const result = spawnSync('python3', ['-c', script, ...archives], { cwd: dir });
+      expect(result.stderr.toString()).toBe('');
+      for (const archive of archives) await expectClean(archive);
     },
   );
 });

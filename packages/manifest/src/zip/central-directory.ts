@@ -25,7 +25,7 @@ export interface ZipEntry {
   /** Other names an unpacker might use for this entry (the other of the two names above). */
   otherNames: string[];
   rawName: Uint8Array;
-  kind: 'file' | 'directory' | 'symlink';
+  kind: 'file' | 'directory' | 'symlink' | 'special';
   flags: number;
   method: number;
   crc32: number;
@@ -59,12 +59,17 @@ const CENTRAL_HEADER_SIGNATURE = 0x02014b50;
 const CENTRAL_HEADER_SIZE = 46;
 const MAX_COMMENT_LENGTH = 0xffff;
 
-const ZIP64_EXTRA_FIELD = 0x0001;
-const UNICODE_PATH_EXTRA_FIELD = 0x7075;
+export const ZIP64_EXTRA_FIELD = 0x0001;
+export const UNICODE_PATH_EXTRA_FIELD = 0x7075;
 
-/** `S_IFMT` and `S_IFLNK`: the file-type bits of a Unix mode, and the value for a symbolic link. */
+/**
+ * `S_IFMT` and its values: the file-type bits of a Unix mode, for a symbolic link, a folder and a
+ * regular file. Any other value (a device, a pipe, a socket) is a special file.
+ */
 const UNIX_FILE_TYPE_MASK = 0o170000;
 const UNIX_SYMLINK = 0o120000;
+const UNIX_DIRECTORY = 0o040000;
+const UNIX_REGULAR = 0o100000;
 
 /** General purpose flag bit 11: the name (and comment) are UTF-8. */
 export const FLAG_UTF8 = 0x0800;
@@ -87,6 +92,13 @@ export async function readCentralDirectory(
   }
   if (end.cdOffset + end.cdSize > end.recordOffset) {
     throw new ZipFormatError('its central directory lies outside the archive');
+  }
+  // Info-ZIP and others treat a gap here as bytes prepended to the archive and shift every
+  // offset by it, which would make them read other files than this reader does.
+  if (end.cdOffset + end.cdSize !== end.recordOffset) {
+    throw new ZipFormatError(
+      'its central directory does not end where its end of central directory record starts',
+    );
   }
   if (end.entryCount * CENTRAL_HEADER_SIZE > end.cdSize) {
     throw new ZipFormatError('it declares more entries than its central directory holds');
@@ -117,6 +129,11 @@ export async function readCentralDirectory(
     entries.push(parseEntry(view, at, rawName, extra, end.cdOffset));
     at = next;
   }
+  // Some tools read central directory records until the signature stops matching rather than
+  // counting them: records beyond the count would be files only they see.
+  if (count === end.entryCount && at !== directory.length) {
+    throw new ZipFormatError('its central directory holds more than its end record says');
+  }
   return {
     entries,
     truncated: end.entryCount > count,
@@ -141,19 +158,24 @@ async function findEndOfCentralDirectory(
   const tail = await reader.read(tailOffset, tailLength);
   const view = viewOf(tail);
 
-  // The record is 22 bytes plus a comment of up to 64 KB, at the very end. The comment may itself
-  // contain the signature, so prefer a record whose comment reaches exactly the end of the file,
-  // and only then accept one followed by trailing bytes.
-  const candidates: number[] = [];
-  for (let at = tailLength - EOCD_SIZE; at >= 0; at--) {
-    if (view.getUint32(at, true) === EOCD_SIGNATURE) candidates.push(at);
+  // The record is 22 bytes plus a comment of up to 64 KB, at the very end. Zip tools look for
+  // the last occurrence of its signature, so that occurrence must be the record, and its comment
+  // must end exactly where the file does: otherwise a tool could find another record (in the
+  // comment, or in bytes after it) and read another list of files than this one.
+  let at = -1;
+  for (let candidate = tailLength - EOCD_SIZE; candidate >= 0; candidate--) {
+    if (view.getUint32(candidate, true) === EOCD_SIGNATURE) {
+      at = candidate;
+      break;
+    }
   }
-  const fits = (at: number) => at + EOCD_SIZE + view.getUint16(at + 20, true);
-  const at =
-    candidates.find((candidate) => fits(candidate) === tailLength) ??
-    candidates.find((candidate) => fits(candidate) <= tailLength);
-  if (at === undefined) {
+  if (at < 0) {
     throw new ZipFormatError('it has no end of central directory record, so it is not a zip');
+  }
+  if (at + EOCD_SIZE + view.getUint16(at + 20, true) !== tailLength) {
+    throw new ZipFormatError(
+      'its end of central directory record is followed by other bytes, or its comment contains another such record, so zip tools could read it differently',
+    );
   }
 
   const disk = view.getUint16(at + 4, true);
@@ -171,35 +193,61 @@ async function findEndOfCentralDirectory(
     entryCount === 0xffff ||
     cdSize === 0xffffffff ||
     cdOffset === 0xffffffff;
-  if (!needsZip64) {
+  // Some tools (Python's zipfile, Info-ZIP) read a ZIP64 end record whenever its locator is
+  // there, others only when the fields above are saturated: when there is one, both must agree.
+  const locator =
+    recordOffset < ZIP64_LOCATOR_SIZE
+      ? undefined
+      : at >= ZIP64_LOCATOR_SIZE
+        ? tail.subarray(at - ZIP64_LOCATOR_SIZE, at)
+        : await reader.read(recordOffset - ZIP64_LOCATOR_SIZE, ZIP64_LOCATOR_SIZE);
+  const hasLocator =
+    locator !== undefined && viewOf(locator).getUint32(0, true) === ZIP64_LOCATOR_SIGNATURE;
+  if (!hasLocator) {
+    if (needsZip64) {
+      throw new ZipFormatError('its ZIP64 end of central directory locator is missing');
+    }
     if (disk !== 0 || cdDisk !== 0 || entriesOnDisk !== entryCount) {
       throw new ZipFormatError('it is split across several files, which is not supported');
     }
     return { entryCount, cdSize, cdOffset, recordOffset };
   }
-  return readZip64End(reader, recordOffset);
+  const zip64 = await readZip64End(reader, recordOffset, viewOf(locator));
+  const agrees =
+    (disk === 0xffff || disk === 0) &&
+    (cdDisk === 0xffff || cdDisk === 0) &&
+    (entriesOnDisk === 0xffff || entriesOnDisk === zip64.entryCount) &&
+    (entryCount === 0xffff || entryCount === zip64.entryCount) &&
+    (cdSize === 0xffffffff || cdSize === zip64.cdSize) &&
+    (cdOffset === 0xffffffff || cdOffset === zip64.cdOffset);
+  if (!agrees) {
+    throw new ZipFormatError(
+      'its ZIP64 end of central directory record disagrees with its end of central directory record',
+    );
+  }
+  return zip64;
 }
 
 async function readZip64End(
   reader: RandomAccessReader,
   eocdOffset: number,
+  locator: DataView,
 ): Promise<EndOfCentralDirectory> {
-  if (eocdOffset < ZIP64_LOCATOR_SIZE) {
-    throw new ZipFormatError('its ZIP64 end of central directory locator is missing');
-  }
-  const locator = viewOf(await reader.read(eocdOffset - ZIP64_LOCATOR_SIZE, ZIP64_LOCATOR_SIZE));
-  if (locator.getUint32(0, true) !== ZIP64_LOCATOR_SIGNATURE) {
-    throw new ZipFormatError('its ZIP64 end of central directory locator is missing');
-  }
   if (locator.getUint32(4, true) !== 0 || locator.getUint32(16, true) > 1) {
     throw new ZipFormatError('it is split across several files, which is not supported');
   }
+  const locatorOffset = eocdOffset - ZIP64_LOCATOR_SIZE;
   const recordOffset = readUint64(locator, 8);
-  if (recordOffset + ZIP64_EOCD_SIZE > eocdOffset - ZIP64_LOCATOR_SIZE) {
+  if (recordOffset + ZIP64_EOCD_SIZE > locatorOffset) {
     throw new ZipFormatError('its ZIP64 end of central directory record lies outside the archive');
   }
   const record = viewOf(await reader.read(recordOffset, ZIP64_EOCD_SIZE));
-  if (record.getUint32(0, true) !== ZIP64_EOCD_SIGNATURE) {
+  // The record's size field counts the bytes after itself: the record, and any extensible data,
+  // must end exactly where the locator starts.
+  if (
+    record.getUint32(0, true) !== ZIP64_EOCD_SIGNATURE ||
+    recordOffset + 12 + readUint64(record, 4) !== locatorOffset
+  ) {
     throw new ZipFormatError('its ZIP64 end of central directory record is corrupt');
   }
   const disk = record.getUint32(16, true);
@@ -283,9 +331,16 @@ function parseEntry(
     if (other !== name) otherNames.push(other);
   }
 
+  // The Unix mode is in the high 16 bits whatever host wrote the entry (0 when there is none).
   const unixFileType = (externalAttributes >>> 16) & UNIX_FILE_TYPE_MASK;
   const kind =
-    unixFileType === UNIX_SYMLINK ? 'symlink' : name.endsWith('/') ? 'directory' : 'file';
+    unixFileType === UNIX_SYMLINK
+      ? 'symlink'
+      : unixFileType !== 0 && unixFileType !== UNIX_DIRECTORY && unixFileType !== UNIX_REGULAR
+        ? 'special'
+        : name.endsWith('/')
+          ? 'directory'
+          : 'file';
 
   return {
     name,
@@ -302,7 +357,7 @@ function parseEntry(
 }
 
 /** Extra fields by header id; the first of each id wins, a truncated trailing field is ignored. */
-function extraFields(extra: Uint8Array): Map<number, Uint8Array> {
+export function extraFields(extra: Uint8Array): Map<number, Uint8Array> {
   const fields = new Map<number, Uint8Array>();
   const view = viewOf(extra);
   let at = 0;

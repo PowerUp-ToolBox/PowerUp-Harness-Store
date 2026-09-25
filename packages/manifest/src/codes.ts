@@ -51,21 +51,30 @@ export const PROBLEM_CODES = Object.freeze({
 
   /** A required file (`manifest.json`, `README.md`, `assets/icon.png`) is not in the package. */
   file_missing: 'file_missing',
-  /** A file has the wrong format: an icon that is not a PNG, a screenshot that is not PNG/JPEG. */
+  /**
+   * A file has the wrong format: an icon that is not a PNG, a screenshot that is not PNG/JPEG. Also
+   * an entry that is neither a file, a folder nor a link (a device, a named pipe, a socket).
+   */
   file_type: 'file_type',
   /** `assets/icon.png` is a PNG, but not 512×512 pixels. */
   icon_dimensions: 'icon_dimensions',
   /** An entry is a symbolic link. */
   archive_symlink: 'archive_symlink',
-  /** An entry name has a `..` segment or is absolute, so it would unpack outside the package. */
+  /**
+   * An entry name (or another name an unpacker could use for it) has a `..` segment or is
+   * absolute, so it would unpack outside the package.
+   */
   archive_path_traversal: 'archive_path_traversal',
   /** The archive is larger than 500 MB (compressed). */
   archive_too_large: 'archive_too_large',
   /** The package holds more than 20 000 files. */
   archive_too_many_files: 'archive_too_many_files',
   /**
-   * The archive cannot be read safely: not a zip, corrupt, an entry stored twice, or an entry that
-   * is encrypted or uses a compression method other than stored or Deflate.
+   * The archive cannot be read or unpacked safely: not a zip, corrupt, ambiguous (a local header
+   * that disagrees with the central directory, bytes that belong to no entry), an entry that is
+   * encrypted or uses a compression method other than stored or Deflate, paths that would unpack
+   * to the same place (stored twice, differing only in letter case, a file where a folder is
+   * needed), or names that Windows reads differently (with a `\` or a `:`).
    */
   archive_invalid: 'archive_invalid',
   /** Warning only: `README.md` is over 50 KB, or a screenshot over 2 MB. */
@@ -161,6 +170,8 @@ export const MESSAGES_EN = Object.freeze({
     'The icon must be a PNG image; this file is not one, or its PNG header is damaged.',
   'file_type.screenshot':
     'Screenshots in assets/ must be PNG or JPEG images named .png, .jpg or .jpeg, with content to match.',
+  'file_type.special':
+    'The entry is neither a file nor a folder (it is a device, a named pipe or a socket). A Harness Package holds only files and folders.',
   icon_dimensions: 'The icon must be {expected}×{expected} pixels; found {width}×{height}.',
   archive_symlink: 'The entry is a symbolic link. A Harness Package may not contain links.',
   archive_path_traversal:
@@ -169,6 +180,8 @@ export const MESSAGES_EN = Object.freeze({
     'The entry name is an absolute path. Entries must be relative to the root of the Harness Package.',
   'archive_path_traversal.other_name':
     'The entry also carries the name {name} (in an Info-ZIP Unicode Path field), which is absolute or has a ".." segment, so some unpackers would place it outside the Harness Package.',
+  'archive_path_traversal.local_name':
+    'The entry\'s local header names it {name}, which is absolute or has a ".." segment, so unpackers that read the archive in order would place it outside the Harness Package.',
   archive_too_large:
     'The Harness Package is {actual} bytes; the limit is {limit} bytes (500 MB), compressed.',
   archive_too_many_files: 'The Harness Package holds {actual} files; the limit is {limit}.',
@@ -180,6 +193,18 @@ export const MESSAGES_EN = Object.freeze({
   'archive_invalid.encrypted': 'The file is encrypted. Files in a Harness Package must not be.',
   'archive_invalid.compression_method':
     'The file uses compression method {method}; only stored (0) and Deflate (8) files can be unpacked.',
+  'archive_invalid.local_name':
+    "The entry's local header names it {name} instead. Unpackers that read the archive in order would use that name, so they would see other files than the ones checked.",
+  'archive_invalid.inconsistent':
+    'The zip entry is inconsistent: {detail}. Different unpackers could see different files here.',
+  'archive_invalid.unlisted_data':
+    'The zip archive holds {length} bytes at offset {offset} that belong to no entry of its central directory. Unpackers that read the archive in order could find files there that were never checked.',
+  'archive_invalid.name_character':
+    'The entry name contains {character}, which unpackers on Windows read differently from others ("\\" as a folder separator, ":" as a file stream of another file). Use "/" between folders and no ":" in names.',
+  'archive_invalid.case_conflict':
+    'The Harness Package also holds {other}, whose path differs from this one only in letter case, Unicode form or trailing dots and spaces. On macOS or Windows both are the same file, so one would overwrite the other.',
+  'archive_invalid.file_folder_conflict':
+    'The Harness Package also holds the folder {other}, with files in it, at the path of this file (ignoring letter case and Unicode form), so the two cannot both be unpacked.',
   'file_too_large.readme': 'README.md is {actual} bytes; keep it to at most {limit} bytes (50 KB).',
   'file_too_large.screenshot':
     'The screenshot is {actual} bytes; keep each screenshot to at most {limit} bytes (2 MB).',

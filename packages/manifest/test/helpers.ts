@@ -26,8 +26,15 @@ export interface ArchiveRecipe {
   symlinks?: { name: string; target: string }[];
   /** This many empty files added under `filler/`. */
   fillerFiles?: number;
-  /** The zip starts this many bytes into the file (a sparse file of zeros before it). */
-  offsetBytes?: number;
+  /** Stored files of this many zero bytes, never allocated (an archive over 500 MB). */
+  largeFiles?: { name: string; bytes: number }[];
+  /** Entries whose local header names another file than the central directory does. */
+  localNames?: { name: string; localName: string; text: string }[];
+  /**
+   * Entries written first, with their local header and data, but left out of the central
+   * directory: only an unpacker that reads the zip in order finds them.
+   */
+  unlistedEntries?: { name: string; text: string }[];
   /** This many bytes cut off the end of the zip. */
   truncateBytes?: number;
 }

@@ -25,7 +25,7 @@ import {
   packagePath,
   PackageReadError,
 } from './source.js';
-import type { PackageListing, PackageSource } from './source.js';
+import type { PackageEntry, PackageListing, PackageSource } from './source.js';
 import type { Problem, ValidateManifestOptions, ValidationResult } from './types.js';
 import { inspectManifest } from './validate-manifest.js';
 
@@ -53,9 +53,15 @@ const RELATIVE_PATH = new RegExp(
  * Rules run in this order, and each runs even when an earlier one failed:
  *
  * 1. Archive safety and limits, from the listing alone (no file content is read before they
- *    run): symbolic links, `..` segments and absolute names, more than 20 000 files, more than
- *    500 MB compressed, entries stored twice, encrypted or with an unsupported compression. An
- *    archive that is not a readable zip at all gives a single `archive_invalid` problem.
+ *    run): symbolic links and other special files, `..` segments and absolute names (in every
+ *    name an unpacker could use: the central directory's, the local header's, the Unicode Path
+ *    field's), more than 20 000 files, more than 500 MB compressed, paths that would unpack to
+ *    the same place (stored twice, differing only in letter case, Unicode form or trailing dots
+ *    and spaces, a file where a folder is needed), `\` or `:` in a name, entries that are encrypted, use an unsupported
+ *    compression or are described inconsistently, and bytes of a zip that belong to no entry. An
+ *    archive that is not a readable zip at all gives a single `archive_invalid` problem, and one
+ *    with more than 100 000 entries a single `archive_too_many_files` problem: nothing else is
+ *    checked then, so the work stays bounded.
  * 2. `manifest.json` is read (at most 1 MB) and checked by validateManifest(), with `options`.
  * 3. File rules: required files, the icon's format and size, screenshots, and every Entry file
  *    the Manifest names. Entry files are only looked for when `entry` has the shape
@@ -98,7 +104,8 @@ export async function validatePackage(
   const sizes = new Map([...index].map(([path, at]) => [path, listing.entries[at]?.size ?? 0]));
   const links = new Set(
     listing.entries.flatMap((entry) => {
-      const path = entry.kind === 'symlink' ? packagePath(entry.name) : undefined;
+      const reported = entry.kind === 'symlink' || entry.kind === 'special';
+      const path = reported ? packagePath(entry.name) : undefined;
       return path === undefined ? [] : [path];
     }),
   );
@@ -136,7 +143,7 @@ interface PackageContext {
   files: ReadonlySet<string>;
   /** Size of each regular file, from the listing. */
   sizes: Map<string, number>;
-  /** Paths of symbolic links: already reported, so never also "missing". */
+  /** Paths of symbolic links and special files: already reported, so never also "missing". */
   links: Set<string>;
   problems: Problem[];
   warnings: Problem[];
@@ -145,20 +152,31 @@ interface PackageContext {
 /** Rule 1: everything the listing alone shows, before any content is read. */
 function archiveProblems(listing: PackageListing): Problem[] {
   const problems: Problem[] = [];
-  const seen = new Set<string>();
+  const unsafe = (name: string) => isAbsoluteName(name) || hasParentSegment(name);
   let fileCount = 0;
   for (const entry of listing.entries) {
     if (entry.kind !== 'directory') fileCount++;
     if (entry.kind === 'symlink') {
       problems.push(createPackageProblem('archive_symlink', entry.name));
+    } else if (entry.kind === 'special') {
+      problems.push(createPackageProblem('file_type.special', entry.name));
     }
     if (isAbsoluteName(entry.name)) {
       problems.push(createPackageProblem('archive_path_traversal.absolute', entry.name));
     } else if (hasParentSegment(entry.name)) {
       problems.push(createPackageProblem('archive_path_traversal', entry.name));
+    } else if (/[\\:]/.test(entry.name)) {
+      // Windows splits the name at a backslash, and writes "a:b" to a stream of the file "a"
+      // ("manifest.json::$DATA" is manifest.json itself); other systems keep both in the name.
+      const character = entry.name.includes('\\') ? '\\' : ':';
+      problems.push(
+        createPackageProblem('archive_invalid.name_character', entry.name, {
+          character: `"${character}"`,
+        }),
+      );
     }
     for (const other of entry.otherNames ?? []) {
-      if (isAbsoluteName(other) || hasParentSegment(other)) {
+      if (unsafe(other)) {
         problems.push(
           createPackageProblem('archive_path_traversal.other_name', entry.name, {
             name: preview(other),
@@ -166,20 +184,40 @@ function archiveProblems(listing: PackageListing): Problem[] {
         );
       }
     }
-    if (entry.unsupported?.reason === 'encrypted') {
+    if (entry.localName !== undefined) {
+      const params = { name: preview(entry.localName) };
+      if (unsafe(entry.localName)) {
+        problems.push(
+          createPackageProblem('archive_path_traversal.local_name', entry.name, params),
+        );
+      }
+      problems.push(createPackageProblem('archive_invalid.local_name', entry.name, params));
+    }
+    const unsupported = entry.unsupported;
+    if (unsupported?.reason === 'inconsistent') {
+      problems.push(
+        createPackageProblem('archive_invalid.inconsistent', entry.name, {
+          detail: unsupported.detail,
+        }),
+      );
+    } else if (unsupported?.reason === 'encrypted') {
       problems.push(createPackageProblem('archive_invalid.encrypted', entry.name));
-    } else if (entry.unsupported?.reason === 'compression_method') {
+    } else if (unsupported?.reason === 'compression_method') {
       problems.push(
         createPackageProblem('archive_invalid.compression_method', entry.name, {
-          method: entry.unsupported.method,
+          method: unsupported.method,
         }),
       );
     }
-    const path = entry.kind === 'directory' ? undefined : packagePath(entry.name);
-    if (path !== undefined) {
-      if (seen.has(path)) problems.push(createPackageProblem('archive_invalid.duplicate', path));
-      seen.add(path);
-    }
+  }
+  problems.push(...pathConflicts(listing.entries));
+  if (listing.unlistedData !== undefined) {
+    problems.push(
+      createPackageProblem('archive_invalid.unlisted_data', '$', {
+        offset: listing.unlistedData.offset,
+        length: listing.unlistedData.length,
+      }),
+    );
   }
 
   const { maxArchiveBytes, maxFiles, maxListedEntries } = PACKAGE_LIMITS;
@@ -204,6 +242,91 @@ function archiveProblems(listing: PackageListing): Problem[] {
     );
   }
   return dedupe(problems);
+}
+
+/**
+ * How a path is compared on macOS and Windows: letter case and Unicode form do not count, and
+ * Windows drops trailing dots and spaces from each name (`manifest.json.` is `manifest.json`).
+ */
+function foldPath(path: string): string {
+  return path
+    .normalize('NFC')
+    .toLowerCase()
+    .split('/')
+    .map((segment) => segment.replace(/[. ]+$/, ''))
+    .join('/');
+}
+
+/**
+ * Paths that would unpack to the same place: a path stored twice, paths that are one file on
+ * macOS or Windows (see {@link foldPath}), and a file at the path of a folder that other entries
+ * need. The work is O(n log n) in the listing, whatever the names.
+ */
+function pathConflicts(entries: readonly PackageEntry[]): Problem[] {
+  const problems: Problem[] = [];
+  const seen = new Set<string>();
+  const firstByFolded = new Map<string, string>();
+  const folders = new Map<string, string>();
+  const all: { key: string; path: string }[] = [];
+  const files: { key: string; path: string }[] = [];
+  for (const entry of entries) {
+    const path = packagePath(entry.name);
+    if (path === undefined) continue;
+    const key = foldPath(path);
+    all.push({ key, path });
+    if (entry.kind === 'directory') {
+      if (!folders.has(key)) folders.set(key, path);
+      continue;
+    }
+    if (seen.has(path)) {
+      problems.push(createPackageProblem('archive_invalid.duplicate', path));
+      continue;
+    }
+    seen.add(path);
+    const first = firstByFolded.get(key);
+    if (first === undefined) firstByFolded.set(key, path);
+    else {
+      problems.push(
+        createPackageProblem('archive_invalid.case_conflict', path, { other: preview(first) }),
+      );
+    }
+    files.push({ key, path });
+  }
+
+  // A file conflicts with a folder entry of its path, or with any entry inside such a folder: in
+  // sorted order, those come first among the keys that start with the file's key and "/".
+  all.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  for (const { key, path } of files) {
+    const folder = folders.get(key);
+    const prefix = `${key}/`;
+    const inside = all[lowerBound(all, prefix)];
+    const other =
+      folder !== undefined
+        ? `${folder}/`
+        : inside?.key.startsWith(prefix)
+          ? inside.path
+          : undefined;
+    if (other !== undefined) {
+      problems.push(
+        createPackageProblem('archive_invalid.file_folder_conflict', path, {
+          other: preview(other),
+        }),
+      );
+    }
+  }
+  return problems;
+}
+
+/** The index of the first item whose key is not less than `key`, in items sorted by key. */
+function lowerBound(items: readonly { key: string }[], key: string): number {
+  let low = 0;
+  let high = items.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if ((items[middle] as { key: string }).key < key) low = middle + 1;
+    else high = middle;
+  }
+  return low;
 }
 
 /**

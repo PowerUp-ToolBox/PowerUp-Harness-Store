@@ -11,8 +11,9 @@ import type { PackageEntry, PackageListing, PackageSource, ReadFileOptions } fro
  *
  * Opening it lists the folder without following symbolic links: a link is listed as a link (and
  * reported by validatePackage(), exactly as its zip would be), never entered. Devices, sockets
- * and pipes are skipped, as zip tools skip them. Entries are listed in path order. A folder has
- * no compressed size, so the 500 MB archive limit is checked on the zip made from it.
+ * and named pipes are listed as `special` entries (reported, never read), as a zip that stores
+ * their Unix mode lists them. Entries are listed in path order. A folder has no compressed size,
+ * so the 500 MB archive limit is checked on the zip made from it.
  */
 export class DirectorySource implements PackageSource {
   /** The folder, as given to {@link DirectorySource.open}. */
@@ -52,6 +53,7 @@ export class DirectorySource implements PackageSource {
           entries.push({ name: path, kind: 'directory', size: 0 });
           pending.push(path);
         } else if (entry?.isFile()) entries.push({ name: path, kind: 'file', size: entry.size });
+        else if (entry !== undefined) entries.push({ name: path, kind: 'special', size: 0 });
       });
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
