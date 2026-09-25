@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { interpolate, MESSAGES_EN, PROBLEM_CODES, validateManifest } from '../src/index.js';
-import type { MessageKey, ValidateManifestOptions } from '../src/index.js';
+import {
+  ArchiveSource,
+  interpolate,
+  MESSAGES_EN,
+  PROBLEM_CODES,
+  validateManifest,
+  validatePackage,
+} from '../src/index.js';
+import type { MessageKey, PackageSource, ValidateManifestOptions } from '../src/index.js';
 import { binaryManifest, minimalManifest, problemsOf } from './helpers.js';
+import { png } from './support/images.js';
+import { fixtureDir, folderEntries, hostileArchive } from './support/packages.js';
+import { buildZip, extraField } from './support/zip-writer.js';
+import type { ZipEntrySpec } from './support/zip-writer.js';
 
 /**
  * Codes shipped so far. Codes are additive-only: this list may grow, but a code in it must never
@@ -28,6 +39,16 @@ const SHIPPED_CODES = [
   'version_invalid',
   'version_not_greater',
   'ignored_key',
+  'file_missing',
+  'file_type',
+  'icon_dimensions',
+  'archive_symlink',
+  'archive_path_traversal',
+  'archive_too_large',
+  'archive_too_many_files',
+  'archive_invalid',
+  'file_too_large',
+  'screenshots_too_many',
 ];
 
 describe('PROBLEM_CODES', () => {
@@ -103,11 +124,35 @@ const permissions = (changes: Record<string, unknown>) => ({
   },
 });
 
+/** A whole Harness Package, for the keys only validatePackage() produces. */
+interface PackageExample {
+  source: () => Promise<PackageSource>;
+}
+
+/** The valid minimal package as a zip, with some entries replaced or added. */
+function packageExample(changes: ZipEntrySpec[] = [], without: string[] = []): PackageExample {
+  const replaced = new Set([...changes.map((entry) => entry.name), ...without]);
+  return {
+    source: () =>
+      ArchiveSource.open(
+        buildZip([
+          ...folderEntries(fixtureDir('valid-minimal-node')).filter((e) => !replaced.has(e.name)),
+          ...changes,
+        ]),
+      ),
+  };
+}
+const fixtureArchive = (name: string): PackageExample => ({
+  source: () => ArchiveSource.open(hostileArchive(name)),
+});
+const unicodePath = (name: string) =>
+  extraField(0x7075, Buffer.concat([Buffer.from([1, 0, 0, 0, 0]), Buffer.from(name)]));
+
 /**
- * One Manifest per message key that produces it. Typed as a Record over MessageKey, so a new
- * message cannot be added without showing how a Publisher can get it.
+ * One Manifest (or Harness Package) per message key that produces it. Typed as a Record over
+ * MessageKey, so a new message cannot be added without showing how a Publisher can get it.
  */
-const EXAMPLES: Record<MessageKey, Example | 'fallback' | 'small_stack'> = {
+const EXAMPLES: Record<MessageKey, Example | PackageExample | 'fallback' | 'small_stack'> = {
   schema_invalid_json: ['{'],
   'schema_invalid_json.not_serializable': [{ manifestVersion: 1n }],
   'schema_invalid_json.too_large': [edit({ platforms: Array(5000).fill('linux-x64') })],
@@ -172,6 +217,63 @@ const EXAMPLES: Record<MessageKey, Example | 'fallback' | 'small_stack'> = {
   'ignored_key.network_domains': [
     edit(permissions({ network: { any: true, domains: ['a.com'] } })),
   ],
+  'schema_invalid_json.file_too_large': packageExample([
+    { name: 'manifest.json', data: `${JSON.stringify(minimalManifest())}${' '.repeat(1 << 20)}` },
+  ]),
+  'entry_missing_for_platform.file': packageExample([], ['dist/index.js']),
+  'entry_missing_for_platform.platform_file': {
+    source: () =>
+      ArchiveSource.open(buildZip(folderEntries(fixtureDir('entry-file-missing-binary')))),
+  },
+  file_missing: packageExample([], ['README.md']),
+  'file_missing.manifest_nested': {
+    source: () =>
+      ArchiveSource.open(
+        buildZip(
+          folderEntries(fixtureDir('valid-minimal-node')).map((entry) => ({
+            ...entry,
+            name: `hello-web/${entry.name}`,
+          })),
+        ),
+      ),
+  },
+  'file_type.icon': packageExample([{ name: 'assets/icon.png', data: 'not a png' }]),
+  'file_type.screenshot': packageExample([{ name: 'assets/shot.gif', data: 'GIF89a' }]),
+  icon_dimensions: packageExample([{ name: 'assets/icon.png', data: png(256, 256) }]),
+  archive_symlink: fixtureArchive('archive_symlink'),
+  archive_path_traversal: fixtureArchive('archive_path_traversal'),
+  'archive_path_traversal.absolute': packageExample([{ name: '/etc/x', data: 'x' }]),
+  'archive_path_traversal.other_name': packageExample([
+    { name: 'x.txt', data: 'x', extra: unicodePath('../x.txt') },
+  ]),
+  archive_too_large: fixtureArchive('archive_too_large'),
+  archive_too_many_files: fixtureArchive('archive_too_many_files'),
+  'archive_too_many_files.not_counted': {
+    source: () =>
+      ArchiveSource.open(
+        buildZip(
+          Array.from({ length: 100_001 }, (_, i) => ({ name: `${String(i)}/` })),
+          { zip64End: true },
+        ),
+      ),
+  },
+  archive_invalid: fixtureArchive('archive_invalid'),
+  'archive_invalid.entry': packageExample([
+    { name: 'manifest.json', data: JSON.stringify(minimalManifest()), crc: 1 },
+  ]),
+  'archive_invalid.duplicate': packageExample([
+    { name: 'README.md', data: '# one' },
+    { name: 'README.md', data: '# two' },
+  ]),
+  'archive_invalid.encrypted': packageExample([{ name: 'secret.bin', data: 'x', flags: 1 }]),
+  'archive_invalid.compression_method': packageExample([{ name: 'a.bz2', data: 'x', method: 12 }]),
+  'file_too_large.readme': packageExample([{ name: 'README.md', data: 'x'.repeat(60_000) }]),
+  'file_too_large.screenshot': packageExample([
+    { name: 'assets/big.png', data: Buffer.concat([png(8, 8), Buffer.alloc(3 << 20)]) },
+  ]),
+  screenshots_too_many: packageExample(
+    Array.from({ length: 6 }, (_, i) => ({ name: `assets/${String(i)}.png`, data: png(8, 8) })),
+  ),
 };
 
 describe('every message key', () => {
@@ -186,4 +288,17 @@ describe('every message key', () => {
       expect(produced).toContain(messageKey);
     },
   );
+
+  it.each(
+    Object.entries(EXAMPLES).filter(
+      (entry): entry is [string, PackageExample] =>
+        typeof entry[1] === 'object' && 'source' in entry[1],
+    ),
+  )('%s is produced by its Harness Package', async (messageKey, example) => {
+    const result = await validatePackage(await example.source());
+    const produced = [...problemsOf(result), ...result.warnings].map(
+      (finding) => finding.messageKey,
+    );
+    expect(produced).toContain(messageKey);
+  });
 });

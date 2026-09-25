@@ -6,14 +6,16 @@ The **Manifest** is `manifest.json` at the root of a **Harness Package** (a zip 
 
 ```
 <archive root>/
-  manifest.json          required
+  manifest.json          required (≤ 1 MB)
   README.md              required (Store description, Markdown, ≤ 50 KB)
   assets/icon.png        required, 512×512 PNG
   assets/<screenshots>   optional, PNG/JPEG, ≤ 5 files, ≤ 2 MB each
   <anything else>        the Harness itself
 ```
 
-Limits: archive ≤ 500 MB compressed; ≤ 20 000 files; no symlinks; no absolute or `..` paths. Violations are rejected at publish and at install.
+Limits: archive ≤ 500 MB compressed; ≤ 20 000 files (directories do not count); no symlinks; no absolute or `..` paths; no path stored twice; every file stored or Deflate-compressed, unencrypted. Violations are rejected at publish and at install.
+
+Screenshots are the files directly in `assets/` other than `icon.png` (hidden files such as `.DS_Store` are ignored). A screenshot that is not a PNG or JPEG matching its `.png`, `.jpg` or `.jpeg` extension is rejected; a README over 50 KB, more than 5 screenshots or a screenshot over 2 MB only gives a warning. Sizes are binary: 1 KB = 1 024 bytes.
 
 ## 2. Fields
 

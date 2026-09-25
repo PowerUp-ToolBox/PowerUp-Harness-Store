@@ -1,0 +1,14 @@
+{
+  "description": "A node Harness whose Entry, dist/index.js, is not in the Harness Package.",
+  "problems": [
+    {
+      "code": "entry_missing_for_platform",
+      "path": "entry"
+    }
+  ],
+  "warnings": [],
+  "manifest": {
+    "problems": [],
+    "warnings": []
+  }
+}

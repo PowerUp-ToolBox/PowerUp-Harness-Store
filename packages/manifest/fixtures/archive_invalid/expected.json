@@ -1,0 +1,17 @@
+{
+  "description": "A clean folder; its archive is cut short, losing the end of central directory record.",
+  "problems": [],
+  "warnings": [],
+  "archive": {
+    "recipe": {
+      "truncateBytes": 22
+    },
+    "problems": [
+      {
+        "code": "archive_invalid",
+        "path": "$"
+      }
+    ],
+    "warnings": []
+  }
+}

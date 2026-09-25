@@ -1,0 +1,17 @@
+{
+  "description": "A clean folder; its archive is a sparse file of just over 500 MB.",
+  "problems": [],
+  "warnings": [],
+  "archive": {
+    "recipe": {
+      "offsetBytes": 524288000
+    },
+    "problems": [
+      {
+        "code": "archive_too_large",
+        "path": "$"
+      }
+    ],
+    "warnings": []
+  }
+}

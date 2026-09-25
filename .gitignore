@@ -10,3 +10,6 @@ out/
 coverage/
 *.tsbuildinfo
 .eslintcache
+
+# Fixture Harness Packages ship their own dist/ (e.g. the Entry dist/index.js): test data, not build output.
+!packages/manifest/fixtures/*/dist/

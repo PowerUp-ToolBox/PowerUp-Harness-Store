@@ -1,7 +1,14 @@
 import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { PROBLEM_CODES, validateManifest } from '../src/index.js';
-import { findings, fixtureNames, fixturesRoot, loadFixture, problemsOf } from './helpers.js';
+import {
+  findings,
+  fixtureNames,
+  fixturesRoot,
+  loadFixture,
+  manifestExpectation,
+  problemsOf,
+} from './helpers.js';
 
 const names = fixtureNames();
 
@@ -29,15 +36,21 @@ describe('fixtures/', () => {
     '%s/ produces the code it is named after',
     (name) => {
       const { expected } = loadFixture(name);
-      const codes = [...expected.problems, ...expected.warnings].map((finding) => finding.code);
+      const codes = [
+        ...expected.problems,
+        ...expected.warnings,
+        ...(expected.archive?.problems ?? []),
+        ...(expected.archive?.warnings ?? []),
+      ].map((finding) => finding.code);
       expect(codes).toContain(name);
     },
   );
 });
 
 describe.each(names)('validateManifest(fixtures/%s/manifest.json)', (name) => {
-  const { manifestText, expected } = loadFixture(name);
-  const result = validateManifest(manifestText, expected.options);
+  const { manifestText, expected: fixture } = loadFixture(name);
+  const expected = manifestExpectation(fixture);
+  const result = validateManifest(manifestText, fixture.options);
 
   it('produces exactly the problems in expected.json, in any order', () => {
     expect(findings(problemsOf(result))).toEqual(findings(expected.problems));
@@ -53,8 +66,8 @@ describe.each(names)('validateManifest(fixtures/%s/manifest.json)', (name) => {
 
   it('gives the same answer for the text, its UTF-8 bytes and the parsed value', () => {
     const bytes = new TextEncoder().encode(manifestText);
-    expect(validateManifest(bytes, expected.options)).toEqual(result);
+    expect(validateManifest(bytes, fixture.options)).toEqual(result);
     if (expected.problems.some((problem) => problem.code === 'schema_invalid_json')) return;
-    expect(validateManifest(JSON.parse(manifestText), expected.options)).toEqual(result);
+    expect(validateManifest(JSON.parse(manifestText), fixture.options)).toEqual(result);
   });
 });

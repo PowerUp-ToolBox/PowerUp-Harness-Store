@@ -1,0 +1,14 @@
+{
+  "description": "The icon is a PNG of 256×256 pixels instead of 512×512.",
+  "problems": [
+    {
+      "code": "icon_dimensions",
+      "path": "assets/icon.png"
+    }
+  ],
+  "warnings": [],
+  "manifest": {
+    "problems": [],
+    "warnings": []
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "description": "Six screenshots in assets/, one more than the five a Harness Package should have: a warning.",
+  "problems": [],
+  "warnings": [
+    {
+      "code": "screenshots_too_many",
+      "path": "assets"
+    }
+  ],
+  "manifest": {
+    "problems": [],
+    "warnings": []
+  }
+}

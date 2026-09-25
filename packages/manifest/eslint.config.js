@@ -1,12 +1,13 @@
 // @ts-check
 import { builtinModules } from 'node:module';
-import { defineConfig } from 'eslint/config';
+import { defineConfig, globalIgnores } from 'eslint/config';
 import harnessStore from '../../eslint.config.js';
 
 // Extends the shared root config. The main entry point (src/) must run in the Electron renderer
 // and in Deno as well as in Node, so it may not import Node built-ins or use Node-only globals.
-// Node-only code belongs behind a separate subpath export (e.g. src/node/, arriving in P0-01.3).
-export default defineConfig(harnessStore, {
+// Node-only code lives in src/node/, the `@harness-store/manifest/node` subpath export.
+// fixtures/ holds test Harness Packages (their Entry files are data, not code of this package).
+export default defineConfig(harnessStore, globalIgnores(['fixtures/']), {
   name: 'harness-store/manifest-pure-entry',
   files: ['src/**/*.ts'],
   ignores: ['src/node/**'],

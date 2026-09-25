@@ -28,8 +28,28 @@ export function createProblem(
   path: readonly PathSegment[],
   params?: ProblemParams,
 ): Problem {
+  return buildProblem(messageKey, formatPath(path), params);
+}
+
+/** Longest entry name quoted in a Problem's path, in code points; longer names end in `…`. */
+const MAX_PACKAGE_PATH_LENGTH = 1024;
+
+/**
+ * A Problem about a file or entry of the Harness Package rather than a place in the Manifest:
+ * `path` is its path inside the package (`assets/icon.png`), used as it is, or `$` for the
+ * package as a whole. A hostile entry name longer than 1 024 code points is cut short.
+ */
+export function createPackageProblem(
+  messageKey: MessageKey,
+  path: string,
+  params?: ProblemParams,
+): Problem {
+  return buildProblem(messageKey, cut(path, MAX_PACKAGE_PATH_LENGTH), params);
+}
+
+function buildProblem(messageKey: MessageKey, path: string, params?: ProblemParams): Problem {
   const problem: Problem = {
-    path: formatPath(path),
+    path,
     code: codeOfMessageKey(messageKey),
     message: interpolate(MESSAGES_EN[messageKey], params),
     messageKey,
@@ -133,10 +153,16 @@ export function codePointLength(text: string): number {
 
 /** Cuts text at {@link PREVIEW_LENGTH} code points (never inside a surrogate pair). */
 export function truncate(text: string): string {
+  return cut(text, PREVIEW_LENGTH);
+}
+
+/** Cuts text at `limit` code points (never inside a surrogate pair), ending it in `…`. */
+function cut(text: string, limit: number): string {
+  if (text.length <= limit) return text;
   let out = '';
   let length = 0;
   for (const char of text) {
-    if (length === PREVIEW_LENGTH) return `${out}…`;
+    if (length === limit) return `${out}…`;
     out += char;
     length++;
   }

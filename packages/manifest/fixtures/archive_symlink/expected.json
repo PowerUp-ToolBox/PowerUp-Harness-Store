@@ -1,0 +1,22 @@
+{
+  "description": "A clean folder; its archive adds dist/config.json as a symbolic link to /etc/passwd.",
+  "problems": [],
+  "warnings": [],
+  "archive": {
+    "recipe": {
+      "symlinks": [
+        {
+          "name": "dist/config.json",
+          "target": "/etc/passwd"
+        }
+      ]
+    },
+    "problems": [
+      {
+        "code": "archive_symlink",
+        "path": "dist/config.json"
+      }
+    ],
+    "warnings": []
+  }
+}

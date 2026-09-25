@@ -12,6 +12,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "default": "./dist/node/index.js"
+    },
     "./manifest-v1.schema.json": "./dist/manifest-v1.schema.json"
   },
   "files": [
@@ -26,6 +30,7 @@
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
+    "fflate": "^0.8.3",
     "semver": "^7.8.5"
   },
   "devDependencies": {

@@ -1,0 +1,14 @@
+{
+  "description": "README.md is over 50 KB: a warning, not a problem.",
+  "problems": [],
+  "warnings": [
+    {
+      "code": "file_too_large",
+      "path": "README.md"
+    }
+  ],
+  "manifest": {
+    "problems": [],
+    "warnings": []
+  }
+}

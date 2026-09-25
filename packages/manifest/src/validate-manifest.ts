@@ -3,6 +3,7 @@ import { loadDocument } from './document.js';
 import type { Manifest } from './manifest.generated.js';
 import { createProblem, dedupe, isKeyProblem } from './problem.js';
 import { normalizeOptions, optionRules, semanticRules } from './rules.js';
+import type { NormalizedOptions } from './rules.js';
 import { validateAgainstSchema } from './schema.js';
 import { schemaProblems } from './schema-problems.js';
 import type { Problem, ValidateManifestOptions, ValidationResult } from './types.js';
@@ -36,10 +37,23 @@ export function validateManifest(
   input: unknown,
   options?: ValidateManifestOptions,
 ): ValidationResult {
-  const normalizedOptions = normalizeOptions(options);
+  return inspectManifest(input, normalizeOptions(options)).result;
+}
 
+/** What validatePackage() needs besides the result: the loaded document, for its file rules. */
+export interface ManifestInspection {
+  result: ValidationResult;
+  /** The parsed Manifest (top-level `x-` keys removed), absent when it could not be loaded. */
+  document?: unknown;
+}
+
+/** {@link validateManifest}, also returning the document it checked. */
+export function inspectManifest(
+  input: unknown,
+  normalizedOptions: NormalizedOptions,
+): ManifestInspection {
   const loaded = loadDocument(input);
-  if (!loaded.ok) return { ok: false, problems: [loaded.problem], warnings: [] };
+  if (!loaded.ok) return { result: { ok: false, problems: [loaded.problem], warnings: [] } };
   const { document } = loaded;
 
   let schemaErrors: OutputUnit[];
@@ -51,7 +65,7 @@ export function validateManifest(
     // (some workers and isolates) can still overflow it.
     if (!(error instanceof RangeError)) throw error;
     const problem = createProblem('schema_invalid_json.too_many_problems', []);
-    return { ok: false, problems: [problem], warnings: [] };
+    return { result: { ok: false, problems: [problem], warnings: [] }, document };
   }
 
   const semantic = semanticRules(document);
@@ -68,8 +82,8 @@ export function validateManifest(
   );
   const warnings = dedupe(semantic.warnings);
 
-  if (problems.length > 0) return { ok: false, problems, warnings };
-  return { ok: true, manifest: document as Manifest, warnings };
+  if (problems.length > 0) return { result: { ok: false, problems, warnings }, document };
+  return { result: { ok: true, manifest: document as Manifest, warnings }, document };
 }
 
 /**

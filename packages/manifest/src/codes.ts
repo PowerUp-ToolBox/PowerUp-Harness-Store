@@ -45,6 +45,33 @@ export const PROBLEM_CODES = Object.freeze({
   version_not_greater: 'version_not_greater',
   /** Warning only: a key has no effect in this Manifest (e.g. `ui.path` for a terminal UI Kind). */
   ignored_key: 'ignored_key',
+
+  // Whole Harness Package rules (validatePackage). Their `path` is a path inside the Harness
+  // Package (`assets/icon.png`), or `$` for the Harness Package as a whole.
+
+  /** A required file (`manifest.json`, `README.md`, `assets/icon.png`) is not in the package. */
+  file_missing: 'file_missing',
+  /** A file has the wrong format: an icon that is not a PNG, a screenshot that is not PNG/JPEG. */
+  file_type: 'file_type',
+  /** `assets/icon.png` is a PNG, but not 512×512 pixels. */
+  icon_dimensions: 'icon_dimensions',
+  /** An entry is a symbolic link. */
+  archive_symlink: 'archive_symlink',
+  /** An entry name has a `..` segment or is absolute, so it would unpack outside the package. */
+  archive_path_traversal: 'archive_path_traversal',
+  /** The archive is larger than 500 MB (compressed). */
+  archive_too_large: 'archive_too_large',
+  /** The package holds more than 20 000 files. */
+  archive_too_many_files: 'archive_too_many_files',
+  /**
+   * The archive cannot be read safely: not a zip, corrupt, an entry stored twice, or an entry that
+   * is encrypted or uses a compression method other than stored or Deflate.
+   */
+  archive_invalid: 'archive_invalid',
+  /** Warning only: `README.md` is over 50 KB, or a screenshot over 2 MB. */
+  file_too_large: 'file_too_large',
+  /** Warning only: `assets/` holds more than 5 screenshots. */
+  screenshots_too_many: 'screenshots_too_many',
 });
 
 export type ProblemCode = (typeof PROBLEM_CODES)[keyof typeof PROBLEM_CODES];
@@ -121,6 +148,42 @@ export const MESSAGES_EN = Object.freeze({
   'ignored_key.filesystem_paths':
     '"paths" applies to filesystem scope "paths" only; it is ignored for scope "{scope}".',
   'ignored_key.network_domains': '"domains" is ignored because "any" is true.',
+  'schema_invalid_json.file_too_large':
+    'manifest.json is larger than {limit} bytes (1 MB), far more than any Manifest needs, so it was not read.',
+  'entry_missing_for_platform.file':
+    'The Entry file "{file}" is not in the Harness Package, so the Runtime could not start the Harness.',
+  'entry_missing_for_platform.platform_file':
+    'The Entry file "{file}" for platform "{platform}" is not in the Harness Package, so the Runtime could not start the Harness there.',
+  file_missing: 'The Harness Package must contain "{file}".',
+  'file_missing.manifest_nested':
+    'manifest.json must be at the root of the Harness Package, but it is at "{found}". Package the contents of the Harness folder, not the folder itself.',
+  'file_type.icon':
+    'The icon must be a PNG image; this file is not one, or its PNG header is damaged.',
+  'file_type.screenshot':
+    'Screenshots in assets/ must be PNG or JPEG images named .png, .jpg or .jpeg, with content to match.',
+  icon_dimensions: 'The icon must be {expected}×{expected} pixels; found {width}×{height}.',
+  archive_symlink: 'The entry is a symbolic link. A Harness Package may not contain links.',
+  archive_path_traversal:
+    'The entry name has a ".." segment, so it would be unpacked outside the Harness Package.',
+  'archive_path_traversal.absolute':
+    'The entry name is an absolute path. Entries must be relative to the root of the Harness Package.',
+  'archive_path_traversal.other_name':
+    'The entry also carries the name {name} (in an Info-ZIP Unicode Path field), which is absolute or has a ".." segment, so some unpackers would place it outside the Harness Package.',
+  archive_too_large:
+    'The Harness Package is {actual} bytes; the limit is {limit} bytes (500 MB), compressed.',
+  archive_too_many_files: 'The Harness Package holds {actual} files; the limit is {limit}.',
+  'archive_too_many_files.not_counted':
+    'The Harness Package has more than {counted} entries, far more than the limit of {limit} files, so it was not checked further.',
+  archive_invalid: 'The Harness Package is not a readable zip archive: {detail}.',
+  'archive_invalid.entry': 'The file cannot be read from the zip archive: {detail}.',
+  'archive_invalid.duplicate': 'The zip archive holds this path more than once.',
+  'archive_invalid.encrypted': 'The file is encrypted. Files in a Harness Package must not be.',
+  'archive_invalid.compression_method':
+    'The file uses compression method {method}; only stored (0) and Deflate (8) files can be unpacked.',
+  'file_too_large.readme': 'README.md is {actual} bytes; keep it to at most {limit} bytes (50 KB).',
+  'file_too_large.screenshot':
+    'The screenshot is {actual} bytes; keep each screenshot to at most {limit} bytes (2 MB).',
+  screenshots_too_many: 'assets/ holds {actual} screenshots; keep it to at most {limit}.',
 });
 
 export type MessageKey = keyof typeof MESSAGES_EN;

@@ -11,8 +11,16 @@ import { createContext, runInContext } from 'node:vm';
 import { build } from 'vite';
 import type { Plugin, Rolldown } from 'vite';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { findings, fixtureNames, loadFixture, minimalManifest, packageRoot } from './helpers.js';
+import {
+  findings,
+  fixtureNames,
+  loadFixture,
+  manifestExpectation,
+  minimalManifest,
+  packageRoot,
+} from './helpers.js';
 import type { FixtureExpectation } from './helpers.js';
+import { fixtureDir, hostileArchive, readTree, zipFolder } from './support/packages.js';
 
 /** Fails the build on any Node built-in instead of letting Vite stub it for the browser. */
 function forbidNodeBuiltins(): Plugin {
@@ -63,6 +71,10 @@ beforeAll(async () => {
 
 interface BundledPackage {
   validateManifest: (input: unknown, options?: unknown) => unknown;
+  validatePackage: (source: unknown, options?: unknown) => Promise<unknown>;
+  diffForReconsent: (previous: unknown, next: unknown) => unknown;
+  ArchiveSource: { open: (archive: unknown) => Promise<unknown> };
+  InMemorySource: new (files: unknown) => unknown;
   PROBLEM_CODES: Record<string, string>;
 }
 
@@ -109,7 +121,8 @@ describe('browser bundle of @harness-store/manifest', () => {
     'validates fixtures/%s in a sandbox without Node globals exactly as in Node',
     (name) => {
       const { validateManifest } = loadInSandbox();
-      const { manifestText, expected } = loadFixture(name);
+      const { manifestText, expected: fixture } = loadFixture(name);
+      const expected = { ...manifestExpectation(fixture), options: fixture.options };
       // Results cross the realm boundary as JSON.
       const result = JSON.parse(
         JSON.stringify(validateManifest(manifestText, expected.options)),
@@ -123,6 +136,54 @@ describe('browser bundle of @harness-store/manifest', () => {
       expect(findings(result.warnings)).toEqual(findings(expected.warnings));
     },
   );
+
+  // Bytes cross the realm boundary as they are: the bundle must recognise another realm's
+  // Uint8Array (ArrayBuffer.isView), as it would for bytes from a worker or an iframe.
+  it.each(fixtureNames())(
+    'validates fixtures/%s zipped and in memory, in the sandbox, exactly as in Node',
+    async (name) => {
+      const { validatePackage, ArchiveSource, InMemorySource } = loadInSandbox();
+      const { expected } = loadFixture(name);
+      const sources = [
+        await ArchiveSource.open(zipFolder(fixtureDir(name))),
+        new InMemorySource(new Map(readTree(fixtureDir(name)).files)),
+      ];
+      for (const source of sources) {
+        const result = JSON.parse(
+          JSON.stringify(await validatePackage(source, expected.options)),
+        ) as {
+          problems?: FixtureExpectation['problems'];
+          warnings: FixtureExpectation['warnings'];
+        };
+        expect(findings(result.problems ?? [])).toEqual(findings(expected.problems));
+        expect(findings(result.warnings)).toEqual(findings(expected.warnings));
+      }
+    },
+  );
+
+  it('rejects the hostile archives in the sandbox too', async () => {
+    const { validatePackage, ArchiveSource } = loadInSandbox();
+    for (const name of ['archive_path_traversal', 'archive_symlink', 'archive_invalid']) {
+      const result = (await validatePackage(await ArchiveSource.open(hostileArchive(name)))) as {
+        problems: FixtureExpectation['problems'];
+      };
+      expect(findings(result.problems)).toEqual(
+        findings(loadFixture(name).expected.archive?.problems ?? []),
+      );
+    }
+  });
+
+  it('diffs Manifests for re-consent in the sandbox', () => {
+    const { diffForReconsent } = loadInSandbox();
+    const previous = minimalManifest();
+    const next = { ...minimalManifest(), entry: 'dist/main.js' };
+    expect(JSON.parse(JSON.stringify(diffForReconsent(previous, next)))).toEqual({
+      required: true,
+      reasons: ['entry_changed'],
+      added: ['entry:dist/main.js'],
+      removed: ['entry:dist/index.js'],
+    });
+  });
 
   it('accepts UTF-8 bytes in the sandbox too', () => {
     const { validateManifest } = loadInSandbox();

@@ -1,0 +1,14 @@
+{
+  "description": "A Harness Package without its icon: assets/icon.png is required.",
+  "problems": [
+    {
+      "code": "file_missing",
+      "path": "assets/icon.png"
+    }
+  ],
+  "warnings": [],
+  "manifest": {
+    "problems": [],
+    "warnings": []
+  }
+}
