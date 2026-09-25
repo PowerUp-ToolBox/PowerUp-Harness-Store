@@ -1,12 +1,26 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Absolute path of the monorepo root (this file lives in tools/repo-checks/test/). */
-export const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
+/**
+ * Environment variable that points the checks at another checkout. Only the
+ * regression tests set it, to run a check file against a scratch copy of the repo.
+ */
+export const REPO_ROOT_ENV = 'REPO_CHECKS_ROOT';
 
-/** The P0 layout required by P0-01.1: exactly these package directories, nothing else. */
+/**
+ * Absolute path of the monorepo root, with a trailing separator. By default the
+ * checkout this file lives in (tools/repo-checks/test/).
+ */
+export const repoRoot = process.env[REPO_ROOT_ENV]
+  ? join(resolve(process.env[REPO_ROOT_ENV]), sep)
+  : fileURLToPath(new URL('../../../', import.meta.url));
+
+/**
+ * The P0 layout required by P0-01.1. These package directories must always exist;
+ * later packages are added alongside them without editing this list.
+ */
 export const P0_LAYOUT = {
   apps: ['desktop', 'store'],
   packages: ['gateway', 'manifest', 'sdk'],

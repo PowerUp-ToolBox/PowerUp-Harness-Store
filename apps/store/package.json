@@ -5,7 +5,7 @@
   "description": "Harness Store backend: Supabase project (Auth, Postgres, Storage, Deno Edge Functions).",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
   },
   "scripts": {
     "test": "node scripts/test.mjs"

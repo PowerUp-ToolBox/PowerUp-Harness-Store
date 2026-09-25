@@ -5,7 +5,7 @@
   "description": "SDK for Node Harness authors: launch environment, Gateway client and Model Slot helpers.",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
   },
   "exports": {
     ".": {

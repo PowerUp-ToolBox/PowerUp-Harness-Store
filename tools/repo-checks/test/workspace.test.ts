@@ -44,6 +44,18 @@ describe('pnpm workspace', () => {
     expect(listed).toEqual(onDisk);
   });
 
+  it('root `pnpm lint` also lints the root-level config files and checks formatting', () => {
+    const steps = (rootManifest.scripts?.lint ?? '').split('&&').map((step) => step.trim());
+    expect(steps).toEqual([
+      'pnpm --recursive run lint',
+      'pnpm run lint:root',
+      'pnpm run format:check',
+    ]);
+    // Root-level JS (eslint.config.js) belongs to no package, so no package lints it.
+    expect(rootManifest.scripts?.['lint:root']).toBe('eslint "*.{js,mjs,cjs}"');
+    expect(rootManifest.scripts?.['format:check']).toBe('prettier --check .');
+  });
+
   it.each(ROOT_COMMANDS)('root `pnpm %s` fans out to every workspace package', (command) => {
     const script = rootManifest.scripts?.[command] ?? '';
     expect(script).toMatch(new RegExp(`^pnpm --recursive run ${command}(\\s|$)`));
@@ -70,10 +82,15 @@ describe('root command fan-out in a scratch workspace', () => {
 
   function createWorkspace(): string {
     scratch = mkdtempSync(join(tmpdir(), 'harness-store-fanout-'));
-    const scripts = { ...rootManifest.scripts };
-    // `lint` also runs Prettier over the repo; the scratch workspace has no
-    // dependencies installed, so only the fan-out half is exercised here.
-    scripts['format:check'] = 'node -e ""';
+    // `lint` also runs root helpers (ESLint on root files, Prettier over the repo).
+    // The scratch workspace has no dependencies installed, so every helper script
+    // becomes a no-op and only the fan-out half of each root command is exercised.
+    const scripts = Object.fromEntries(
+      Object.entries(rootManifest.scripts ?? {}).map(([name, script]) => [
+        name,
+        (ROOT_COMMANDS as readonly string[]).includes(name) ? script : 'node -e ""',
+      ]),
+    );
     writeFileSync(
       join(scratch, 'package.json'),
       JSON.stringify({ name: 'scratch-root', private: true, scripts }, null, 2),

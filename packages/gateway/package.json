@@ -5,7 +5,7 @@
   "description": "The Model Gateway: loopback OpenAI-compatible HTTP server that resolves Model Slots and forwards to Providers.",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
   },
   "exports": {
     ".": {

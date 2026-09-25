@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Linter } from 'eslint';
 import * as prettier from 'prettier';
+import { minVersion, satisfies, subset, validRange } from 'semver';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -67,23 +68,39 @@ function allDependencies(manifest: PackageJson): string[] {
 describe('Node LTS pin', () => {
   const nvmrc = readText('.nvmrc').trim();
   const engines = rootManifest.engines?.node ?? '';
-
-  it('pins the same Node major in .nvmrc and engines.node', () => {
-    expect(nvmrc).toMatch(/^\d+$/);
-    const minimum = /^>=(\d+)\.\d+\.\d+$/.exec(engines);
-    expect(minimum, `engines.node "${engines}" should be a ">=x.y.z" floor`).not.toBeNull();
-    expect(minimum?.[1]).toBe(nvmrc);
+  /** Root devDependencies (the shared toolchain) that declare the Node versions they support. */
+  const toolEngines = Object.keys(rootManifest.devDependencies ?? {}).flatMap((dep) => {
+    const tool = JSON.parse(readText('node_modules', dep, 'package.json')) as PackageJson;
+    const node = tool.engines?.node;
+    return node ? [[dep, node] as const] : [];
   });
 
-  it('pins an even-numbered (LTS) Node major', () => {
+  it('pins an even-numbered (LTS) Node major in .nvmrc', () => {
+    expect(nvmrc).toMatch(/^\d+$/);
     expect(Number(nvmrc) % 2).toBe(0);
   });
 
+  it('declares an engines.node range whose floor is on the .nvmrc major', () => {
+    expect(validRange(engines), `engines.node "${engines}" is not a semver range`).not.toBeNull();
+    expect(minVersion(engines)?.major).toBe(Number(nvmrc));
+  });
+
+  it('admits none of the odd-numbered Current releases that follow the pinned LTS', () => {
+    for (const major of [Number(nvmrc) + 1, Number(nvmrc) + 3]) {
+      expect(satisfies(`${String(major)}.0.0`, engines), `Node ${String(major)}`).toBe(false);
+    }
+  });
+
+  it('checks at least the linter and the test runner', () => {
+    expect(toolEngines.map(([dep]) => dep)).toEqual(expect.arrayContaining(['eslint', 'vitest']));
+  });
+
+  it.each(toolEngines)('admits no Node version that %s does not support (%s)', (_dep, range) => {
+    expect(subset(engines, range), `"${engines}" is not within "${range}"`).toBe(true);
+  });
+
   it('is running on a Node that satisfies engines.node', () => {
-    const [major = 0, minor = 0] = process.versions.node.split('.').map(Number);
-    const [, floorMajor = '0', floorMinor = '0'] = /^>=(\d+)\.(\d+)/.exec(engines) ?? [];
-    const [minMajor, minMinor] = [Number(floorMajor), Number(floorMinor)];
-    expect(major > minMajor || (major === minMajor && minor >= minMinor)).toBe(true);
+    expect(satisfies(process.versions.node, engines)).toBe(true);
   });
 });
 

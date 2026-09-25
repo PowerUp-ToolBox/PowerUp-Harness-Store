@@ -5,7 +5,7 @@
   "description": "Contributor tooling: tests that keep the monorepo layout, shared configs and CI in line with the P0-01 contract.",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
   },
   "scripts": {
     "lint": "eslint .",
@@ -13,6 +13,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@types/semver": "^7.8.0",
+    "semver": "^7.8.5",
     "yaml": "^2.9.1"
   }
 }

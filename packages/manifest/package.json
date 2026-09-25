@@ -5,7 +5,7 @@
   "description": "Single source of truth for the Harness Manifest: JSON Schema, types, validators and CLI.",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
   },
   "exports": {
     ".": {

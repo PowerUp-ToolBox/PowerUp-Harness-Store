@@ -5,7 +5,7 @@
   "description": "Harness Store desktop app: Electron shell whose main process is the Runtime and hosts the Model Gateway.",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
   },
   "scripts": {
     "build": "tsc --build tsconfig.build.json",

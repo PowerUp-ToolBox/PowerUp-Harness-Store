@@ -5,7 +5,7 @@
   "description": "Reference Harness with UI Kind web (runtime kind node).",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
   },
   "scripts": {
     "build": "tsc --build tsconfig.build.json",
