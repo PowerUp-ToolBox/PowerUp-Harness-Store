@@ -57,8 +57,10 @@ const RELATIVE_PATH = new RegExp(
  *    name an unpacker could use: the central directory's, the local header's, the Unicode Path
  *    field's), more than 20 000 files, more than 500 MB compressed, paths that would unpack to
  *    the same place (stored twice, differing only in letter case, Unicode form or trailing dots
- *    and spaces, a file where a folder is needed), `\` or `:` in a name, entries that are encrypted, use an unsupported
- *    compression or are described inconsistently, and bytes of a zip that belong to no entry. An
+ *    and spaces, a file where a folder is needed), `\`, `:` or a control character in a name,
+ *    entries that are encrypted, use an unsupported compression or are described inconsistently
+ *    (a local header that disagrees with the central directory, a Deflate stream that ends early,
+ *    a stored data descriptor), and bytes of a zip that belong to no entry. An
  *    archive that is not a readable zip at all gives a single `archive_invalid` problem, and one
  *    with more than 100 000 entries a single `archive_too_many_files` problem: nothing else is
  *    checked then, so the work stays bounded.
@@ -149,6 +151,15 @@ interface PackageContext {
   warnings: Problem[];
 }
 
+/** C0 control characters and DEL: many unpackers cut a name off at one (a NUL) or refuse it. */
+function hasControlCharacter(name: string): boolean {
+  for (let index = 0; index < name.length; index++) {
+    const code = name.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
 /** Rule 1: everything the listing alone shows, before any content is read. */
 function archiveProblems(listing: PackageListing): Problem[] {
   const problems: Problem[] = [];
@@ -174,6 +185,10 @@ function archiveProblems(listing: PackageListing): Problem[] {
           character: `"${character}"`,
         }),
       );
+    } else if (hasControlCharacter(entry.name)) {
+      // A NUL, say: some unpackers cut the name off there ("manifest.json\0" becomes a second
+      // "manifest.json"), so they would unpack a different file than the one checked.
+      problems.push(createPackageProblem('archive_invalid.name_control', entry.name));
     }
     for (const other of entry.otherNames ?? []) {
       if (unsafe(other)) {
@@ -182,6 +197,8 @@ function archiveProblems(listing: PackageListing): Problem[] {
             name: preview(other),
           }),
         );
+      } else if (hasControlCharacter(other)) {
+        problems.push(createPackageProblem('archive_invalid.name_control', entry.name));
       }
     }
     if (entry.localName !== undefined) {

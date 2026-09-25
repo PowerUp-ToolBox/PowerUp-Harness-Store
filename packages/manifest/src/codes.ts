@@ -71,10 +71,12 @@ export const PROBLEM_CODES = Object.freeze({
   archive_too_many_files: 'archive_too_many_files',
   /**
    * The archive cannot be read or unpacked safely: not a zip, corrupt, ambiguous (a local header
-   * that disagrees with the central directory, bytes that belong to no entry), an entry that is
-   * encrypted or uses a compression method other than stored or Deflate, paths that would unpack
-   * to the same place (stored twice, differing only in letter case, a file where a folder is
-   * needed), or names that Windows reads differently (with a `\` or a `:`).
+   * that disagrees with the central directory, an entry whose Deflate stream ends before its
+   * declared data so a streaming unpacker reads the rest as more entries, a stored entry with a
+   * data descriptor, bytes that belong to no entry), an entry that is encrypted or uses a
+   * compression method other than stored or Deflate, paths that would unpack to the same place
+   * (stored twice, differing only in letter case, a file where a folder is needed), or names that
+   * unpackers read differently (with a `\`, a `:`, or a control character).
    */
   archive_invalid: 'archive_invalid',
   /** Warning only: `README.md` is over 50 KB, or a screenshot over 2 MB. */
@@ -201,6 +203,8 @@ export const MESSAGES_EN = Object.freeze({
     'The zip archive holds {length} bytes at offset {offset} that belong to no entry of its central directory. Unpackers that read the archive in order could find files there that were never checked.',
   'archive_invalid.name_character':
     'The entry name contains {character}, which unpackers on Windows read differently from others ("\\" as a folder separator, ":" as a file stream of another file). Use "/" between folders and no ":" in names.',
+  'archive_invalid.name_control':
+    'The entry name contains a control character (a byte between 0 and 31, or 127). Many unpackers cut the name off at it or refuse it, so they would unpack a different file than the one checked.',
   'archive_invalid.case_conflict':
     'The Harness Package also holds {other}, whose path differs from this one only in letter case, Unicode form or trailing dots and spaces. On macOS or Windows both are the same file, so one would overwrite the other.',
   'archive_invalid.file_folder_conflict':

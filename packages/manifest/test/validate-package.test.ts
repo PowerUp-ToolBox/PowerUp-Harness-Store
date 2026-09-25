@@ -639,6 +639,59 @@ describe('archive safety', () => {
     });
   });
 
+  it('rejects a control character in a name, so a NUL cannot hide a second manifest.json', async () => {
+    const source = await zipped({}, [{ name: 'manifest.json\u0000', data: '{"shell":true}' }]);
+    const { result, problems } = await check(source);
+    expect(problems).toEqual(['archive_invalid@manifest.json\u0000']);
+    expect(only(result, 'archive_invalid').messageKey).toBe('archive_invalid.name_control');
+  });
+
+  it('rejects a local "xl" extra field that turns a file into a symlink', async () => {
+    const xl = new Uint8Array(7);
+    const view = new DataView(xl.buffer);
+    xl[0] = 0x05; // bitmap: version made by, external attributes
+    view.setUint16(1, (3 << 8) | 20, true); // host 3 (Unix)
+    view.setUint32(3, (0o120777 << 16) >>> 0, true); // S_IFLNK
+    const source = await zipped({}, [
+      {
+        name: 'dist/helper.js',
+        data: '/etc/passwd',
+        method: 0,
+        local: { extra: extraField(0x6c78, xl) },
+      },
+    ]);
+    const { result, problems } = await check(source);
+    expect(problems).toEqual(['archive_invalid@dist/helper.js']);
+    expect(only(result, 'archive_invalid').messageKey).toBe('archive_invalid.inconsistent');
+  });
+
+  it('rejects a Deflate data-descriptor entry that ends before its declared data', async () => {
+    const content = 'console.log(1);\n'.repeat(20);
+    const stream = deflateRawSync(content);
+    const contentCrc = crc32(Buffer.from(content));
+    const dd = new Uint8Array(16);
+    const view = new DataView(dd.buffer);
+    view.setUint32(0, 0x08074b50, true);
+    view.setUint32(4, contentCrc >>> 0, true);
+    view.setUint32(8, stream.length, true);
+    view.setUint32(12, content.length, true);
+    const hidden = localRecord({ name: '../../evil.txt', data: 'pwned', method: 0 });
+    const blob = Buffer.concat([Buffer.from(stream), Buffer.from(dd), Buffer.from(hidden)]);
+    const source = await zipped({}, [
+      {
+        name: 'dist/lib.js',
+        method: 8,
+        compressedData: blob,
+        crc: contentCrc,
+        declaredSize: content.length,
+        dataDescriptor: { crc: contentCrc, compressedSize: blob.length, size: content.length },
+      },
+    ]);
+    const { result, problems } = await check(source);
+    expect(problems).toEqual(['archive_invalid@dist/lib.js']);
+    expect(only(result, 'archive_invalid').message).toMatch(/Deflate stream ends before/);
+  });
+
   it('rejects bytes of the archive that belong to no entry, such as a hidden ../ entry', async () => {
     const hidden: ZipEntrySpec = { name: '../../orphan.txt', data: 'x', unlisted: true };
     const entries = [...packageFiles()].map(([name, data]) => ({ name, data }));

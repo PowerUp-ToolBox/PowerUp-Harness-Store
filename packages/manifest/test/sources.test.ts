@@ -501,6 +501,126 @@ describe('ArchiveSource: local headers', () => {
   });
 });
 
+/**
+ * The three ways an entry can look one thing to a reader that uses the central directory and
+ * another to a streaming unpacker (a local "xl" file-type field, a Deflate stream that ends
+ * before its declared size, and a stored entry with a data descriptor inside its data). Every one
+ * is reported as inconsistent and never read, so the archive-safety rules hold for both readers.
+ */
+describe('ArchiveSource: entries that differ for a streaming unpacker', () => {
+  /** A libarchive "xl" extra field carrying "version made by" (host) and external attributes. */
+  const xlField = (externalAttributes: number, host = 3) => {
+    const bytes = new Uint8Array(7);
+    const view = new DataView(bytes.buffer);
+    bytes[0] = 0x05; // bitmap: version made by (0x01) and external attributes (0x04)
+    view.setUint16(1, (host << 8) | 20, true);
+    view.setUint32(3, externalAttributes >>> 0, true);
+    return extraField(0x6c78, bytes);
+  };
+  const unixMode = (mode: number) => (mode << 16) >>> 0;
+  /** A data descriptor: signature, CRC-32, and 4-byte compressed and uncompressed sizes. */
+  const descriptor = (crc: number, compressedSize: number, size: number) => {
+    const bytes = new Uint8Array(16);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, 0x08074b50, true);
+    view.setUint32(4, crc >>> 0, true);
+    view.setUint32(8, compressedSize, true);
+    view.setUint32(12, size, true);
+    return bytes;
+  };
+  const concatBytes = (...parts: Uint8Array[]) => Buffer.concat(parts.map((p) => Buffer.from(p)));
+  const inconsistent = (spec: ZipEntrySpec, match: RegExp) => {
+    it(`lists ${spec.name} as inconsistent, and never reads it`, async () => {
+      const source = await open([{ name: 'a.txt', data: 'a' }, spec]);
+      const entry = source.listEntries().entries[1];
+      expect(entry?.unsupported).toMatchObject({ reason: 'inconsistent' });
+      expect((entry?.unsupported as { detail: string }).detail).toMatch(match);
+      const path = source.listFiles().find((p) => p !== 'a.txt') ?? spec.name;
+      await expect(source.readFile(path)).rejects.toThrow(PackageReadError);
+    });
+  };
+
+  inconsistent(
+    {
+      name: 'dist/index.js',
+      data: '/etc/passwd',
+      method: 0,
+      local: { extra: xlField(unixMode(0o120777)) },
+    },
+    /file type to symlink .*"xl"/,
+  );
+  inconsistent(
+    { name: 'app', data: 'x', method: 0, host: 0, local: { extra: xlField(0x10, 0) } },
+    /file type to directory .*"xl"/,
+  );
+
+  it('accepts a local "xl" field that agrees with the central directory', async () => {
+    const source = await open([
+      { name: 'keep.js', data: 'x', method: 0, local: { extra: xlField(unixMode(0o100644)) } },
+    ]);
+    expect(source.listEntries().entries[0]).not.toHaveProperty('unsupported');
+    expect(text(await source.readFile('keep.js'))).toBe('x');
+  });
+
+  // A Deflate entry with a data descriptor whose Deflate stream ends early, then a fake descriptor
+  // a streaming unpacker accepts, then a hidden "../../evil.txt" it would go on to unpack.
+  it('lists a Deflate data-descriptor entry that ends before its size as inconsistent', async () => {
+    const content = 'console.log(1);\n'.repeat(20);
+    const stream = deflateRawSync(content);
+    const contentCrc = nodeCrc32(content);
+    const hidden = localRecord({ name: '../../evil.txt', data: 'pwned', method: 0 });
+    const blob = concatBytes(stream, descriptor(contentCrc, stream.length, content.length), hidden);
+    const source = await open([
+      {
+        name: 'dist/lib.js',
+        method: 8,
+        compressedData: blob,
+        crc: contentCrc,
+        declaredSize: content.length,
+        dataDescriptor: { crc: contentCrc, compressedSize: blob.length, size: content.length },
+      },
+    ]);
+    const unsupported = source.listEntries().entries[0]?.unsupported as {
+      reason: string;
+      detail: string;
+    };
+    expect(unsupported.reason).toBe('inconsistent');
+    expect(unsupported.detail).toMatch(/Deflate stream ends before/);
+    expect(source.listEntries().unlistedData).toBeUndefined();
+    await expect(source.readFile('dist/lib.js')).rejects.toThrow(/Deflate stream ends before/);
+  });
+
+  it('accepts a Deflate data-descriptor entry whose stream fills its declared size', async () => {
+    const content = 'alpha '.repeat(200);
+    const source = await open([{ name: 'ok.txt', data: content, dataDescriptor: true }]);
+    expect(source.listEntries().entries[0]).not.toHaveProperty('unsupported');
+    expect(text(await source.readFile('ok.txt'))).toBe(content);
+  });
+
+  it('lists a stored data-descriptor entry with a copy of its descriptor inside as inconsistent', async () => {
+    const prefix = Buffer.from('smuggled prefix.'); // the bytes before the fake descriptor
+    const hidden = localRecord({ name: '../../evil.txt', data: 'pwned', method: 0 });
+    // The fake descriptor's compressed-size field equals the bytes before it, so a scanner stops.
+    const data = concatBytes(prefix, descriptor(0, prefix.length, prefix.length), hidden);
+    const source = await open([{ name: 'dist/blob.bin', method: 0, data, dataDescriptor: true }]);
+    const unsupported = source.listEntries().entries[0]?.unsupported as {
+      reason: string;
+      detail: string;
+    };
+    expect(unsupported.reason).toBe('inconsistent');
+    expect(unsupported.detail).toMatch(/stored with a data descriptor/);
+    await expect(source.readFile('dist/blob.bin')).rejects.toThrow(/stored with a data descriptor/);
+  });
+
+  it('accepts a stored data-descriptor entry whose data holds no matching descriptor', async () => {
+    // The bytes 50 4b 07 08 appear, but the compressed-size field after them is not the offset.
+    const data = concatBytes(Buffer.from('head'), descriptor(0, 999, 999), Buffer.from('tail'));
+    const source = await open([{ name: 'clean.bin', method: 0, data, dataDescriptor: true }]);
+    expect(source.listEntries().entries[0]).not.toHaveProperty('unsupported');
+    expect(await source.readFile('clean.bin')).toHaveLength(data.length);
+  });
+});
+
 describe('ArchiveSource: the end of central directory record and ZIP64', () => {
   it('reads an archive with a comment', async () => {
     const signature = String.fromCharCode(0x50, 0x4b, 0x05, 0x06);

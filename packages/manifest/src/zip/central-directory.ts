@@ -61,6 +61,37 @@ const MAX_COMMENT_LENGTH = 0xffff;
 
 export const ZIP64_EXTRA_FIELD = 0x0001;
 export const UNICODE_PATH_EXTRA_FIELD = 0x7075;
+/**
+ * libarchive's experimental "xl" extra field, which carries a Unix mode (and MS-DOS attributes)
+ * in a local header. libarchive applies it, so an entry the central directory calls a regular
+ * file can be a symlink or folder to it: {@link fileTypeKind} decodes it for a consistency check.
+ */
+export const XL_EXTRA_FIELD = 0x6c78;
+
+/** "Version made by" host codes we treat specially: Unix carries a mode, MS-DOS the DOS attributes. */
+export const HOST_MSDOS = 0;
+export const HOST_UNIX = 3;
+/** The MS-DOS directory attribute, in the low byte of the external attributes. */
+const MSDOS_DIRECTORY = 0x10;
+
+/** The file kind a set of external attributes names, or undefined when they carry no file type. */
+export type FileTypeKind = 'symlink' | 'special' | 'directory' | 'file';
+
+/**
+ * The file kind that `externalAttributes` (of a central record or an "xl" field) name for the
+ * given "version made by" host: a Unix host's mode is in the high 16 bits, an MS-DOS host's
+ * directory flag in the low byte. Undefined when they say nothing about the file type, so an
+ * entry keeps the kind its name implies.
+ */
+export function fileTypeKind(externalAttributes: number, host: number): FileTypeKind | undefined {
+  const unixFileType = (externalAttributes >>> 16) & UNIX_FILE_TYPE_MASK;
+  if (unixFileType === UNIX_SYMLINK) return 'symlink';
+  if (unixFileType === UNIX_DIRECTORY) return 'directory';
+  if (unixFileType === UNIX_REGULAR) return 'file';
+  if (unixFileType !== 0) return 'special';
+  if (host === HOST_MSDOS && (externalAttributes & MSDOS_DIRECTORY) !== 0) return 'directory';
+  return undefined;
+}
 
 /**
  * `S_IFMT` and its values: the file-type bits of a Unix mode, for a symbolic link, a folder and a
@@ -331,16 +362,11 @@ function parseEntry(
     if (other !== name) otherNames.push(other);
   }
 
-  // The Unix mode is in the high 16 bits whatever host wrote the entry (0 when there is none).
-  const unixFileType = (externalAttributes >>> 16) & UNIX_FILE_TYPE_MASK;
+  // The file type from the external attributes (a Unix mode, or an MS-DOS directory flag), whose
+  // host is the high byte of "version made by"; the name's trailing "/" decides otherwise.
+  const host = view.getUint16(at + 4, true) >>> 8;
   const kind =
-    unixFileType === UNIX_SYMLINK
-      ? 'symlink'
-      : unixFileType !== 0 && unixFileType !== UNIX_DIRECTORY && unixFileType !== UNIX_REGULAR
-        ? 'special'
-        : name.endsWith('/')
-          ? 'directory'
-          : 'file';
+    fileTypeKind(externalAttributes, host) ?? (name.endsWith('/') ? 'directory' : 'file');
 
   return {
     name,

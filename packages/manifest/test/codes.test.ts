@@ -273,6 +273,7 @@ const EXAMPLES: Record<MessageKey, Example | PackageExample | 'fallback' | 'smal
   'archive_invalid.inconsistent': packageExample([{ name: 'x.txt', data: 'x', local: { crc: 1 } }]),
   'archive_invalid.unlisted_data': fixtureArchive('archive-unlisted-entry'),
   'archive_invalid.name_character': packageExample([{ name: 'dist\\x.js', data: 'x' }]),
+  'archive_invalid.name_control': packageExample([{ name: 'dist/x\u0001.js', data: 'x' }]),
   'archive_invalid.case_conflict': packageExample([{ name: 'readme.md', data: 'x' }]),
   'archive_invalid.file_folder_conflict': packageExample([{ name: 'DIST', data: 'x' }]),
   'file_too_large.readme': packageExample([{ name: 'README.md', data: 'x'.repeat(60_000) }]),
