@@ -26,8 +26,8 @@ Limits: archive ≤ 500 MB compressed; ≤ 20 000 files; no symlinks; no absolut
 | `summary` | string | yes | ≤ 120 chars, one sentence, shown in lists. |
 | `tags` | string[] | no | ≤ 5, no duplicates, each from the curated tag list (`coding`, `writing`, `research`, `data`, `productivity`, `devops`, `design`, `education`, `fun`, `other`). |
 | `license` | string | yes | A single SPDX identifier (e.g. `MIT`, `Apache-2.0`; not an expression such as `MIT OR Apache-2.0`) or `proprietary`. |
-| `homepage` | url | no | Absolute `http://` or `https://` URL. |
-| `sourceRepo` | url | no | Absolute `http://` or `https://` URL. Shown as "Source" on the detail page. |
+| `homepage` | url | no | Absolute `http://` or `https://` URL, without a user name or password before the host (`https://user:pass@host/` is rejected). |
+| `sourceRepo` | url | no | Absolute `http://` or `https://` URL, without a user name or password before the host. Shown as "Source" on the detail page. |
 | `channel` | `"stable"` | no | Default `stable`. `beta` is reserved for P1; P0 rejects any other value. |
 | `platforms` | string[] | yes | Non-empty subset of `darwin-arm64`, `darwin-x64`, `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, without duplicates. |
 | `runtime` | object | yes | See §3. |
@@ -104,7 +104,7 @@ Only the Runtime-provided environment (see architecture §4) is guaranteed. Harn
 }
 ```
 
-- `filesystem.scope`: `none` (only its Data Directory), `workspace` (the chosen Workspace), `home` (anywhere under the User's home), `paths` (explicit list, `~` allowed; required and non-empty for this scope, ignored with a warning for the others).
+- `filesystem.scope`: `none` (only its Data Directory), `workspace` (the chosen Workspace), `home` (anywhere under the User's home), `paths` (explicit list of ≤ 20 paths of 1–1 024 characters each, `~` allowed; required and non-empty for this scope, ignored with a warning for the others).
 - `shell`: whether the Harness executes commands.
 - `network`: `domains` (list of ≤ 20 lower-case domain names such as `api.github.com`, optionally starting with `*.`; may be empty) or `any: true`. One of the two is required; `domains` next to `any: true` is ignored with a warning. Traffic to the Model Gateway is implied and not declared.
 - Lists (`paths`, `domains`) never repeat a value.
@@ -113,7 +113,7 @@ Declared Permissions are **informational in P0**: they are displayed for consent
 
 ## 7. Validation rules the Store and Runtime both apply
 
-1. Schema validity (types, enums, patterns, limits). A `manifest.json` that is not JSON, or that holds more than 2 000 JSON values (objects, arrays, strings, numbers, booleans and nulls) outside its top-level `x-` keys, is rejected as a whole with a single `schema_invalid_json` problem; the largest valid Manifest has a few hundred.
+1. Schema validity (types, enums, patterns, limits). A `manifest.json` that is not JSON, or that holds more than 2 000 JSON values (objects, arrays, strings, numbers, booleans and nulls) outside its top-level `x-` keys, is rejected as a whole with a single `schema_invalid_json` problem. Every list and map in the Manifest has a maximum size, so the largest valid Manifest has fewer than 200 values; the limit only bounds the work spent on hostile input. A number beyond the range of a 64-bit float (such as `1e400`) cannot be stored or read back as JSON and is a `schema_type` problem.
 2. Referenced files exist in the archive (`entry` targets, icon, README, screenshots).
 3. `id.publisher` matches the authenticated Publisher (Store only).
 4. `version` is greater than all published versions (Store only).

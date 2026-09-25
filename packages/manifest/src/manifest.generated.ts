@@ -74,11 +74,11 @@ export interface Manifest {
    */
   license: string;
   /**
-   * Absolute http(s) URL of the Harness's homepage.
+   * Absolute http(s) URL of the Harness's homepage, without a user name or password.
    */
   homepage?: string;
   /**
-   * Absolute http(s) URL of the source repository, shown as "Source" on the detail page.
+   * Absolute http(s) URL of the source repository, without a user name or password, shown as "Source" on the detail page.
    */
   sourceRepo?: string;
   /**
@@ -195,7 +195,9 @@ export interface FilesystemPermission {
    */
   scope: 'none' | 'workspace' | 'home' | 'paths';
   /**
-   * Explicit paths (`~` allowed). Required and non-empty when scope is `paths`.
+   * At most 20 explicit paths (`~` allowed) of at most 1024 characters each, without duplicates. Required and non-empty when scope is `paths`.
+   *
+   * @maxItems 20
    */
   paths?: string[];
 }

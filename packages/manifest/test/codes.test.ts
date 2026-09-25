@@ -107,11 +107,16 @@ const permissions = (changes: Record<string, unknown>) => ({
  * One Manifest per message key that produces it. Typed as a Record over MessageKey, so a new
  * message cannot be added without showing how a Publisher can get it.
  */
-const EXAMPLES: Record<MessageKey, Example | 'fallback'> = {
+const EXAMPLES: Record<MessageKey, Example | 'fallback' | 'small_stack'> = {
   schema_invalid_json: ['{'],
   'schema_invalid_json.not_serializable': [{ manifestVersion: 1n }],
   'schema_invalid_json.too_large': [edit({ platforms: Array(5000).fill('linux-x64') })],
+  // Only when the JSON Schema library runs out of stack: see test/browser-bundle.test.ts.
+  'schema_invalid_json.too_many_problems': 'small_stack',
   schema_type: [edit({ name: 42 })],
+  'schema_type.non_finite': [
+    JSON.stringify(minimalManifest()).replace('"tools":false', '"minContext":1e400'),
+  ],
   'schema_type.entry_for_runtime_kind': [edit({ entry: { 'linux-x64': 'a.js' } })],
   schema_enum: [edit({ workspace: 'always' })],
   'schema_enum.const': [edit({ channel: 'beta' })],
@@ -170,7 +175,7 @@ const EXAMPLES: Record<MessageKey, Example | 'fallback'> = {
 };
 
 describe('every message key', () => {
-  it.each(Object.entries(EXAMPLES).filter(([, example]) => example !== 'fallback'))(
+  it.each(Object.entries(EXAMPLES).filter(([, example]) => Array.isArray(example)))(
     '%s is produced by its example',
     (messageKey, example) => {
       const [input, options] = example as Example;

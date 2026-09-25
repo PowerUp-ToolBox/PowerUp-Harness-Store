@@ -124,6 +124,20 @@ describe('top-level fields', () => {
       edit: (m) => (m.sourceRepo = 'github.com/alice/x'),
       problems: ['schema_pattern@sourceRepo'],
     },
+    {
+      name: 'homepage with a user name and password',
+      edit: (m) => (m.homepage = 'https://user:pass@example.com/'),
+      problems: ['schema_pattern@homepage'],
+    },
+    {
+      name: 'sourceRepo that looks like github.com but is not',
+      edit: (m) => (m.sourceRepo = 'https://github.com@evil.example/alice/x'),
+      problems: ['schema_pattern@sourceRepo'],
+    },
+    {
+      name: 'homepage with @ in its path',
+      edit: (m) => (m.homepage = 'https://www.npmjs.com/package/@alice/hello?v=@1#@top'),
+    },
     { name: 'channel stable', edit: (m) => (m.channel = 'stable') },
     {
       name: 'channel beta (reserved for P1)',
@@ -606,6 +620,35 @@ describe('permissions (Declared Permissions)', () => {
       name: 'a repeated path',
       edit: permissions({ ...base, filesystem: { scope: 'paths', paths: ['~/a', '~/a'] } }),
       problems: ['schema_unique_items@permissions.filesystem.paths[1]'],
+    },
+    {
+      name: 'twenty paths of 1024 characters',
+      edit: permissions({
+        ...base,
+        filesystem: {
+          scope: 'paths',
+          paths: Array.from({ length: 20 }, (_, i) => `~/${String(i).padEnd(1022, 'x')}`),
+        },
+      }),
+    },
+    {
+      name: 'twenty-one paths',
+      edit: permissions({
+        ...base,
+        filesystem: {
+          scope: 'paths',
+          paths: Array.from({ length: 21 }, (_, i) => `~/${String(i)}`),
+        },
+      }),
+      problems: ['schema_max_items@permissions.filesystem.paths'],
+    },
+    {
+      name: 'a path of 1025 characters',
+      edit: permissions({
+        ...base,
+        filesystem: { scope: 'paths', paths: [`~/${'x'.repeat(1023)}`] },
+      }),
+      problems: ['schema_max_length@permissions.filesystem.paths[0]'],
     },
     {
       name: 'empty paths with another scope (spec example)',

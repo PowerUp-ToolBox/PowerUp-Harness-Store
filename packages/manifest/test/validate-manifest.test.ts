@@ -1,6 +1,7 @@
+import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { MAX_MANIFEST_VALUES } from '../src/document.js';
-import { validateManifest } from '../src/index.js';
+import { manifestSchema, validateManifest } from '../src/index.js';
 import { validateAgainstSchema } from '../src/schema.js';
 import { findings, loadFixture, minimalManifest, problemsOf } from './helpers.js';
 
@@ -188,7 +189,7 @@ describe('hostile input: every Manifest gets problems, never an exception', () =
     expect(performance.now() - started).toBeLessThan(5_000);
   });
 
-  it(`accepts a valid Manifest of exactly ${String(MAX_MANIFEST_VALUES)} values, and rejects one more`, () => {
+  it(`checks a Manifest of exactly ${String(MAX_MANIFEST_VALUES)} values, and rejects one more`, () => {
     const withPaths = (count: number) => {
       const manifest = minimalManifest();
       const paths = Array.from({ length: count }, (_, i) => `~/p${String(i)}`);
@@ -198,10 +199,21 @@ describe('hostile input: every Manifest gets problems, never an exception', () =
     const base = countValues(withPaths(0));
     const atLimit = withPaths(MAX_MANIFEST_VALUES - base);
     expect(countValues(atLimit)).toBe(MAX_MANIFEST_VALUES);
-    expect(validateManifest(atLimit).ok).toBe(true);
+    expect(findings(problemsOf(validateManifest(atLimit)))).toEqual([
+      'schema_max_items@permissions.filesystem.paths',
+    ]);
     expect(problemsOf(validateManifest(withPaths(MAX_MANIFEST_VALUES - base + 1)))).toEqual([
       expect.objectContaining(tooLarge),
     ]);
+  });
+
+  it('keeps the limit ten times above the largest valid Manifest, whose size the schema bounds', () => {
+    const bound = maxValuesOf(manifestSchema);
+    expect(bound).toBeLessThan(200); // the too_large message and manifest-spec.md §7 say so
+    expect(bound * 10).toBeLessThanOrEqual(MAX_MANIFEST_VALUES);
+    const result = validateManifest(largestValidManifest());
+    expect(result.ok).toBe(true);
+    expect(countValues(largestValidManifest())).toBe(bound);
   });
 
   it('does not count top-level x- keys, which are never validated', () => {
@@ -235,12 +247,215 @@ describe('hostile input: every Manifest gets problems, never an exception', () =
   });
 });
 
+/**
+ * The most values a Manifest valid under `schema` can hold: every list and map in the schema must
+ * have a maximum size. A list without `maxItems` counts as bounded only when its items come from
+ * an enum, since validateManifest() rejects repeated values in lists. Top-level `x-` keys
+ * (`patternProperties`) are not counted, as the limit does not count them either.
+ */
+function maxValuesOf(schema: unknown): number {
+  const node = resolveRef(schema);
+  if (node.type === 'array') {
+    const items = resolveRef(node.items);
+    const count =
+      typeof node.maxItems === 'number'
+        ? node.maxItems
+        : Array.isArray(items.enum)
+          ? items.enum.length
+          : Number.POSITIVE_INFINITY;
+    return 1 + count * maxValuesOf(items);
+  }
+  if (isObjectSchema(node)) {
+    const properties = Object.values((node.properties ?? {}) as Record<string, unknown>).map(
+      maxValuesOf,
+    );
+    const additional = node.additionalProperties;
+    if (typeof additional === 'object' && additional !== null) {
+      const count = typeof node.maxProperties === 'number' ? node.maxProperties : Infinity;
+      return 1 + count * Math.max(maxValuesOf(additional), ...properties);
+    }
+    // Closed by `additionalProperties: false`, or by `propertyNames` naming the properties.
+    if (additional !== false && node.propertyNames === undefined) return Infinity;
+    return 1 + properties.reduce((sum, count) => sum + count, 0);
+  }
+  return 1;
+}
+
+function isObjectSchema(node: Record<string, unknown>): boolean {
+  const types = ([] as unknown[]).concat(node.type);
+  return types.includes('object') || node.properties !== undefined;
+}
+
+function resolveRef(schema: unknown): Record<string, unknown> {
+  const node = schema as Record<string, unknown>;
+  if (typeof node.$ref !== 'string') return node;
+  const name = node.$ref.replace('#/$defs/', '');
+  const siblings = { ...node };
+  delete siblings.$ref;
+  return { ...resolveRef((manifestSchema.$defs as Record<string, unknown>)[name]), ...siblings };
+}
+
+/** A valid Manifest with every optional key and every list and map at its maximum size. */
+function largestValidManifest(): Manifest {
+  const platforms = [
+    'darwin-arm64',
+    'darwin-x64',
+    'win32-x64',
+    'win32-arm64',
+    'linux-x64',
+    'linux-arm64',
+  ];
+  const slot = {
+    description: 'Main model',
+    requirements: { tools: true, minContext: 64_000, vision: false, json: true },
+    recommended: ['a/1', 'b/2', 'c/3', 'd/4', 'e/5'],
+  };
+  const names = ['default', 'a', 'b', 'c', 'd', 'e', 'f', 'g'];
+  const list = (count: number, item: (i: number) => string) =>
+    Array.from({ length: count }, (_, i) => item(i));
+  return {
+    ...minimalManifest(),
+    tags: ['coding', 'writing', 'research', 'data', 'fun'],
+    homepage: 'https://example.com',
+    sourceRepo: 'https://example.com/src',
+    channel: 'stable',
+    platforms,
+    runtime: { kind: 'binary', node: '22' },
+    entry: Object.fromEntries(platforms.map((platform) => [platform, `bin/${platform}`])),
+    ui: { kind: 'web', path: '/', readyTimeoutSeconds: 30, window: { width: 800, height: 600 } },
+    models: { slots: Object.fromEntries(names.map((name) => [name, slot])) },
+    permissions: {
+      filesystem: { scope: 'paths', paths: list(20, (i) => `~/p${String(i)}`) },
+      shell: true,
+      network: { domains: list(20, (i) => `d${String(i)}.example.com`), any: true },
+    },
+    changelog: 'First release.',
+  };
+}
+
 type Manifest = Record<string, unknown>;
 const slotsOf = (m: Manifest) => (m.models as { slots: Manifest }).slots;
 const requirementsOf = (m: Manifest) =>
   ((slotsOf(m).default as Manifest).requirements ??= {}) as Manifest;
 const domainsOf = (m: Manifest) =>
   (m.permissions as { network: { domains?: unknown[] } }).network.domains ?? [];
+
+describe('numbers beyond the range of a double', () => {
+  // JSON.parse turns these numerals into Infinity or -Infinity. The JSON Schema library accepts
+  // Infinity as an integer, and JSON.stringify writes it as null.
+  const web = '"ui": {\n    "kind": "web"\n  }';
+  const tools = '"tools": false';
+  const cases: [path: string, text: string][] = [
+    [
+      'models.slots.default.requirements.minContext',
+      minimalText.replace(tools, '"minContext": 1e400'),
+    ],
+    [
+      'models.slots.default.requirements.minContext',
+      minimalText.replace(tools, '"minContext": 1e999'),
+    ],
+    [
+      'ui.window.width',
+      minimalText.replace(
+        web,
+        '"ui": { "kind": "web", "window": { "width": 1e400, "height": 1 } }',
+      ),
+    ],
+    [
+      'ui.window.height',
+      minimalText.replace(
+        web,
+        '"ui": { "kind": "web", "window": { "width": 1, "height": 1E+309 } }',
+      ),
+    ],
+    [
+      'ui.readyTimeoutSeconds',
+      minimalText.replace(web, '"ui": { "kind": "web", "readyTimeoutSeconds": -1e400 }'),
+    ],
+  ];
+
+  it.each(cases)('reports %s as schema_type, as text and as bytes', (path, text) => {
+    expect(text).not.toBe(minimalText);
+    for (const input of [text, new TextEncoder().encode(text)]) {
+      const result = validateManifest(input);
+      expect(result.ok).toBe(false);
+      const problems = problemsOf(result);
+      // A type problem hides the value's other problems (schema_minimum for -Infinity).
+      expect(findings(problems)).toEqual([`schema_type@${path}`]);
+      expect(problems[0]).toMatchObject({
+        messageKey: 'schema_type.non_finite',
+        params: { actual: expect.stringMatching(/^number -?Infinity$/) as string },
+      });
+    }
+  });
+
+  it('reports every such number, in document order, and still runs the other rules', () => {
+    const text = minimalText
+      .replace(tools, '"minContext": 1e400')
+      .replace(web, '"ui": { "kind": "web", "window": { "width": 1e400, "height": -1e400 } }')
+      .replace('"name": "Hello Web",', '');
+    const problems = problemsOf(validateManifest(text));
+    expect(problems.map(({ code, path }) => `${code}@${path}`)).toEqual([
+      'schema_required@name',
+      'schema_type@ui.window.width',
+      'schema_type@ui.window.height',
+      'schema_type@models.slots.default.requirements.minContext',
+    ]);
+  });
+
+  it('keeps the JSON Schema message where the schema expects another type', () => {
+    const text = minimalText.replace('"Hello Web"', '1e400');
+    const problems = problemsOf(validateManifest(text));
+    expect(problems).toEqual([
+      expect.objectContaining({
+        path: 'name',
+        messageKey: 'schema_type',
+        message: 'Expected string; found number Infinity.',
+      }),
+    ]);
+  });
+
+  it('ignores them under top-level x- keys, which are never validated', () => {
+    const text = minimalText.replace('"tags": [', '"x-big": [1e400, {"a": -1e400}], "tags": [');
+    expect(validateManifest(text)).toMatchObject({ ok: true, warnings: [] });
+  });
+
+  it('never returns a Manifest that changes on a JSON round trip', () => {
+    const numeral = fc.oneof(
+      fc.integer().map(String),
+      fc.double({ noNaN: true }).map((value) => String(value)),
+      fc.constantFrom(
+        '1e308',
+        '1.7976931348623157e308',
+        '1.8e308',
+        '1e309',
+        '-1e400',
+        '1e-400',
+        '9007199254740993',
+      ),
+    );
+    const field = fc.constantFrom<(text: string, value: string) => string>(
+      (text, value) => text.replace(tools, `"minContext": ${value}`),
+      (text, value) =>
+        text.replace(
+          web,
+          `"ui": { "kind": "web", "window": { "width": ${value}, "height": ${value} } }`,
+        ),
+      (text, value) =>
+        text.replace(web, `"ui": { "kind": "web", "readyTimeoutSeconds": ${value} }`),
+    );
+    fc.assert(
+      fc.property(numeral, field, (value, embed) => {
+        const result = validateManifest(embed(minimalText, value));
+        if (!result.ok) return;
+        const roundTripped = JSON.parse(JSON.stringify(result.manifest)) as unknown;
+        expect(roundTripped).toEqual(result.manifest);
+        expect(validateManifest(roundTripped)).toEqual(result);
+      }),
+      { numRuns: 500 },
+    );
+  });
+});
 
 describe('the returned Manifest', () => {
   it('is a copy: later changes to the input do not reach it', () => {

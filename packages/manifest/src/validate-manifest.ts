@@ -1,6 +1,7 @@
+import type { OutputUnit } from '@cfworker/json-schema';
 import { loadDocument } from './document.js';
 import type { Manifest } from './manifest.generated.js';
-import { dedupe, isKeyProblem } from './problem.js';
+import { createProblem, dedupe, isKeyProblem } from './problem.js';
 import { normalizeOptions, optionRules, semanticRules } from './rules.js';
 import { validateAgainstSchema } from './schema.js';
 import { schemaProblems } from './schema-problems.js';
@@ -15,8 +16,11 @@ import type { Problem, ValidateManifestOptions, ValidationResult } from './types
  *
  * 1. Parse the JSON. A parse failure is reported as a single `schema_invalid_json` problem and
  *    nothing else runs; so is a document too large to check (more than `MAX_MANIFEST_VALUES`
- *    values outside top-level `x-` keys, far beyond any valid Manifest).
- * 2. JSON Schema validation against `manifestSchema`.
+ *    values outside top-level `x-` keys, ten times the largest valid Manifest). A number beyond
+ *    the range of a double (`1e400`) is a `schema_type` problem, and the other rules still run.
+ * 2. JSON Schema validation against `manifestSchema`. Should the library run out of stack on a
+ *    document with thousands of problems (possible only on a host with a small stack), the
+ *    result is a single `schema_invalid_json` problem instead of an exception.
  * 3. Rules JSON Schema cannot express: `entry` against `runtime.kind` and `platforms`,
  *    duplicates in lists, strict semver, the changelog byte limit, network access, ignored keys.
  * 4. Rules that need `options`: `publisher_mismatch` and `version_not_greater`.
@@ -38,11 +42,25 @@ export function validateManifest(
   if (!loaded.ok) return { ok: false, problems: [loaded.problem], warnings: [] };
   const { document } = loaded;
 
+  let schemaErrors: OutputUnit[];
+  try {
+    schemaErrors = validateAgainstSchema(document);
+  } catch (error) {
+    // The JSON Schema library gathers errors with `push(...errors)`. The value limit keeps their
+    // number far below what Node's default stack takes, but a host with a much smaller stack
+    // (some workers and isolates) can still overflow it.
+    if (!(error instanceof RangeError)) throw error;
+    const problem = createProblem('schema_invalid_json.too_many_problems', []);
+    return { ok: false, problems: [problem], warnings: [] };
+  }
+
   const semantic = semanticRules(document);
   const problems = orderProblems(
     supersedeByType(
       dedupe([
-        ...schemaProblems(validateAgainstSchema(document), document),
+        // The library's own type problems come first: they name the expected type.
+        ...schemaProblems(schemaErrors, document),
+        ...loaded.problems,
         ...semantic.problems,
         ...optionRules(document, normalizedOptions),
       ]),

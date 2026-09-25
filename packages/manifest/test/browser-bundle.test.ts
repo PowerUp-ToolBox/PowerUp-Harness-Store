@@ -2,6 +2,7 @@
  * Ticket P0-01.2, "How to verify" step 4 and acceptance criterion 8: the package's main entry
  * bundles for a browser target (the Electron renderer) and runs without any Node-only global.
  */
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -10,7 +11,7 @@ import { createContext, runInContext } from 'node:vm';
 import { build } from 'vite';
 import type { Plugin, Rolldown } from 'vite';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { findings, fixtureNames, loadFixture, packageRoot } from './helpers.js';
+import { findings, fixtureNames, loadFixture, minimalManifest, packageRoot } from './helpers.js';
 import type { FixtureExpectation } from './helpers.js';
 
 /** Fails the build on any Node built-in instead of letting Vite stub it for the browser. */
@@ -127,5 +128,35 @@ describe('browser bundle of @harness-store/manifest', () => {
     const { validateManifest } = loadInSandbox();
     const bytes = new TextEncoder().encode(loadFixture('valid-minimal-node').manifestText);
     expect((validateManifest(bytes) as { ok: boolean }).ok).toBe(true);
+  });
+
+  // Workers and some isolate hosts run with far less stack than Node's default (about 984 KB).
+  // The JSON Schema library gathers errors with push(...errors), so a document at the value limit
+  // with thousands of problems overflows a 60 KB stack inside the library.
+  it('returns problems instead of throwing on a host with a small stack', () => {
+    const manifest = minimalManifest();
+    const slots = (manifest.models as { slots: Record<string, unknown> }).slots;
+    for (let i = 0; i < 1_950; i++) slots[`S${String(i)}`] = 5;
+    const scratch = mkdtempSync(join(tmpdir(), 'manifest-stack-'));
+    try {
+      const script = join(scratch, 'small-stack.cjs');
+      writeFileSync(
+        script,
+        `${code}\nconst result = HarnessManifest.validateManifest(${JSON.stringify(manifest)});\n` +
+          'process.stdout.write(JSON.stringify(result.problems.map((p) => p.messageKey)));\n',
+      );
+      const run = (stackKb: number) => {
+        const child = spawnSync(process.execPath, [`--stack-size=${String(stackKb)}`, script], {
+          encoding: 'utf8',
+        });
+        expect(child.stderr).toBe('');
+        expect(child.status).toBe(0);
+        return JSON.parse(child.stdout) as string[];
+      };
+      expect(run(60)).toEqual(['schema_invalid_json.too_many_problems']);
+      expect(run(984)).toContain('schema_pattern.slotName');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 });

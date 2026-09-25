@@ -47,6 +47,12 @@ describe('preview', () => {
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 
+  it('renders numbers beyond the range of a double as they are, not as null', () => {
+    expect(preview(Infinity)).toBe('Infinity');
+    expect(preview(-Infinity)).toBe('-Infinity');
+    expect(preview([1, -Infinity, { a: Infinity }])).toBe('[1,-Infinity,{"a":Infinity}]');
+  });
+
   it('renders values with no JSON form (from options) instead of throwing', () => {
     expect(preview(1n)).toBe('1');
     expect(preview(undefined)).toBe('undefined');

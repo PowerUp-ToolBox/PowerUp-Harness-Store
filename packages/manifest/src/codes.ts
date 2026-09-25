@@ -11,7 +11,10 @@ export const PROBLEM_CODES = Object.freeze({
    * large to check. Reported alone: no other rule runs.
    */
   schema_invalid_json: 'schema_invalid_json',
-  /** A value has the wrong JSON type. */
+  /**
+   * A value has the wrong JSON type, or is a number beyond the range of a double (`1e400` in JSON
+   * text), which has no JSON form.
+   */
   schema_type: 'schema_type',
   /** A value (or an object key) is not one of the allowed values. Also used for `const`. */
   schema_enum: 'schema_enum',
@@ -56,8 +59,12 @@ export const MESSAGES_EN = Object.freeze({
   schema_invalid_json: 'The Manifest is not valid JSON: {detail}',
   'schema_invalid_json.not_serializable': 'The Manifest cannot be serialised as JSON: {detail}',
   'schema_invalid_json.too_large':
-    'The Manifest is too large to check: it has more than {limit} values (objects, arrays, strings, numbers, booleans and nulls, not counting top-level "x-" keys). A valid Manifest has a few hundred at most.',
+    'The Manifest is too large to check: it has more than {limit} values (objects, arrays, strings, numbers, booleans and nulls, not counting top-level "x-" keys). A valid Manifest has fewer than 200.',
+  'schema_invalid_json.too_many_problems':
+    'The Manifest has too many problems to check at once here. Remove the keys and list items the Manifest format does not define, then check it again.',
   schema_type: 'Expected {expected}; found {actual}.',
+  'schema_type.non_finite':
+    'The number is out of the range JSON numbers can hold (about ±1.8e308); found {actual}.',
   'schema_type.entry_for_runtime_kind':
     'entry must be {expected} when runtime.kind is "{runtimeKind}"; found {actual}.',
   schema_enum: 'Must be one of {allowed}; found {actual}.',
@@ -68,7 +75,8 @@ export const MESSAGES_EN = Object.freeze({
     'Must be a Harness ID "publisher/slug": publisher is the Publisher\'s GitHub login in lower case; slug is 3 to 40 lower-case letters, digits or hyphens, starting and ending with a letter or digit. Found {actual}.',
   'schema_pattern.license':
     'Must be an SPDX license identifier such as "MIT" or "Apache-2.0", or "proprietary". Found {actual}.',
-  'schema_pattern.httpUrl': 'Must be an absolute http:// or https:// URL. Found {actual}.',
+  'schema_pattern.httpUrl':
+    'Must be an absolute http:// or https:// URL, without a user name or password before the host. Found {actual}.',
   'schema_pattern.relativePath':
     'Must be a path relative to the root of the Harness Package, with "/" separators and no leading "/", no "." or ".." segments, backslashes or colons. Found {actual}.',
   'schema_pattern.nodeEntryPath':

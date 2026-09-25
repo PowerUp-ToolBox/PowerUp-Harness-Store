@@ -85,6 +85,10 @@ export function preview(value: unknown): string {
         write(node[key]);
       }
       out += '}';
+    } else if (typeof node === 'number' && !Number.isFinite(node)) {
+      // `Infinity` and `-Infinity` (from a numeral like 1e400) have no JSON form; `JSON.stringify`
+      // would write `null`, which misstates the value.
+      out += String(node);
     } else if (typeof node === 'number' || typeof node === 'boolean' || node === null) {
       out += String(stringifyJson(node));
     } else if (typeof node === 'bigint' || typeof node === 'symbol') {

@@ -54,11 +54,11 @@
       "$ref": "#/$defs/license"
     },
     "homepage": {
-      "description": "Absolute http(s) URL of the Harness's homepage.",
+      "description": "Absolute http(s) URL of the Harness's homepage, without a user name or password.",
       "$ref": "#/$defs/httpUrl"
     },
     "sourceRepo": {
-      "description": "Absolute http(s) URL of the source repository, shown as \"Source\" on the detail page.",
+      "description": "Absolute http(s) URL of the source repository, without a user name or password, shown as \"Source\" on the detail page.",
       "$ref": "#/$defs/httpUrl"
     },
     "channel": {
@@ -122,7 +122,7 @@
     },
     "httpUrl": {
       "type": "string",
-      "pattern": "^https?://[^\\s/?#\\\\]+(?:[/?#]\\S*)?$"
+      "pattern": "^https?://[^\\s/?#\\\\@]+(?:[/?#]\\S*)?$"
     },
     "tag": {
       "title": "Tag",
@@ -296,9 +296,10 @@
           "enum": ["none", "workspace", "home", "paths"]
         },
         "paths": {
-          "description": "Explicit paths (`~` allowed). Required and non-empty when scope is `paths`.",
+          "description": "At most 20 explicit paths (`~` allowed) of at most 1024 characters each, without duplicates. Required and non-empty when scope is `paths`.",
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "maxItems": 20,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
         }
       },
       "additionalProperties": false,
