@@ -26,7 +26,8 @@ export type ValidationResult =
 export interface ValidateManifestOptions {
   /**
    * GitHub login of the signed-in Publisher. When given, the Harness ID's publisher segment must
-   * equal it in lower case (`publisher_mismatch`). The Store always passes it.
+   * be this login, compared case-insensitively as GitHub does (`publisher_mismatch`); the schema
+   * separately requires the segment to be lower case. The Store always passes it.
    */
   publisher?: string;
   /**

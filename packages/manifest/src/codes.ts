@@ -6,7 +6,10 @@
  * JSON Schema keyword that failed (`schema_max_items` is `maxItems`, and so on).
  */
 export const PROBLEM_CODES = Object.freeze({
-  /** The input is not JSON (or, for a JavaScript value, cannot be serialised as JSON). */
+  /**
+   * The input is not JSON (or, for a JavaScript value, cannot be serialised as JSON), or it is too
+   * large to check. Reported alone: no other rule runs.
+   */
   schema_invalid_json: 'schema_invalid_json',
   /** A value has the wrong JSON type. */
   schema_type: 'schema_type',
@@ -52,6 +55,8 @@ export type ProblemCode = (typeof PROBLEM_CODES)[keyof typeof PROBLEM_CODES];
 export const MESSAGES_EN = Object.freeze({
   schema_invalid_json: 'The Manifest is not valid JSON: {detail}',
   'schema_invalid_json.not_serializable': 'The Manifest cannot be serialised as JSON: {detail}',
+  'schema_invalid_json.too_large':
+    'The Manifest is too large to check: it has more than {limit} values (objects, arrays, strings, numbers, booleans and nulls, not counting top-level "x-" keys). A valid Manifest has a few hundred at most.',
   schema_type: 'Expected {expected}; found {actual}.',
   'schema_type.entry_for_runtime_kind':
     'entry must be {expected} when runtime.kind is "{runtimeKind}"; found {actual}.',

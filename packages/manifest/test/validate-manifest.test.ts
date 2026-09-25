@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_MANIFEST_VALUES } from '../src/document.js';
 import { validateManifest } from '../src/index.js';
+import { validateAgainstSchema } from '../src/schema.js';
 import { findings, loadFixture, minimalManifest, problemsOf } from './helpers.js';
 
 const minimalText = loadFixture('valid-minimal-node').manifestText;
@@ -93,20 +95,152 @@ describe('input forms', () => {
     const result = validateManifest('{"\\ud800": 1}');
     expect(findings(problemsOf(result))).toContain('unknown_key@["\uFFFD"]');
   });
+});
 
-  it('survives deeply nested and very large values in linear time', () => {
-    const deep = `${'['.repeat(100_000)}${']'.repeat(100_000)}`;
-    const text = minimalText.replace('"tags": [', `"foo": ${deep}, "tags": [`);
-    expect(findings(problemsOf(validateManifest(text)))).toEqual(['unknown_key@foo']);
+/** Counts JSON values the way the limit does: every object, array, string, number, boolean, null. */
+function countValues(value: unknown): number {
+  if (Array.isArray(value))
+    return 1 + value.reduce<number>((sum, item) => sum + countValues(item), 0);
+  if (typeof value === 'object' && value !== null) {
+    return 1 + Object.values(value).reduce<number>((sum, item) => sum + countValues(item), 0);
+  }
+  return 1;
+}
 
-    const platforms = Array.from({ length: 200_000 }, () => 'linux-x64');
+const nested = (depth: number) => `${'['.repeat(depth)}${']'.repeat(depth)}`;
+const nestedObject = (depth: number) => `${'{"a":'.repeat(depth)}1${'}'.repeat(depth)}`;
+
+describe('hostile input: every Manifest gets problems, never an exception', () => {
+  const tooLarge = {
+    path: '$',
+    code: 'schema_invalid_json',
+    messageKey: 'schema_invalid_json.too_large',
+    params: { limit: MAX_MANIFEST_VALUES },
+  };
+
+  // Each of these fields quotes the value it rejects in its message (schema_enum `actual`).
+  it.each([
+    [
+      'workspace',
+      (text: string, value: string) => text.replace('"workspace": "none"', `"workspace": ${value}`),
+    ],
+    [
+      'channel',
+      (text: string, value: string) => text.replace('"tags": [', `"channel": ${value}, "tags": [`),
+    ],
+    [
+      'manifestVersion',
+      (text: string, value: string) =>
+        text.replace('"manifestVersion": 1', `"manifestVersion": ${value}`),
+    ],
+    [
+      'tags[0]',
+      (text: string, value: string) => text.replace('"tags": ["fun"]', `"tags": [${value}]`),
+    ],
+    [
+      'runtime.node',
+      (text: string, value: string) => text.replace('"node": "22"', `"node": ${value}`),
+    ],
+    [
+      'an unknown key',
+      (text: string, value: string) => text.replace('"tags": [', `"foo": ${value}, "tags": [`),
+    ],
+  ])('reports 10 000-deep nesting under %s as too large to check', (_field, embed) => {
+    for (const value of [nested(10_000), nestedObject(10_000)]) {
+      const text = embed(minimalText, value);
+      expect(text).not.toBe(minimalText);
+      expect(validateManifest(text)).toEqual({
+        ok: false,
+        problems: [{ ...tooLarge, message: expect.stringContaining('too large') as string }],
+        warnings: [],
+      });
+    }
+  });
+
+  it('quotes a deeply nested value that fits the limit, shortened', () => {
+    const text = minimalText.replace('"workspace": "none"', `"workspace": ${nested(1_900)}`);
+    const [problem] = problemsOf(validateManifest(text));
+    expect(problem).toMatchObject({ path: 'workspace', code: 'schema_enum' });
+    expect(problem?.params?.actual).toBe(`${'['.repeat(60)}…`);
+  });
+
+  it.each([
+    ['100 000 invalid platforms', () => ({ platforms: Array(100_000).fill('bad') })],
+    ['100 000 duplicate platforms', () => ({ platforms: Array(100_000).fill('linux-x64') })],
+    ['1 000 000 tags', () => ({ tags: Array(1_000_000).fill('fun') })],
+    [
+      '100 000 invalid Model Slots',
+      () => ({
+        models: {
+          slots: Object.fromEntries(
+            Array.from({ length: 100_000 }, (_, i) => [`s${String(i)}`, { bad: 1 }]),
+          ),
+        },
+      }),
+    ],
+  ])('reports %s as too large to check, quickly', (_name, changes) => {
+    const input = { ...minimalManifest(), ...changes() };
     const started = performance.now();
-    const problems = problemsOf(validateManifest({ ...minimalManifest(), platforms }));
-    expect(performance.now() - started).toBeLessThan(10_000);
-    expect(problems).toHaveLength(platforms.length - 1);
-    expect(problems.every((problem) => problem.code === 'schema_unique_items')).toBe(true);
+    expect(problemsOf(validateManifest(input))).toEqual([expect.objectContaining(tooLarge)]);
+    expect(problemsOf(validateManifest(JSON.stringify(input)))).toEqual([
+      expect.objectContaining(tooLarge),
+    ]);
+    expect(performance.now() - started).toBeLessThan(5_000);
+  });
+
+  it(`accepts a valid Manifest of exactly ${String(MAX_MANIFEST_VALUES)} values, and rejects one more`, () => {
+    const withPaths = (count: number) => {
+      const manifest = minimalManifest();
+      const paths = Array.from({ length: count }, (_, i) => `~/p${String(i)}`);
+      (manifest.permissions as Record<string, unknown>).filesystem = { scope: 'paths', paths };
+      return manifest;
+    };
+    const base = countValues(withPaths(0));
+    const atLimit = withPaths(MAX_MANIFEST_VALUES - base);
+    expect(countValues(atLimit)).toBe(MAX_MANIFEST_VALUES);
+    expect(validateManifest(atLimit).ok).toBe(true);
+    expect(problemsOf(validateManifest(withPaths(MAX_MANIFEST_VALUES - base + 1)))).toEqual([
+      expect.objectContaining(tooLarge),
+    ]);
+  });
+
+  it('does not count top-level x- keys, which are never validated', () => {
+    const input = { ...minimalManifest(), 'x-data': Array(100_000).fill({ deep: nested(10) }) };
+    expect(validateManifest(input).ok).toBe(true);
+    const text = minimalText.replace('"tags": [', `"x-deep": ${nested(100_000)}, "tags": [`);
+    expect(validateManifest(text).ok).toBe(true);
+  });
+
+  // The JSON Schema library gathers errors with push(...errors), which throws once one call
+  // passes more arguments than the stack holds: about 125 000 with Node's default stack, about
+  // 25 000 with a 200 KB one. The value limit keeps the worst case far below that.
+  it.each<[string, (manifest: Manifest, index: number) => void]>([
+    [
+      'invalid Slot names with values of the wrong type',
+      (m, i) => (slotsOf(m)[`S${String(i)}`] = 5),
+    ],
+    ['invalid Slot names with unknown keys', (m, i) => (slotsOf(m)[`S${String(i)}`] = { a: 1 })],
+    ['unknown requirement keys', (m, i) => (requirementsOf(m)[`k${String(i)}`] = 1)],
+    ['invalid platforms', (m) => (m.platforms as unknown[]).push('bad')],
+    [
+      'invalid domains',
+      (m) => ((m.permissions as Manifest).network = { domains: domainsOf(m).concat('BAD') }),
+    ],
+  ])('keeps schema errors bounded at the limit: %s', (_name, grow) => {
+    const manifest = minimalManifest();
+    for (let i = 0; countValues(manifest) < MAX_MANIFEST_VALUES - 1; i++) grow(manifest, i);
+    expect(countValues(manifest)).toBeLessThanOrEqual(MAX_MANIFEST_VALUES);
+    expect(validateAgainstSchema(manifest).length).toBeLessThan(20_000);
+    expect(problemsOf(validateManifest(manifest)).length).toBeGreaterThan(900);
   });
 });
+
+type Manifest = Record<string, unknown>;
+const slotsOf = (m: Manifest) => (m.models as { slots: Manifest }).slots;
+const requirementsOf = (m: Manifest) =>
+  ((slotsOf(m).default as Manifest).requirements ??= {}) as Manifest;
+const domainsOf = (m: Manifest) =>
+  (m.permissions as { network: { domains?: unknown[] } }).network.domains ?? [];
 
 describe('the returned Manifest', () => {
   it('is a copy: later changes to the input do not reach it', () => {
@@ -159,6 +293,11 @@ describe('options', () => {
     });
   });
 
+  it("compares the id's publisher segment case-insensitively too (the schema flags the case)", () => {
+    const result = validateManifest(manifest({ id: 'Alice/hello-web' }), { publisher: 'alice' });
+    expect(findings(problemsOf(result))).toEqual(['schema_pattern@id']);
+  });
+
   it('skips publisher_mismatch when the id has no publisher segment (the schema reports it)', () => {
     const result = validateManifest(manifest({ id: 'no-slash' }), { publisher: 'alice' });
     expect(findings(problemsOf(result))).toEqual(['schema_pattern@id']);
@@ -195,6 +334,16 @@ describe('options', () => {
 
   it('runs no option rule without options', () => {
     expect(validateManifest(manifest({ id: 'bob/foo', version: '0.0.1' })).ok).toBe(true);
+  });
+
+  it.each([
+    ['null', null],
+    ['a string', 'alice'],
+    ['an array', []],
+  ])('throws a descriptive TypeError when options is %s', (_name, options) => {
+    expect(() => validateManifest(minimalText, options as never)).toThrow(
+      new TypeError('options must be an object when given'),
+    );
   });
 
   it.each([

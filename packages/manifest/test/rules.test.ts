@@ -422,6 +422,14 @@ describe('ui (UI Kind)', () => {
       edit: (m) => (m.ui = { kind: 'terminal', path: '/', window: {} }),
       warnings: ['ignored_key@ui.path', 'ignored_key@ui.window'],
     },
+    {
+      // Ignored keys must still be valid (manifest-spec.md section 2): the returned Manifest's
+      // type promises it, and the fix is to remove the key.
+      name: 'an invalid web-only option on a terminal UI Kind',
+      edit: (m) => (m.ui = { kind: 'terminal', path: 'nope', window: { width: 0 } }),
+      problems: ['schema_pattern@ui.path', 'schema_minimum@ui.window.width'],
+      warnings: ['ignored_key@ui.path', 'ignored_key@ui.window'],
+    },
   ])('$name', expectCase);
 });
 
@@ -467,6 +475,25 @@ describe('models (Model Slots, Model Requirements, Recommended Models)', () => {
       name: 'a Slot that is not an object',
       edit: slots({ default: 'gpt-5' }),
       problems: ['schema_type@models.slots.default'],
+    },
+    {
+      // The name and the value are separate findings: the type problem hides neither.
+      name: 'an upper-case Slot name whose value is not an object',
+      edit: slots({ default: {}, Bad: 5 }),
+      problems: ['schema_pattern@models.slots.Bad', 'schema_type@models.slots.Bad'],
+    },
+    {
+      name: 'Slot names that are Object.prototype keys, with values of the wrong type',
+      edit: (m) =>
+        (m.models = JSON.parse(
+          '{"slots": {"default": {}, "__proto__": 1, "toString": 2}}',
+        ) as Manifest),
+      problems: [
+        'schema_pattern@models.slots.__proto__',
+        'schema_type@models.slots.__proto__',
+        'schema_pattern@models.slots.toString',
+        'schema_type@models.slots.toString',
+      ],
     },
     {
       name: 'an unknown Slot key',

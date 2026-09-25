@@ -40,6 +40,8 @@ Limits: archive ≤ 500 MB compressed; ≤ 20 000 files; no symlinks; no absolut
 
 Unknown keys are rejected at every level of the Manifest (keeps the format honest). Use top-level `x-` prefixed keys for Publisher-private data: they are never validated and are ignored by the Store and the Runtime. An `x-` key inside a nested object is an unknown key like any other.
 
+Some keys are ignored in some configurations (for example `ui.path` for a `terminal` UI, `runtime.node` for a `binary` runtime). Such a key gives a warning, not a problem, but its value must still be valid: remove the key rather than leave a malformed value in it.
+
 ## 3. `runtime` and `entry`
 
 ```jsonc
@@ -111,7 +113,7 @@ Declared Permissions are **informational in P0**: they are displayed for consent
 
 ## 7. Validation rules the Store and Runtime both apply
 
-1. Schema validity (types, enums, patterns, limits).
+1. Schema validity (types, enums, patterns, limits). A `manifest.json` that is not JSON, or that holds more than 2 000 JSON values (objects, arrays, strings, numbers, booleans and nulls) outside its top-level `x-` keys, is rejected as a whole with a single `schema_invalid_json` problem; the largest valid Manifest has a few hundred.
 2. Referenced files exist in the archive (`entry` targets, icon, README, screenshots).
 3. `id.publisher` matches the authenticated Publisher (Store only).
 4. `version` is greater than all published versions (Store only).

@@ -6,6 +6,7 @@ import {
   createProblem,
   describeActual,
   isRecord,
+  markKeyProblem,
   preview,
   truncate,
 } from './problem.js';
@@ -71,7 +72,11 @@ function translate(error: OutputUnit, document: unknown): Problem[] {
   // (The library reports this keyword's location as the instance location, so it is not used.)
   if (error.keyword === 'false') {
     const key = String(path.at(-1));
-    return [createProblem(path.length === 1 ? 'unknown_key' : 'unknown_key.nested', path, { key })];
+    return [
+      markKeyProblem(
+        createProblem(path.length === 1 ? 'unknown_key' : 'unknown_key.nested', path, { key }),
+      ),
+    ];
   }
 
   const keywordTokens = decodePointer(error.keywordLocation);
@@ -112,7 +117,7 @@ function translate(error: OutputUnit, document: unknown): Problem[] {
       const allowed = (node.enum as unknown[]).map((item) => JSON.stringify(item)).join(', ');
       return [
         isPropertyName
-          ? createProblem('schema_enum.property_name', path, { key, allowed })
+          ? markKeyProblem(createProblem('schema_enum.property_name', path, { key, allowed }))
           : createProblem('schema_enum', path, { allowed, actual: preview(value) }),
       ];
     }
@@ -129,8 +134,9 @@ function translate(error: OutputUnit, document: unknown): Problem[] {
         pattern: String(node.pattern),
         actual: preview(subject),
       };
-      if (isPropertyName) params.key = key;
-      return [createProblem(messageKey, path, params)];
+      if (!isPropertyName) return [createProblem(messageKey, path, params)];
+      params.key = key;
+      return [markKeyProblem(createProblem(messageKey, path, params))];
     }
     case 'minLength':
     case 'maxLength':

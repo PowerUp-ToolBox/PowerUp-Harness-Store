@@ -30,7 +30,7 @@ if (result.ok) {
 result.warnings; // never block
 ```
 
-- `validateManifest(input, options?)`: `input` is JSON text, UTF-8 bytes (any `ArrayBuffer` view; a byte order mark is ignored) or an already parsed JSON value (validated as the JSON `JSON.stringify` would produce). Options: `publisher` (the signed-in Publisher's GitHub login, compared lower-cased) and `publishedVersions` (every published Harness Version of this Harness). Malformed options throw a `TypeError`; a malformed Manifest never throws.
+- `validateManifest(input, options?)`: `input` is JSON text, UTF-8 bytes (any `ArrayBuffer` view; a byte order mark is ignored) or an already parsed JSON value (validated as the JSON `JSON.stringify` would produce). Options: `publisher` (the signed-in Publisher's GitHub login, compared case-insensitively) and `publishedVersions` (every published Harness Version of this Harness). Malformed options throw a `TypeError`; a malformed Manifest never throws, however large or deeply nested: its work is bounded (see [How validation works](#how-validation-works)).
 - `manifestSchema`: the JSON Schema (draft 2020-12), deep-frozen. The file itself is exported as `@harness-store/manifest/manifest-v1.schema.json` for editors.
 - `Manifest` and its parts (`Platform`, `Entry`, `HarnessRuntime`, `UserInterface`, `ModelSlot`, `ModelRequirements`, `DeclaredPermissions`, ...): generated from the schema into [`src/manifest.generated.ts`](src/manifest.generated.ts) and checked in.
 - `PROBLEM_CODES`, `MESSAGES_EN` (English templates by `messageKey`) and `interpolate(template, params)` for rendering a translated template.
@@ -58,7 +58,7 @@ type ValidationResult =
 
 | Code                                     | Blocks       | When                                                                                                                                                                                                               |
 | ---------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `schema_invalid_json`                    | yes          | The input is not JSON (or not UTF-8, or a JavaScript value with no JSON form). Reported alone: nothing else runs.                                                                                                  |
+| `schema_invalid_json`                    | yes          | The input is not JSON (or not UTF-8, or a JavaScript value with no JSON form), or it has more than 2 000 values (`schema_invalid_json.too_large`). Reported alone: nothing else runs.                              |
 | `schema_type`                            | yes          | Wrong JSON type, including `entry` not matching `runtime.kind`.                                                                                                                                                    |
 | `schema_enum`                            | yes          | Not an allowed value (`const` too: `manifestVersion` other than `1`, `channel` other than `stable`), or an object key that is not allowed (an `entry` key that is not a platform).                                 |
 | `schema_pattern`                         | yes          | Wrong format: Harness ID, license, URL, `entry` path, `ui.path`, Slot name, Recommended Model id, domain.                                                                                                          |
@@ -78,14 +78,14 @@ type ValidationResult =
 
 ## How validation works
 
-Rules run in this order, and every rule runs even when an earlier one failed (only a JSON parse failure stops early):
+Rules run in this order, and every rule runs even when an earlier one failed (only a failure to load the document stops early):
 
-1. **Parse** JSON text or bytes.
+1. **Load**: parse JSON text or bytes and drop top-level `x-` keys. A document with more than 2 000 JSON values (`MAX_MANIFEST_VALUES` in `src/document.ts`) in the rest is rejected here as `schema_invalid_json.too_large`. The largest valid Manifest has a few hundred values; the limit keeps the work, the number of problems and the JSON Schema library's error list bounded for hostile input (the library gathers errors with `push(...errors)`, which overflows the call stack at around a hundred thousand of them). The walk is iterative, and values quoted in messages are rendered with a bounded JSON printer, so no nesting depth can overflow the stack.
 2. **JSON Schema** validation against `manifestSchema`, translated into problems. The schema encodes every rule about a single field (types, enums, patterns, lengths, counts, closed objects), so editors pointed at it catch the same mistakes.
 3. **Semantic rules** that JSON Schema cannot express, or expresses too expensively for untrusted input: `entry` against `runtime.kind` and `platforms`, duplicates in lists (JSON Schema `uniqueItems` is evaluated pairwise, which is quadratic), strict semver through the `semver` library (numeric parts beyond `Number.MAX_SAFE_INTEGER`), the `changelog` limit in bytes, `network` needing `domains` or `any`, and the `ignored_key` warnings.
 4. **Option rules**: `publisher_mismatch` and `version_not_greater`.
 
-A finding detected by two rules is reported once, and a type problem hides format problems about the same value. `manifestVersion` problems are listed first; this validator understands version 1 only. No defaults are applied to the returned Manifest: keys with a default (`channel`, `workspace`, `ui.path`, `ui.readyTimeoutSeconds`) stay optional in the type and absent when the Publisher left them out.
+A finding detected by two rules is reported once, and a type problem hides format problems about the same value (not problems about the key it sits under, such as a Slot name). A key that has no effect gives an `ignored_key` warning, but its value must still be valid. `manifestVersion` problems are listed first; this validator understands version 1 only. No defaults are applied to the returned Manifest: keys with a default (`channel`, `workspace`, `ui.path`, `ui.readyTimeoutSeconds`) stay optional in the type and absent when the Publisher left them out.
 
 ## Why `@cfworker/json-schema`
 

@@ -110,6 +110,7 @@ const permissions = (changes: Record<string, unknown>) => ({
 const EXAMPLES: Record<MessageKey, Example | 'fallback'> = {
   schema_invalid_json: ['{'],
   'schema_invalid_json.not_serializable': [{ manifestVersion: 1n }],
+  'schema_invalid_json.too_large': [edit({ platforms: Array(5000).fill('linux-x64') })],
   schema_type: [edit({ name: 42 })],
   'schema_type.entry_for_runtime_kind': [edit({ entry: { 'linux-x64': 'a.js' } })],
   schema_enum: [edit({ workspace: 'always' })],

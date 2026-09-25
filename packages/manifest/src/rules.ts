@@ -244,6 +244,7 @@ export interface NormalizedOptions {
  * reads published versions from its own database), so they throw instead of becoming Problems.
  */
 export function normalizeOptions(options: ValidateManifestOptions = {}): NormalizedOptions {
+  if (!isRecord(options)) throw new TypeError('options must be an object when given');
   const normalized: NormalizedOptions = {};
   const { publisher, publishedVersions } = options as {
     publisher?: unknown;
@@ -280,7 +281,8 @@ export function optionRules(document: unknown, options: NormalizedOptions): Prob
     const slash = document.id.indexOf('/');
     if (slash !== -1) {
       const idPublisher = document.id.slice(0, slash);
-      if (idPublisher !== publisher) {
+      // An upper-case id is a schema_pattern problem; it is not also someone else's.
+      if (idPublisher.toLowerCase() !== publisher) {
         problems.push(createProblem('publisher_mismatch', ['id'], { idPublisher, publisher }));
       }
     }
