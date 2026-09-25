@@ -1,0 +1,25 @@
+{
+  "name": "@harness-store/gateway",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Model Gateway: loopback OpenAI-compatible HTTP server that resolves Model Slots and forwards to Providers.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  }
+}

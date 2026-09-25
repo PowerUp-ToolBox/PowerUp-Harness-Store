@@ -1,0 +1,10 @@
+# Generated or vendored output
+dist/
+coverage/
+pnpm-lock.yaml
+*.tsbuildinfo
+
+# Hand-written design documentation keeps its own formatting.
+docs/
+/CONTEXT.md
+/README.md

@@ -2,7 +2,7 @@
 
 A desktop platform (PowerUp) where you install and launch AI agent **Harnesses** as standalone local apps, and where publishers share them. Every Harness reaches language models only through the local **Model Gateway**, so any Harness runs on any model you have access to: Anthropic, OpenAI, Google, OpenRouter, DeepSeek, Qwen, Kimi, GLM, MiniMax, Doubao, Ollama, LM Studio or any OpenAI-compatible endpoint.
 
-Status: **design complete, implementation not started.** Everything below is documentation.
+Status: **design complete; P0 implementation has started** with the monorepo scaffold (see [Development](#development)). Everything else below is documentation.
 
 ## Start here
 - [`CONTEXT.md`](./CONTEXT.md) — the glossary. Use these words and no others.
@@ -20,3 +20,35 @@ Status: **design complete, implementation not started.** Everything below is doc
 
 ## Working on it
 Pick the lowest-numbered open issue in the current milestone whose "Blocked by" issues are all closed. Read the spec, the linked `docs/tech` pages and `CONTEXT.md` before writing code.
+
+## Development
+Prerequisites: **Node 22 LTS** (pinned in [`.nvmrc`](./.nvmrc); `nvm use` picks it up) and **pnpm 10.33.0** (pinned in `package.json#packageManager`; `corepack enable` provides it). Node 22 matches the Node the Runtime bundles for Harnesses (see [`manifest-spec.md`](./docs/tech/manifest-spec.md) §3); the tooling needs 22.13 or newer, which `engines.node` enforces.
+
+```sh
+pnpm install     # the only setup step; no environment variables needed
+pnpm lint        # ESLint in every TypeScript package, then Prettier --check over the repo
+pnpm typecheck   # tsc --noEmit in every TypeScript package
+pnpm test        # every package's test script (Vitest; apps/store has its own runner)
+pnpm build       # tsc --build of every package that has a build script
+```
+
+CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs exactly these commands on every push and pull request.
+
+Layout (pnpm workspaces, see [`pnpm-workspace.yaml`](./pnpm-workspace.yaml)):
+
+| Path | Package | Role |
+|---|---|---|
+| `apps/desktop` | `@harness-store/desktop` | Electron app: the Runtime and the renderer |
+| `apps/store` | `@harness-store/store` | Supabase project for the Store (Deno Edge Functions) |
+| `packages/manifest` | `@harness-store/manifest` | Manifest schema and validators |
+| `packages/gateway` | `@harness-store/gateway` | Model Gateway |
+| `packages/sdk` | `@harness-store/sdk` | SDK for Node Harness authors |
+| `examples/hello-web` | `@harness-store/hello-web` | Reference Harness, UI Kind `web` |
+| `examples/hello-term` | `@harness-store/hello-term` | Reference Harness, UI Kind `terminal` |
+| `tools/repo-checks` | `@harness-store/repo-checks` | Tests that guard this layout, the shared configs and CI |
+
+Conventions:
+- Every package defines a `test` script (Vitest for TypeScript packages; a package with no tests yet uses `vitest run --passWithNoTests`). TypeScript packages also define `lint`, `typecheck` and `build`. The root commands fan out with `pnpm --recursive run <script>`, so a new directory under `apps/`, `packages/` or `examples/` with those scripts is picked up without any root change.
+- Shared configuration lives at the root and is extended, not copied: [`tsconfig.base.json`](./tsconfig.base.json) (strict), [`eslint.config.js`](./eslint.config.js) and [`.prettierrc.json`](./.prettierrc.json). Each TypeScript package has a `tsconfig.json` (type-check sources and tests), a `tsconfig.build.json` (emit `dist/`) and an `eslint.config.js` that imports the root config.
+- The root [`tsconfig.json`](./tsconfig.json) is the TypeScript project references graph (`tsc --build` from the root builds everything). `apps/store` is excluded because its Edge Functions run on Deno.
+- Test fixtures live inside the package that owns them (e.g. `packages/manifest/fixtures/`), never at the repo root.

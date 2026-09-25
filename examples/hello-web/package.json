@@ -1,0 +1,16 @@
+{
+  "name": "@harness-store/hello-web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reference Harness with UI Kind web (runtime kind node).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  }
+}

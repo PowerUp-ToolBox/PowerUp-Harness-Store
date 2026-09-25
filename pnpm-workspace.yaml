@@ -1,0 +1,11 @@
+# Every directory matched below is a workspace package. A new package only needs
+# a package.json with the scripts it supports (test, lint, typecheck, build);
+# the root `pnpm <script>` commands pick it up automatically.
+packages:
+  - apps/*
+  - packages/*
+  - examples/*
+  - tools/*
+
+# Refuse to install on a Node older than the engines.node floor instead of only warning.
+engineStrict: true

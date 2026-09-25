@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Harness Store project references graph",
+  // Solution file: builds every emitting TypeScript package with `tsc --build`
+  // and lets editors navigate across packages. apps/store is deliberately absent:
+  // its Edge Functions run on Deno, a different runtime with its own toolchain.
+  "files": [],
+  "references": [
+    { "path": "packages/manifest/tsconfig.build.json" },
+    { "path": "packages/gateway/tsconfig.build.json" },
+    { "path": "packages/sdk/tsconfig.build.json" },
+    { "path": "apps/desktop/tsconfig.build.json" },
+    { "path": "examples/hello-web/tsconfig.build.json" },
+    { "path": "examples/hello-term/tsconfig.build.json" }
+  ]
+}

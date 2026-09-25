@@ -1,0 +1,13 @@
+{
+  "name": "@harness-store/store",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Harness Store backend: Supabase project (Auth, Postgres, Storage, Deno Edge Functions).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "test": "node scripts/test.mjs"
+  }
+}
