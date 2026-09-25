@@ -1,0 +1,10 @@
+{
+  "description": "The Harness ID has an upper-case publisher and a space in the slug.",
+  "problems": [
+    {
+      "code": "schema_pattern",
+      "path": "id"
+    }
+  ],
+  "warnings": []
+}

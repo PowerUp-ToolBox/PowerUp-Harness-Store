@@ -1,0 +1,38 @@
+{
+  "manifestVersion": 1,
+  "id": "alice/hello-web",
+  "version": "0.1.0",
+  "name": "Hello Web",
+  "summary": "A minimal web-UI harness that says hello with your model.",
+  "tags": ["fun"],
+  "license": "MIT",
+  "platforms": ["darwin-arm64", "win32-x64"],
+  "runtime": {
+    "kind": "binary"
+  },
+  "entry": {
+    "darwin-arm64": "bin/mac-arm64/hello"
+  },
+  "ui": {
+    "kind": "web"
+  },
+  "workspace": "none",
+  "models": {
+    "slots": {
+      "default": {
+        "requirements": {
+          "tools": false
+        }
+      }
+    }
+  },
+  "permissions": {
+    "filesystem": {
+      "scope": "none"
+    },
+    "shell": false,
+    "network": {
+      "domains": []
+    }
+  }
+}

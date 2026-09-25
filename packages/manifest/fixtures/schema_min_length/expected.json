@@ -1,0 +1,10 @@
+{
+  "description": "name must be 2 to 40 characters.",
+  "problems": [
+    {
+      "code": "schema_min_length",
+      "path": "name"
+    }
+  ],
+  "warnings": []
+}

@@ -4,6 +4,9 @@ coverage/
 pnpm-lock.yaml
 *.tsbuildinfo
 
+# Deliberately malformed test data: this fixture is invalid JSON on purpose.
+packages/manifest/fixtures/schema_invalid_json/manifest.json
+
 # Hand-written design documentation keeps its own formatting.
 docs/
 /CONTEXT.md

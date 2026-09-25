@@ -1,0 +1,10 @@
+{
+  "description": "At most 5 tags.",
+  "problems": [
+    {
+      "code": "schema_max_items",
+      "path": "tags"
+    }
+  ],
+  "warnings": []
+}

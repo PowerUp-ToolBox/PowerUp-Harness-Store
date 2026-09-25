@@ -1,0 +1,13 @@
+{
+  "description": "The Harness ID belongs to bob, but the signed-in Publisher is alice.",
+  "options": {
+    "publisher": "alice"
+  },
+  "problems": [
+    {
+      "code": "publisher_mismatch",
+      "path": "id"
+    }
+  ],
+  "warnings": []
+}

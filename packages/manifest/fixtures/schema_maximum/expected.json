@@ -1,0 +1,10 @@
+{
+  "description": "ui.readyTimeoutSeconds must be at most 120.",
+  "problems": [
+    {
+      "code": "schema_maximum",
+      "path": "ui.readyTimeoutSeconds"
+    }
+  ],
+  "warnings": []
+}

@@ -1,0 +1,33 @@
+{
+  "manifestVersion": 1,
+  "id": "alice/hello-web",
+  "version": "0.1.0",
+  "summary": "A minimal web-UI harness that says hello with your model.",
+  "tags": ["fun"],
+  "license": "MIT",
+  "platforms": ["darwin-arm64", "beos-x86"],
+  "runtime": {
+    "kind": "node",
+    "node": "22"
+  },
+  "entry": "dist/index.js",
+  "ui": {
+    "kind": "web"
+  },
+  "workspace": "none",
+  "models": {
+    "slots": {
+      "fast": {}
+    }
+  },
+  "permissions": {
+    "filesystem": {
+      "scope": "none"
+    },
+    "shell": false,
+    "network": {
+      "domains": []
+    }
+  },
+  "foo": 1
+}

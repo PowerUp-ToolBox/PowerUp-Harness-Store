@@ -1,0 +1,10 @@
+{
+  "description": "A missing comma: the only problem reported is the parse failure.",
+  "problems": [
+    {
+      "code": "schema_invalid_json",
+      "path": "$"
+    }
+  ],
+  "warnings": []
+}

@@ -1,0 +1,10 @@
+{
+  "description": "platforms lists darwin-arm64 twice.",
+  "problems": [
+    {
+      "code": "schema_unique_items",
+      "path": "platforms[2]"
+    }
+  ],
+  "warnings": []
+}

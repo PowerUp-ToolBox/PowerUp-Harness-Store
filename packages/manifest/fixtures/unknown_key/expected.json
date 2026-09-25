@@ -1,0 +1,10 @@
+{
+  "description": "The unknown top-level key foo is rejected; the x- prefixed key is ignored.",
+  "problems": [
+    {
+      "code": "unknown_key",
+      "path": "foo"
+    }
+  ],
+  "warnings": []
+}

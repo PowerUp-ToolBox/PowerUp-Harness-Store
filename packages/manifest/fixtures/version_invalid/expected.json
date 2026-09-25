@@ -1,0 +1,10 @@
+{
+  "description": "Build metadata is not allowed in a Harness Version.",
+  "problems": [
+    {
+      "code": "version_invalid",
+      "path": "version"
+    }
+  ],
+  "warnings": []
+}

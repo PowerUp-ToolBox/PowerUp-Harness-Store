@@ -1,6 +1,6 @@
 # Manifest Specification (manifestVersion 1)
 
-The **Manifest** is `manifest.json` at the root of a **Harness Package** (a zip archive). It is the only file the Store and the Runtime interpret. Everything else in the archive belongs to the Harness. The machine-readable schema lives in `packages/manifest` and is the source of truth; this document explains it.
+The **Manifest** is `manifest.json` at the root of a **Harness Package** (a zip archive). It is the only file the Store and the Runtime interpret. Everything else in the archive belongs to the Harness. The machine-readable schema lives in `packages/manifest` (`src/manifest-v1.schema.json`, JSON Schema draft 2020-12) and is the source of truth; this document explains it.
 
 ## 1. Package layout
 
@@ -20,25 +20,25 @@ Limits: archive ≤ 500 MB compressed; ≤ 20 000 files; no symlinks; no absolut
 | Field | Type | Req | Rules |
 |---|---|---|---|
 | `manifestVersion` | `1` | yes | Literal `1`. |
-| `id` | string | yes | `publisher/slug`. `publisher` must equal the signed-in Publisher's GitHub login (lower-cased). `slug`: `^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$`. Immutable for the life of the Harness. |
-| `version` | string | yes | Strict semver (`MAJOR.MINOR.PATCH`, optional pre-release). Each published version must be greater than every previously published version of the same Harness. |
-| `name` | string | yes | 2–40 chars, display name. |
+| `id` | string | yes | `publisher/slug`. `publisher` must equal the signed-in Publisher's GitHub login (lower-cased): 1–39 lower-case letters, digits or hyphens, starting with a letter or digit. `slug`: `^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$`. Immutable for the life of the Harness. |
+| `version` | string | yes | Strict semver (`MAJOR.MINOR.PATCH`, optional pre-release; no build metadata, no `v` prefix). Each published version must be greater than every previously published version of the same Harness. |
+| `name` | string | yes | 2–40 chars (Unicode code points), display name. |
 | `summary` | string | yes | ≤ 120 chars, one sentence, shown in lists. |
-| `tags` | string[] | no | ≤ 5, each from the curated tag list (`coding`, `writing`, `research`, `data`, `productivity`, `devops`, `design`, `education`, `fun`, `other`). |
-| `license` | string | yes | SPDX identifier or `proprietary`. |
-| `homepage` | url | no | |
-| `sourceRepo` | url | no | Shown as "Source" on the detail page. |
+| `tags` | string[] | no | ≤ 5, no duplicates, each from the curated tag list (`coding`, `writing`, `research`, `data`, `productivity`, `devops`, `design`, `education`, `fun`, `other`). |
+| `license` | string | yes | A single SPDX identifier (e.g. `MIT`, `Apache-2.0`; not an expression such as `MIT OR Apache-2.0`) or `proprietary`. |
+| `homepage` | url | no | Absolute `http://` or `https://` URL. |
+| `sourceRepo` | url | no | Absolute `http://` or `https://` URL. Shown as "Source" on the detail page. |
 | `channel` | `"stable"` | no | Default `stable`. `beta` is reserved for P1; P0 rejects any other value. |
-| `platforms` | string[] | yes | Non-empty subset of `darwin-arm64`, `darwin-x64`, `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`. |
+| `platforms` | string[] | yes | Non-empty subset of `darwin-arm64`, `darwin-x64`, `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, without duplicates. |
 | `runtime` | object | yes | See §3. |
 | `entry` | string \| object | yes | See §3. |
 | `ui` | object | yes | See §4. |
 | `workspace` | `required` \| `optional` \| `none` | no | Default `none`. |
 | `models` | object | yes | See §5. Must declare a `default` Slot. |
 | `permissions` | object | yes | See §6. All three keys required (explicit is the point). |
-| `changelog` | string | no | Markdown for this version, ≤ 5 KB. Shown in version history and update prompts. |
+| `changelog` | string | no | Markdown for this version, ≤ 5 KB (5 120 bytes of UTF-8). Shown in version history and update prompts. |
 
-Unknown top-level keys are rejected (keeps the format honest; use `x-` prefixed keys for Publisher-private data, which are ignored).
+Unknown keys are rejected at every level of the Manifest (keeps the format honest). Use top-level `x-` prefixed keys for Publisher-private data: they are never validated and are ignored by the Store and the Runtime. An `x-` key inside a nested object is an unknown key like any other.
 
 ## 3. `runtime` and `entry`
 
@@ -48,8 +48,9 @@ Unknown top-level keys are rejected (keeps the format honest; use `x-` prefixed 
 // P0.5 adds: { "kind": "python", "python": "3.12" } with pyproject.toml / requirements.txt
 ```
 
-- `kind: node`: `entry` is a path to a `.js`/`.mjs`/`.cjs` file relative to the archive root. The Runtime executes it with its bundled Node; `node_modules` must be included in the archive (no install step in P0). Same entry on all platforms, so `entry` is a string.
-- `kind: binary`: `entry` is an object mapping each declared platform to a relative path of an executable inside the archive. Every declared platform must have an entry.
+- `kind: node`: `runtime.node` is required and must be `"22"` (the only Node the Runtime bundles in P0). `entry` is a path to a `.js`/`.mjs`/`.cjs` file relative to the archive root. The Runtime executes it with its bundled Node; `node_modules` must be included in the archive (no install step in P0). Same entry on all platforms, so `entry` is a string.
+- `kind: binary`: `entry` is an object mapping each declared platform to a relative path of an executable inside the archive. Every declared platform must have an entry. An entry for a platform that is not in `platforms`, and a `runtime.node`, are ignored (a warning, not a problem).
+- Every `entry` path is relative to the archive root and uses `/` separators: no leading `/`, no `.` or `..` segments (so `./dist/index.js` is written `dist/index.js`), no backslashes and no colons.
 
 ```jsonc
 "entry": "dist/index.js"
@@ -65,8 +66,8 @@ Only the Runtime-provided environment (see architecture §4) is guaranteed. Harn
 "ui": { "kind": "terminal" }
 ```
 
-- `web`: the Harness must listen on `127.0.0.1:$HARNESS_PORT`. The Runtime opens a window once the port accepts connections. `path` default `/`; `readyTimeoutSeconds` 5–120, default 30; `window` optional hints.
-- `terminal`: the Runtime runs the process in a pty inside an embedded terminal window. stdin/stdout are the UI.
+- `web`: the Harness must listen on `127.0.0.1:$HARNESS_PORT`. The Runtime opens a window once the port accepts connections. `path` default `/`, and must start with a single `/` (no `//`, backslashes or spaces); `readyTimeoutSeconds` an integer 5–120, default 30; `window` optional hints (`width`, `height`: positive integers, in pixels).
+- `terminal`: the Runtime runs the process in a pty inside an embedded terminal window. stdin/stdout are the UI. `path`, `readyTimeoutSeconds` and `window` are ignored (a warning, not a problem).
 
 ## 5. `models`
 
@@ -88,8 +89,8 @@ Only the Runtime-provided environment (see architecture §4) is guaranteed. Harn
 ```
 
 - Slot names: `^[a-z][a-z0-9-]{0,31}$`; `default` is mandatory; ≤ 8 Slots.
-- `requirements`: all optional booleans/ints; absent means "no requirement". `minContext` in tokens.
-- `recommended`: ≤ 5 model ids, each `provider/model` where `provider` is a Provider id from [`gateway-protocol.md`](./gateway-protocol.md) §6 and `model` is the Provider's own model name. Order is preference order. The Runtime uses the first reachable one as the initial binding; Users can always override.
+- `requirements`: optional `tools`, `vision`, `json` (booleans) and `minContext` (integer ≥ 1, in tokens); absent means "no requirement".
+- `recommended`: ≤ 5 model ids without duplicates, each `provider/model` where `provider` is a (lower-case) Provider id from [`gateway-protocol.md`](./gateway-protocol.md) §6 and `model` is the Provider's own model name. Order is preference order. The Runtime uses the first reachable one as the initial binding; Users can always override.
 
 ## 6. `permissions` (Declared Permissions)
 
@@ -101,9 +102,10 @@ Only the Runtime-provided environment (see architecture §4) is guaranteed. Harn
 }
 ```
 
-- `filesystem.scope`: `none` (only its Data Directory), `workspace` (the chosen Workspace), `home` (anywhere under the User's home), `paths` (explicit list, `~` allowed).
+- `filesystem.scope`: `none` (only its Data Directory), `workspace` (the chosen Workspace), `home` (anywhere under the User's home), `paths` (explicit list, `~` allowed; required and non-empty for this scope, ignored with a warning for the others).
 - `shell`: whether the Harness executes commands.
-- `network`: `domains` (list, ≤ 20) or `any`. Traffic to the Model Gateway is implied and not declared.
+- `network`: `domains` (list of ≤ 20 lower-case domain names such as `api.github.com`, optionally starting with `*.`; may be empty) or `any: true`. One of the two is required; `domains` next to `any: true` is ignored with a warning. Traffic to the Model Gateway is implied and not declared.
+- Lists (`paths`, `domains`) never repeat a value.
 
 Declared Permissions are **informational in P0**: they are displayed for consent at install and re-consent on change; the Runtime does not enforce them. Copy in the UI states this plainly.
 
@@ -116,7 +118,7 @@ Declared Permissions are **informational in P0**: they are displayed for consent
 5. Archive limits (§1).
 6. Every declared platform has an `entry` (binary kind).
 
-Validation returns a list of `{ path, code, message }` problems; the Publish flow shows them verbatim, in the User's language where a translation exists.
+Validation returns every problem at once, each as `{ path, code, message, messageKey, params }` with a stable `code` (the `PROBLEM_CODES` of `packages/manifest`), plus non-blocking warnings such as a key that has no effect. The Publish flow shows them verbatim, in the User's language where a translation exists.
 
 ## 8. Example (complete, minimal)
 

@@ -1,0 +1,10 @@
+{
+  "description": "permissions.shell is a string instead of a boolean.",
+  "problems": [
+    {
+      "code": "schema_type",
+      "path": "permissions.shell"
+    }
+  ],
+  "warnings": []
+}
