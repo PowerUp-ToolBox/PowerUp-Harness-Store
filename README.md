@@ -22,7 +22,7 @@ Status: **design complete; P0 implementation has started** with the monorepo sca
 Pick the lowest-numbered open issue in the current milestone whose "Blocked by" issues are all closed. Read the spec, the linked `docs/tech` pages and `CONTEXT.md` before writing code.
 
 ## Development
-Prerequisites: **Node 22 LTS** (pinned in [`.nvmrc`](./.nvmrc); `nvm use` picks it up) and **pnpm 10.33.0** (pinned in `package.json#packageManager`; `corepack enable` provides it). Node 22 matches the Node the Runtime bundles for Harnesses (see [`manifest-spec.md`](./docs/tech/manifest-spec.md) §3). `engines.node` is `^22.13.0 || ^24.0.0 || >=26.0.0`, the Node versions both ESLint 10 and Vitest 5 support (so Node 24 LTS works too, odd-numbered releases do not); `pnpm install` refuses anything else.
+Prerequisites: **Node 22 LTS** (pinned in [`.nvmrc`](./.nvmrc); `nvm use` picks it up) and **pnpm 10.33.0** (pinned in `package.json#packageManager`; `corepack enable` provides it). Node 22 matches the Node the Runtime bundles for Harnesses (see [`manifest-spec.md`](./docs/tech/manifest-spec.md) §3). `engines.node` is `^22.13.0 || ^24.0.0 || >=26.0.0`, the Node versions both ESLint 10 and Vitest 5 support (so Node 24 LTS works too; Node 23 and 25 do not); `pnpm install` refuses anything else.
 
 ```sh
 pnpm install     # the only setup step; no environment variables needed

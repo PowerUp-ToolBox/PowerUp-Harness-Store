@@ -427,6 +427,13 @@ describe('the command line', () => {
     },
   );
 
+  it('keeps the line breaks of a multi-line usage message instead of escaping them', async () => {
+    const { status, stderr } = await run(['validate', 'a', '--publisher', '--json']);
+    expect(status).toBe(EXIT_ERROR);
+    expect(stderr).toContain('argument is ambiguous.\nDid you forget');
+    expect(stderr).not.toContain('\\u000a');
+  });
+
   it('reports a path that does not exist, or is neither a folder nor a .zip file, with exit 2', async () => {
     const missing = join(scratch, 'missing');
     expect(await run(['validate', missing, '--json'])).toEqual({

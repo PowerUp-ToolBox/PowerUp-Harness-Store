@@ -70,7 +70,9 @@ export async function main(args: readonly string[], output: CliOutput): Promise<
     command = parseCommand(args);
   } catch (error) {
     if (!(error instanceof UsageError)) throw error;
-    const message = `harness-manifest: ${escapeForTerminal(error.message)}\n${HELP_HINT}`;
+    // Node's parseArgs messages span lines; keep those breaks but escape everything else.
+    const lines = error.message.split('\n').map(escapeForTerminal).join('\n');
+    const message = `harness-manifest: ${lines}\n${HELP_HINT}`;
     output.stderr(args.length === 0 ? USAGE : message);
     return EXIT_ERROR;
   }
