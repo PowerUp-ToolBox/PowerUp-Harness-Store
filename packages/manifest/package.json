@@ -18,7 +18,11 @@
     },
     "./manifest-v1.schema.json": "./dist/manifest-v1.schema.json"
   },
+  "bin": {
+    "harness-manifest": "./bin/harness-manifest.js"
+  },
   "files": [
+    "bin",
     "dist"
   ],
   "scripts": {

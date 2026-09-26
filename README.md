@@ -34,6 +34,8 @@ pnpm build       # tsc --build of every package that has a build script
 
 CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs exactly these commands on every push and pull request.
 
+To check a Harness Package (a folder or a zip) the way the Store will, build the Manifest package and run its CLI: `pnpm --filter @harness-store/manifest build`, then `node packages/manifest/bin/harness-manifest.js validate <path>`. See [`packages/manifest`](./packages/manifest/README.md#command-line-harness-manifest-validate) for its options, output and exit status.
+
 Layout (pnpm workspaces, see [`pnpm-workspace.yaml`](./pnpm-workspace.yaml)):
 
 | Path | Package | Role |

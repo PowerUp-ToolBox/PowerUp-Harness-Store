@@ -3,13 +3,14 @@
  * it (as bytes, and as a file on disk), files in memory, and the hostile archives that fixtures
  * describe with an `archive.recipe` in their expected.json.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ArchiveSource, InMemorySource } from '../../src/index.js';
 import type { RandomAccessReader } from '../../src/index.js';
 import { DirectorySource } from '../../src/node/index.js';
 import { fixturesRoot, loadFixture } from '../helpers.js';
-import { buildZip, zipReader } from './zip-writer.js';
+import type { ArchiveRecipe } from '../helpers.js';
+import { buildZip, writeZipFile, zipReader } from './zip-writer.js';
 import type { ZipEntrySpec } from './zip-writer.js';
 
 export function fixtureDir(name: string): string {
@@ -68,8 +69,8 @@ export async function fixtureSources(
   ];
 }
 
-/** The hostile archive a fixture's `archive.recipe` describes. */
-export function hostileArchive(name: string): Uint8Array | RandomAccessReader {
+/** The entries of the hostile archive a fixture's `archive.recipe` describes, and its recipe. */
+function hostileEntries(name: string): { recipe: ArchiveRecipe; entries: ZipEntrySpec[] } {
   const recipe = loadFixture(name).expected.archive?.recipe;
   if (recipe === undefined) throw new Error(`fixtures/${name} has no archive recipe`);
   const entries: ZipEntrySpec[] = [
@@ -95,7 +96,23 @@ export function hostileArchive(name: string): Uint8Array | RandomAccessReader {
   for (const { name: fileName, bytes } of recipe.largeFiles ?? []) {
     entries.push({ name: fileName, zeros: bytes });
   }
+  return { recipe, entries };
+}
+
+/** The hostile archive a fixture's `archive.recipe` describes. */
+export function hostileArchive(name: string): Uint8Array | RandomAccessReader {
+  const { recipe, entries } = hostileEntries(name);
   if (recipe.largeFiles !== undefined) return zipReader(entries);
   const zip = buildZip(entries);
   return zip.subarray(0, zip.length - (recipe.truncateBytes ?? 0));
+}
+
+/**
+ * Writes the hostile archive a fixture's `archive.recipe` describes to `path`, as a Publisher's
+ * zip file on disk; runs of zeros (the 500 MB archive) are left as holes of a sparse file.
+ */
+export function writeHostileArchive(name: string, path: string): void {
+  const archive = hostileArchive(name);
+  if (archive instanceof Uint8Array) writeFileSync(path, archive);
+  else writeZipFile(path, hostileEntries(name).entries);
 }

@@ -4,7 +4,7 @@ The single source of truth for the **Manifest**, the declarative `manifest.json`
 
 Normative reference: [`docs/tech/manifest-spec.md`](../../docs/tech/manifest-spec.md). Spec: [`P0-01`](../../docs/delivery/specs/P0-01-monorepo-and-manifest.md).
 
-Status: P0-01.2 (schema, `Manifest` type, `validateManifest`, problem codes, fixtures) and P0-01.3 (`validatePackage` for a folder, a zip or files in memory, and `diffForReconsent`) are in. Still to come: the `harness-manifest validate` CLI in P0-01.4.
+Status: P0-01.2 (schema, `Manifest` type, `validateManifest`, problem codes, fixtures), P0-01.3 (`validatePackage` for a folder, a zip or files in memory, and `diffForReconsent`) and P0-01.4 (the [`harness-manifest validate` CLI](#command-line-harness-manifest-validate)) are in.
 
 ## API
 
@@ -73,6 +73,55 @@ type ValidationResult =
 - `path` is relative to the Manifest root: `name`, `models.slots.default`, `platforms[1]`, `entry.win32-x64`, `["a.b"]` for a key that needs quoting, `$` for the Manifest as a whole. For the `file_*`, `icon_dimensions`, `screenshots_too_many` and `archive_*` codes it is a path inside the Harness Package instead (`assets/icon.png`, or the entry name as stored, such as `../escape.txt`, cut at 1 024 characters), and `$` is the Harness Package as a whole. The two kinds of path share one field, so a file named `entry` and the Manifest key `entry` look alike: tell them apart by `code` (every code is always one kind or the other; `entry_missing_for_platform` and `schema_invalid_json` always use Manifest paths).
 - `code` is stable and additive-only: a shipped code is never renamed or removed. `schema_*` codes name the JSON Schema keyword that failed (`schema_max_items` is `maxItems`).
 - `messageKey` is the code itself or `<code>.<variant>` for a more specific wording (e.g. `schema_pattern.harnessId`). `message` is the English template with `params` filled in. The desktop app maps the same `messageKey` to zh-CN and calls `interpolate` with the same `params`. `actual`/`value` params are JSON renderings (strings keep their quotes), shortened to 60 characters.
+
+## Command line: `harness-manifest validate`
+
+A Publisher runs it on their Harness folder, or on the zip they are about to upload, to see every problem at once before publishing. It checks the Harness Package on this computer only: nothing goes over the network.
+
+```sh
+harness-manifest validate <path> [--publisher <login>] [--published-version <version>]... [--json]
+```
+
+- `<path>` is a folder (read by `DirectorySource`) or a file ending in `.zip`, in any letter case (read by `openArchiveFile`, never extracted). Anything else is refused.
+- `--publisher <login>` is passed to `validatePackage` as `options.publisher`, so the `publisher_mismatch` check runs without signing in.
+- `--published-version <version>`, repeatable, is passed as `options.publishedVersions`, so `version_not_greater` can run before an upload too (user story 25 of P0-01; the Publish flow gets the list from the Store instead). It is the one flag beyond the ticket's `[--publisher <login>] [--json]`, added so that every fixture, `version_not_greater` included, can be checked from the command line with its `options`.
+- `--json` prints the `ValidationResult` of `validatePackage` as JSON (two-space indented, one trailing newline) and nothing else on stdout, for piping into other tools.
+- `-h`, `--help` prints the usage help.
+
+The CLI is a thin wrapper ([`src/node/cli.ts`](src/node/cli.ts)): it picks the source, calls `validatePackage` and formats the result. It adds no rule and no problem code, so it gives the same answer as the Publish flow and the Store.
+
+The default report groups problems by `path` (in the order each path first appears), one `code: message` line each, then warnings in a section of their own labeled non-blocking, then a summary line. Nothing in it depends on whether `<path>` was a folder or a zip, so a folder and its zip print the same report:
+
+```text
+Problems (1), which block publishing:
+  assets/icon.png
+    file_missing: The Harness Package must contain "assets/icon.png".
+
+Warnings (1), non-blocking:
+  ui.readyTimeoutSeconds
+    ignored_key: "readyTimeoutSeconds" applies to UI Kind "web" only; it is ignored for "terminal".
+
+The Harness Package is not valid: 1 problem, 1 warning.
+```
+
+A valid Harness Package without warnings prints one line, such as `The Harness Package alice/hello-web 0.1.0 is valid: no problems, no warnings.`
+
+| Exit status | Meaning                                                                                                                                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`         | Valid (`result.ok`); warnings alone never change this.                                                                                                                                                                                          |
+| `1`         | Problems found (`result.ok === false`).                                                                                                                                                                                                         |
+| `2`         | Nothing was checked: a wrong command line (also no arguments at all, which prints the usage help), or a `<path>` that does not exist, is neither a folder nor a `.zip` file, or cannot be read. The message goes to stderr; stdout stays empty. |
+
+Paths and messages can quote entry names from an untrusted zip. The report writes the characters a terminal would act on (control characters, line and paragraph separators, bidirectional formatting characters) as `\uXXXX` escapes, so a name cannot clear the screen or forge a line of the report; `--json` escapes the same characters inside its strings, which `JSON.parse` reads back unchanged. Output is never cut short: the CLI sets `process.exitCode` instead of calling `process.exit()`, and a reader that closes the pipe early (`| head`) is not an error.
+
+The command is `package.json#bin`: [`bin/harness-manifest.js`](bin/harness-manifest.js), a checked-in stub that runs the compiled `dist/node/cli.js`. It is not itself built, because pnpm links a package's commands at install time, before `pnpm build`, and skips (with a warning) a command whose file does not exist yet. Until the package is built, the stub says so and exits 2. In this repository:
+
+```sh
+pnpm --filter @harness-store/manifest build
+node packages/manifest/bin/harness-manifest.js validate packages/manifest/fixtures/file_missing
+```
+
+A package that depends on `@harness-store/manifest` (such as the reference Harnesses of P0-06) gets the `harness-manifest` command in its scripts and through `pnpm exec`.
 
 ## Problem codes
 
@@ -175,7 +224,7 @@ The validator must run in the Electron renderer (whose Content Security Policy s
 
 - `problems` and `warnings`: what `validatePackage` finds in the folder, in its zip and in memory alike (so also what the CLI prints). `test/package-fixtures.test.ts` checks all three, and that the folder and its zip give the very same result.
 - `manifest` (optional): what `validateManifest` finds in `manifest.json` alone, when that differs (a fixture about a missing icon has a valid Manifest). `test/fixtures.test.ts` checks it for text, bytes and a parsed value.
-- `archive` (optional): for failure classes a folder cannot hold (zip slip, links, a 500 MB archive, 20 000 files, a broken zip, a local header naming another file, an entry the central directory leaves out), a recipe that `test/support/packages.ts` (`hostileArchive`) applies to the folder's zip, and what `validatePackage` finds in the result. The folders of these fixtures are clean, so their top-level `problems` are empty: the codes they are about are in `archive.problems`. A tool that runs fixtures (the CLI tests of P0-01.4) must build the archive from the recipe to see them.
+- `archive` (optional): for failure classes a folder cannot hold (zip slip, links, a 500 MB archive, 20 000 files, a broken zip, a local header naming another file, an entry the central directory leaves out), a recipe that `test/support/packages.ts` (`hostileArchive`) applies to the folder's zip, and what `validatePackage` finds in the result. The folders of these fixtures are clean, so their top-level `problems` are empty: the codes they are about are in `archive.problems`. A tool that runs fixtures must build the archive from the recipe to see them: the CLI tests write it to disk with `writeHostileArchive` (sparse where the recipe asks for 500 MB).
 
 `fixtures/*/dist/` is test data and is not git-ignored like build output. The icons are the 512×512 PNG `test/support/images.ts` makes, without an image library.
 
@@ -188,10 +237,10 @@ The validator must run in the Electron renderer (whose Content Security Policy s
 
 ## Scripts
 
-| Command          | What it does                                                                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm test`      | Vitest: fixtures (as Manifests, folders and zips), acceptance criteria, rules, zip reader, re-consent, property tests, browser bundle, drift |
-| `pnpm lint`      | ESLint with the shared root config, plus the no-Node-in-`src/` rule                                                                          |
-| `pnpm typecheck` | `tsc --noEmit` (sources and tests), then the generated-type drift check                                                                      |
-| `pnpm build`     | Emits `dist/` (including the schema JSON) from `tsconfig.build.json`                                                                         |
-| `pnpm generate`  | Regenerates `src/manifest.generated.ts` from the schema                                                                                      |
+| Command          | What it does                                                                                                                                                                                                           |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm test`      | Vitest: fixtures (as Manifests, folders and zips), acceptance criteria, rules, zip reader, re-consent, property tests, browser bundle, drift, and the CLI (in process, and as the built command against every fixture) |
+| `pnpm lint`      | ESLint with the shared root config, plus the no-Node-in-`src/` rule                                                                                                                                                    |
+| `pnpm typecheck` | `tsc --noEmit` (sources and tests), then the generated-type drift check                                                                                                                                                |
+| `pnpm build`     | Emits `dist/` (including the schema JSON) from `tsconfig.build.json`                                                                                                                                                   |
+| `pnpm generate`  | Regenerates `src/manifest.generated.ts` from the schema                                                                                                                                                                |
