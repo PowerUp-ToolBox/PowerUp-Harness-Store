@@ -14,11 +14,11 @@ export type LoadedDocument =
 
 /**
  * The most JSON values (objects, arrays, strings, numbers, booleans and nulls) a Manifest may
- * contain outside its top-level `x-` keys. Every list and map in the schema has a maximum size,
- * so the largest valid Manifest has fewer than 200 values (a test computes the bound from the
- * schema); this limit is ten times that. It bounds the work and the number of problems for
- * hostile input: the JSON Schema library collects errors with `push(...errors)`, which overflows
- * the call stack once a document yields about a hundred thousand of them.
+ * contain outside its top-level `x-` and `$schema` keys. Every list and map in the schema has a
+ * maximum size, so the largest valid Manifest has fewer than 200 values (a test computes the
+ * bound from the schema); this limit is ten times that. It bounds the work and the number of
+ * problems for hostile input: the JSON Schema library collects errors with `push(...errors)`,
+ * which overflows the call stack once a document yields about a hundred thousand of them.
  */
 export const MAX_MANIFEST_VALUES = 2000;
 
@@ -34,9 +34,9 @@ export const MAX_MANIFEST_VALUES = 2000;
  *   gives the validator its own copy, so later changes to the caller's object cannot reach the
  *   returned Manifest.
  *
- * Top-level `x-` keys are Publisher-private: they are dropped here, never validated. A document
- * with more than {@link MAX_MANIFEST_VALUES} values in the rest is rejected as a whole, like
- * text that is not JSON. A number too large for a double (`1e400` parses as `Infinity`) is a
+ * Top-level `x-` keys (Publisher-private) and `$schema` (which schema an editor should use) are
+ * dropped here, never validated. A document with more than {@link MAX_MANIFEST_VALUES} values
+ * in the rest is rejected as a whole, like text that is not JSON. A number too large for a double (`1e400` parses as `Infinity`) is a
  * `schema_type` problem at its path, returned with the document: it has no JSON form, so a
  * Manifest holding one could not be stored or read back.
  */
@@ -97,10 +97,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Drops top-level `x-` keys: Publisher-private, ignored by the Store and the Runtime. */
+/**
+ * Drops top-level `x-` keys (Publisher-private) and `$schema` (for editors): the Store and the
+ * Runtime ignore both.
+ */
 function withoutPrivateKeys(document: unknown): unknown {
   if (!isRecord(document)) return document;
-  return Object.fromEntries(Object.entries(document).filter(([key]) => !key.startsWith('x-')));
+  return Object.fromEntries(
+    Object.entries(document).filter(([key]) => !key.startsWith('x-') && key !== '$schema'),
+  );
 }
 
 /** A value met while walking the document, with the way back to the root for its path. */

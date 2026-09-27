@@ -106,5 +106,7 @@ describe('the Manifest type', () => {
     expectTypeOf<Extract<Entry, object>>().toHaveProperty('win32-x64');
     // No index signature: top-level x- keys are not part of the validated Manifest.
     expectTypeOf<Manifest>().not.toHaveProperty('x-internal');
+    // Nor is $schema, which is there for editors.
+    expectTypeOf<Manifest>().not.toHaveProperty('$schema');
   });
 });

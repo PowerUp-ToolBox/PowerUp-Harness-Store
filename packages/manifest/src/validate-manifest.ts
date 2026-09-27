@@ -17,7 +17,7 @@ import type { Problem, ValidateManifestOptions, ValidationResult } from './types
  *
  * 1. Parse the JSON. A parse failure is reported as a single `schema_invalid_json` problem and
  *    nothing else runs; so is a document too large to check (more than `MAX_MANIFEST_VALUES`
- *    values outside top-level `x-` keys, ten times the largest valid Manifest). A number beyond
+ *    values outside top-level `x-` and `$schema` keys, ten times the largest valid Manifest). A number beyond
  *    the range of a double (`1e400`) is a `schema_type` problem, and the other rules still run.
  * 2. JSON Schema validation against `manifestSchema`. Should the library run out of stack on a
  *    document with thousands of problems (possible only on a host with a small stack), the
@@ -26,8 +26,8 @@ import type { Problem, ValidateManifestOptions, ValidationResult } from './types
  *    duplicates in lists, strict semver, the changelog byte limit, network access, ignored keys.
  * 4. Rules that need `options`: `publisher_mismatch` and `version_not_greater`.
  *
- * Top-level keys starting with `x-` are Publisher-private: never validated, and left out of the
- * returned Manifest. The function is pure: no file system, no network, no Node-only globals.
+ * Top-level keys starting with `x-` (Publisher-private) and `$schema` (for editors) are never
+ * validated, and left out of the returned Manifest. The function is pure: no file system, no network, no Node-only globals.
  * Its work is bounded for any input, so a hostile Manifest gets problems, never an exception.
  *
  * @throws {TypeError} only when `options` itself is malformed: a caller bug, not a Manifest
@@ -43,7 +43,7 @@ export function validateManifest(
 /** What validatePackage() needs besides the result: the loaded document, for its file rules. */
 export interface ManifestInspection {
   result: ValidationResult;
-  /** The parsed Manifest (top-level `x-` keys removed), absent when it could not be loaded. */
+  /** The parsed Manifest (top-level `x-` and `$schema` keys removed), absent when not loaded. */
   document?: unknown;
 }
 

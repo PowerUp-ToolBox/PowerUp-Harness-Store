@@ -19,6 +19,9 @@
     "permissions"
   ],
   "properties": {
+    "$schema": {
+      "description": "The JSON Schema an editor should check this file against, usually this schema's $id. Never validated, and ignored by the Store and the Runtime, like top-level x- keys."
+    },
     "manifestVersion": {
       "description": "Version of this Manifest format. This schema describes version 1 only.",
       "const": 1

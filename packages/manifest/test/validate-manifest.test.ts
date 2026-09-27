@@ -208,7 +208,10 @@ describe('hostile input: every Manifest gets problems, never an exception', () =
   });
 
   it('keeps the limit ten times above the largest valid Manifest, whose size the schema bounds', () => {
-    const bound = maxValuesOf(manifestSchema);
+    // Top-level $schema is dropped before counting, like top-level x- keys.
+    const properties = { ...(manifestSchema.properties as Record<string, unknown>) };
+    delete properties.$schema;
+    const bound = maxValuesOf({ ...manifestSchema, properties });
     expect(bound).toBeLessThan(200); // the too_large message and manifest-spec.md §7 say so
     expect(bound * 10).toBeLessThanOrEqual(MAX_MANIFEST_VALUES);
     const result = validateManifest(largestValidManifest());
@@ -216,9 +219,12 @@ describe('hostile input: every Manifest gets problems, never an exception', () =
     expect(countValues(largestValidManifest())).toBe(bound);
   });
 
-  it('does not count top-level x- keys, which are never validated', () => {
+  it('does not count top-level x- or $schema keys, which are never validated', () => {
     const input = { ...minimalManifest(), 'x-data': Array(100_000).fill({ deep: nested(10) }) };
     expect(validateManifest(input).ok).toBe(true);
+    expect(validateManifest({ ...minimalManifest(), $schema: Array(100_000).fill(0) }).ok).toBe(
+      true,
+    );
     const text = minimalText.replace('"tags": [', `"x-deep": ${nested(100_000)}, "tags": [`);
     expect(validateManifest(text).ok).toBe(true);
   });
@@ -474,6 +480,17 @@ describe('the returned Manifest', () => {
     if (!result.ok) throw new Error('expected ok');
     expect(result.manifest).toEqual(minimalManifest());
     expect(Object.keys(result.manifest)).toEqual(Object.keys(minimalManifest()));
+  });
+
+  it('accepts a top-level $schema for editors, of any value, and leaves it out too', () => {
+    for (const value of [manifestSchema.$id, './manifest-v1.schema.json', 5, null]) {
+      const text = JSON.stringify({ $schema: value, ...minimalManifest() });
+      expect(validateManifest(text)).toEqual({
+        ok: true,
+        manifest: minimalManifest(),
+        warnings: [],
+      });
+    }
   });
 
   it('does not apply defaults (the type marks defaulted keys optional)', () => {

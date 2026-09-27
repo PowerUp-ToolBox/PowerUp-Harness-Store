@@ -39,6 +39,8 @@ async function render(outPath) {
   // Top-level `x-` keys are Publisher-private: validateManifest() drops them from the Manifest
   // it returns, so the type deliberately has no `[k: string]: unknown` index signature for them.
   delete schema.patternProperties;
+  // `$schema` is dropped the same way: it is there for editors only.
+  delete schema.properties.$schema;
   const source = await compile(schema, 'Manifest', {
     bannerComment: BANNER,
     // Objects in the schema are closed unless they say otherwise.

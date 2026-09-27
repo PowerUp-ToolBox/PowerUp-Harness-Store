@@ -432,6 +432,11 @@ describe('ui (UI Kind)', () => {
       problems: ['unknown_key@ui.x-note'],
     },
     {
+      name: '$schema is top-level only',
+      edit: (m) => (m.ui = { kind: 'web', $schema: 'x' }),
+      problems: ['unknown_key@ui["$schema"]'],
+    },
+    {
       name: 'web-only options on a terminal UI Kind',
       edit: (m) => (m.ui = { kind: 'terminal', path: '/', window: {} }),
       warnings: ['ignored_key@ui.path', 'ignored_key@ui.window'],

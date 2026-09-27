@@ -31,7 +31,7 @@ export const PROBLEM_CODES = Object.freeze({
   schema_maximum: 'schema_maximum',
   /** A list that must not repeat itself lists the same value twice. */
   schema_unique_items: 'schema_unique_items',
-  /** A key the Manifest format does not define. Top-level `x-` keys are exempt. */
+  /** A key the Manifest format does not define. Top-level `x-` keys and `$schema` are exempt. */
   unknown_key: 'unknown_key',
   /** `models.slots` has no `default` Model Slot. */
   slot_default_missing: 'slot_default_missing',
@@ -97,7 +97,7 @@ export const MESSAGES_EN = Object.freeze({
   schema_invalid_json: 'The Manifest is not valid JSON: {detail}',
   'schema_invalid_json.not_serializable': 'The Manifest cannot be serialised as JSON: {detail}',
   'schema_invalid_json.too_large':
-    'The Manifest is too large to check: it has more than {limit} values (objects, arrays, strings, numbers, booleans and nulls, not counting top-level "x-" keys). A valid Manifest has fewer than 200.',
+    'The Manifest is too large to check: it has more than {limit} values (objects, arrays, strings, numbers, booleans and nulls, not counting top-level "x-" keys and "$schema"). A valid Manifest has fewer than 200.',
   'schema_invalid_json.too_many_problems':
     'The Manifest has too many problems to check at once here. Remove the keys and list items the Manifest format does not define, then check it again.',
   schema_type: 'Expected {expected}; found {actual}.',

@@ -40,7 +40,9 @@ Screenshots are the files directly in `assets/` other than `icon.png` (hidden fi
 | `permissions` | object | yes | See §6. All three keys required (explicit is the point). |
 | `changelog` | string | no | Markdown for this version, ≤ 5 KB (5 120 bytes of UTF-8). Shown in version history and update prompts. |
 
-Unknown keys are rejected at every level of the Manifest (keeps the format honest). Use top-level `x-` prefixed keys for Publisher-private data: they are never validated and are ignored by the Store and the Runtime. An `x-` key inside a nested object is an unknown key like any other.
+Unknown keys are rejected at every level of the Manifest (keeps the format honest). Use top-level `x-` prefixed keys for Publisher-private data: they are never validated and are ignored by the Store and the Runtime. An `x-` key inside a nested object is an unknown key like any other. A top-level `$schema` key is allowed on the same terms, so an editor can check the file against the Manifest JSON Schema: `"$schema": "https://raw.githubusercontent.com/PowerUp-ToolBox/PowerUp-Harness-Store/main/packages/manifest/src/manifest-v1.schema.json"`.
+
+Reserved for later phases, and rejected in P0: `runtime.kind: "python"` (P0.5, §3), `channel: "beta"` (P1) and `distribution: { "encrypted": boolean }` (P1, paid Harnesses; until then `distribution` is an unknown key).
 
 Some keys are ignored in some configurations (for example `ui.path` for a `terminal` UI, `runtime.node` for a `binary` runtime). Such a key gives a warning, not a problem, but its value must still be valid: remove the key rather than leave a malformed value in it.
 
@@ -115,7 +117,7 @@ Declared Permissions are **informational in P0**: they are displayed for consent
 
 ## 7. Validation rules the Store and Runtime both apply
 
-1. Schema validity (types, enums, patterns, limits). A `manifest.json` that is not JSON, or that holds more than 2 000 JSON values (objects, arrays, strings, numbers, booleans and nulls) outside its top-level `x-` keys, is rejected as a whole with a single `schema_invalid_json` problem. Every list and map in the Manifest has a maximum size, so the largest valid Manifest has fewer than 200 values; the limit only bounds the work spent on hostile input. A number beyond the range of a 64-bit float (such as `1e400`) cannot be stored or read back as JSON and is a `schema_type` problem.
+1. Schema validity (types, enums, patterns, limits). A `manifest.json` that is not JSON, or that holds more than 2 000 JSON values (objects, arrays, strings, numbers, booleans and nulls) outside its top-level `x-` and `$schema` keys, is rejected as a whole with a single `schema_invalid_json` problem. Every list and map in the Manifest has a maximum size, so the largest valid Manifest has fewer than 200 values; the limit only bounds the work spent on hostile input. A number beyond the range of a 64-bit float (such as `1e400`) cannot be stored or read back as JSON and is a `schema_type` problem.
 2. Referenced files exist in the archive (`entry` targets, icon, README, screenshots).
 3. `id.publisher` matches the authenticated Publisher (Store only).
 4. `version` is greater than all published versions (Store only).
