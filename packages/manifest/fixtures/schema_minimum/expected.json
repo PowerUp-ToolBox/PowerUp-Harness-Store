@@ -1,0 +1,10 @@
+{
+  "description": "ui.readyTimeoutSeconds must be at least 5.",
+  "problems": [
+    {
+      "code": "schema_minimum",
+      "path": "ui.readyTimeoutSeconds"
+    }
+  ],
+  "warnings": []
+}

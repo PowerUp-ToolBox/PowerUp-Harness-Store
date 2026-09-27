@@ -1,0 +1,10 @@
+{
+  "description": "channel \"beta\" is reserved for P1; P0 accepts only \"stable\".",
+  "problems": [
+    {
+      "code": "schema_enum",
+      "path": "channel"
+    }
+  ],
+  "warnings": []
+}

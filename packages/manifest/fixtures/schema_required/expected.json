@@ -1,0 +1,10 @@
+{
+  "description": "license is required.",
+  "problems": [
+    {
+      "code": "schema_required",
+      "path": "license"
+    }
+  ],
+  "warnings": []
+}

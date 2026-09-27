@@ -1,0 +1,22 @@
+{
+  "description": "A clean folder; its archive adds a stored file of 500 MB of zeros, so it is just over 500 MB.",
+  "problems": [],
+  "warnings": [],
+  "archive": {
+    "recipe": {
+      "largeFiles": [
+        {
+          "name": "data/padding.bin",
+          "bytes": 524288000
+        }
+      ]
+    },
+    "problems": [
+      {
+        "code": "archive_too_large",
+        "path": "$"
+      }
+    ],
+    "warnings": []
+  }
+}

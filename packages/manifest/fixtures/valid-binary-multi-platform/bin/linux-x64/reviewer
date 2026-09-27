@@ -1,0 +1,2 @@
+#!/bin/sh
+# Stands in for an executable of a test fixture Harness Package. It is never run.

@@ -1,0 +1,339 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/PowerUp-ToolBox/PowerUp-Harness-Store/main/packages/manifest/src/manifest-v1.schema.json",
+  "title": "Manifest",
+  "description": "manifest.json at the root of a Harness Package, manifestVersion 1. Normative prose: docs/tech/manifest-spec.md.",
+  "type": "object",
+  "required": [
+    "manifestVersion",
+    "id",
+    "version",
+    "name",
+    "summary",
+    "license",
+    "platforms",
+    "runtime",
+    "entry",
+    "ui",
+    "models",
+    "permissions"
+  ],
+  "properties": {
+    "$schema": {
+      "description": "The JSON Schema an editor should check this file against, usually this schema's $id. Never validated, and ignored by the Store and the Runtime, like top-level x- keys."
+    },
+    "manifestVersion": {
+      "description": "Version of this Manifest format. This schema describes version 1 only.",
+      "const": 1
+    },
+    "id": {
+      "description": "Harness ID, `publisher/slug`. The publisher segment is the Publisher's GitHub login, lower-cased. Immutable for the life of the Harness.",
+      "$ref": "#/$defs/harnessId"
+    },
+    "version": {
+      "description": "Harness Version: strict semver (MAJOR.MINOR.PATCH with an optional pre-release, no build metadata). Must be greater than every previously published version.",
+      "$ref": "#/$defs/semver"
+    },
+    "name": {
+      "description": "Display name, 2 to 40 characters.",
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 40
+    },
+    "summary": {
+      "description": "One sentence shown in lists, at most 120 characters.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "tags": {
+      "description": "At most 5 tags from the curated list, without duplicates.",
+      "type": "array",
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/tag" }
+    },
+    "license": {
+      "description": "SPDX license identifier (e.g. `MIT`) or `proprietary`.",
+      "$ref": "#/$defs/license"
+    },
+    "homepage": {
+      "description": "Absolute http(s) URL of the Harness's homepage, without a user name or password.",
+      "$ref": "#/$defs/httpUrl"
+    },
+    "sourceRepo": {
+      "description": "Absolute http(s) URL of the source repository, without a user name or password, shown as \"Source\" on the detail page.",
+      "$ref": "#/$defs/httpUrl"
+    },
+    "channel": {
+      "description": "Channel. Only `stable` exists in P0; `beta` is reserved for P1.",
+      "const": "stable",
+      "default": "stable"
+    },
+    "platforms": {
+      "description": "Non-empty list of the platforms the Harness runs on, without duplicates.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/platform" }
+    },
+    "runtime": { "$ref": "#/$defs/harnessRuntime" },
+    "entry": {
+      "title": "Entry",
+      "description": "The command the Runtime executes. `node`: a relative path to a .js, .mjs or .cjs file. `binary`: an object mapping every declared platform to the relative path of an executable.",
+      "type": ["string", "object"],
+      "$ref": "#/$defs/nodeEntryPath",
+      "properties": {
+        "darwin-arm64": { "$ref": "#/$defs/relativePath" },
+        "darwin-x64": { "$ref": "#/$defs/relativePath" },
+        "win32-x64": { "$ref": "#/$defs/relativePath" },
+        "win32-arm64": { "$ref": "#/$defs/relativePath" },
+        "linux-x64": { "$ref": "#/$defs/relativePath" },
+        "linux-arm64": { "$ref": "#/$defs/relativePath" }
+      },
+      "propertyNames": { "$ref": "#/$defs/platform" }
+    },
+    "ui": { "$ref": "#/$defs/userInterface" },
+    "workspace": {
+      "description": "Whether the Harness asks the User for a Workspace at launch.",
+      "enum": ["required", "optional", "none"],
+      "default": "none"
+    },
+    "models": { "$ref": "#/$defs/models" },
+    "permissions": { "$ref": "#/$defs/declaredPermissions" },
+    "changelog": {
+      "description": "Markdown for this version, at most 5 KB (5 120 bytes of UTF-8).",
+      "type": "string"
+    }
+  },
+  "patternProperties": {
+    "^x-": {
+      "description": "Publisher-private data. Ignored by the Store and the Runtime."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "harnessId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?$"
+    },
+    "license": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*\\+?$"
+    },
+    "httpUrl": {
+      "type": "string",
+      "pattern": "^https?://[^\\s/?#\\\\@]+(?:[/?#]\\S*)?$"
+    },
+    "tag": {
+      "title": "Tag",
+      "enum": [
+        "coding",
+        "writing",
+        "research",
+        "data",
+        "productivity",
+        "devops",
+        "design",
+        "education",
+        "fun",
+        "other"
+      ]
+    },
+    "platform": {
+      "title": "Platform",
+      "enum": ["darwin-arm64", "darwin-x64", "win32-x64", "win32-arm64", "linux-x64", "linux-arm64"]
+    },
+    "relativePath": {
+      "description": "Path of a file inside the Harness Package, relative to the archive root, with `/` separators and no `.` or `..` segments.",
+      "type": "string",
+      "pattern": "^(?:[^/\\\\:.\\x00-\\x1f]|\\.[^/\\\\:.\\x00-\\x1f]|\\.\\.[^/\\\\:\\x00-\\x1f])[^/\\\\:\\x00-\\x1f]*(?:/(?:[^/\\\\:.\\x00-\\x1f]|\\.[^/\\\\:.\\x00-\\x1f]|\\.\\.[^/\\\\:\\x00-\\x1f])[^/\\\\:\\x00-\\x1f]*)*$"
+    },
+    "nodeEntryPath": {
+      "description": "A `relativePath` that ends in .js, .mjs or .cjs. Applies to the string form of `entry`.",
+      "pattern": "^(?:(?:[^/\\\\:.\\x00-\\x1f]|\\.[^/\\\\:.\\x00-\\x1f]|\\.\\.[^/\\\\:\\x00-\\x1f])[^/\\\\:\\x00-\\x1f]*/)*[^/\\\\:\\x00-\\x1f]+\\.(?:js|mjs|cjs)$"
+    },
+    "harnessRuntime": {
+      "title": "HarnessRuntime",
+      "description": "What the Harness needs from the Runtime to start. `node`: the Runtime runs `entry` with its bundled Node 22. `binary`: the Harness ships its own executables.",
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["node", "binary"] },
+        "node": {
+          "description": "Node major the Runtime supplies. Required when kind is `node`; only `22` exists in P0.",
+          "const": "22"
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "required": ["kind"],
+        "properties": { "kind": { "const": "node" } }
+      },
+      "then": { "required": ["node"] }
+    },
+    "userInterface": {
+      "title": "UserInterface",
+      "description": "UI Kind and its options. `path`, `readyTimeoutSeconds` and `window` apply to `web` only.",
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["web", "terminal"] },
+        "path": {
+          "description": "Path the Runtime opens on the Harness's local server. Starts with a single `/`.",
+          "default": "/",
+          "$ref": "#/$defs/uiPath"
+        },
+        "readyTimeoutSeconds": {
+          "description": "Seconds the Runtime waits for the port to accept connections.",
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 120,
+          "default": 30
+        },
+        "window": {
+          "title": "WindowHints",
+          "description": "Initial window size hints, in pixels.",
+          "type": "object",
+          "properties": {
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "uiPath": {
+      "type": "string",
+      "pattern": "^/(?:[^/\\\\\\s][^\\\\\\s]*)?$"
+    },
+    "models": {
+      "title": "Models",
+      "description": "The Model Slots the Harness uses.",
+      "type": "object",
+      "required": ["slots"],
+      "properties": {
+        "slots": {
+          "title": "ModelSlots",
+          "description": "Model Slots by name. `default` is mandatory; at most 8 Slots.",
+          "type": "object",
+          "required": ["default"],
+          "maxProperties": 8,
+          "properties": {
+            "default": { "$ref": "#/$defs/modelSlot" }
+          },
+          "propertyNames": { "$ref": "#/$defs/slotName" },
+          "additionalProperties": { "$ref": "#/$defs/modelSlot" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "slotName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+    },
+    "modelSlot": {
+      "title": "ModelSlot",
+      "description": "A Model Slot. The Harness asks the Model Gateway for it by name; the User decides which model fills it.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "What the Harness uses this Slot for.",
+          "type": "string"
+        },
+        "requirements": { "$ref": "#/$defs/modelRequirements" },
+        "recommended": {
+          "description": "Recommended Models, in preference order: at most 5 `provider/model` ids, without duplicates.",
+          "type": "array",
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/modelId" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "modelRequirements": {
+      "title": "ModelRequirements",
+      "description": "Model Requirements: what the Model Slot needs from a model. An absent key means no requirement.",
+      "type": "object",
+      "properties": {
+        "tools": { "type": "boolean" },
+        "minContext": {
+          "description": "Minimum context window, in tokens.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "vision": { "type": "boolean" },
+        "json": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "modelId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*/[^\\s/]\\S*$"
+    },
+    "declaredPermissions": {
+      "title": "DeclaredPermissions",
+      "description": "Declared Permissions. All three keys are required. Informational in P0: shown for consent, not enforced.",
+      "type": "object",
+      "required": ["filesystem", "shell", "network"],
+      "properties": {
+        "filesystem": { "$ref": "#/$defs/filesystemPermission" },
+        "shell": {
+          "description": "Whether the Harness executes commands.",
+          "type": "boolean"
+        },
+        "network": { "$ref": "#/$defs/networkPermission" }
+      },
+      "additionalProperties": false
+    },
+    "filesystemPermission": {
+      "title": "FilesystemPermission",
+      "type": "object",
+      "required": ["scope"],
+      "properties": {
+        "scope": {
+          "description": "`none`: only its Data Directory. `workspace`: the chosen Workspace. `home`: anywhere under the User's home. `paths`: the listed paths.",
+          "enum": ["none", "workspace", "home", "paths"]
+        },
+        "paths": {
+          "description": "At most 20 explicit paths (`~` allowed) of at most 1024 characters each, without duplicates. Required and non-empty when scope is `paths`.",
+          "type": "array",
+          "maxItems": 20,
+          "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "required": ["scope"],
+        "properties": { "scope": { "const": "paths" } }
+      },
+      "then": {
+        "required": ["paths"],
+        "properties": { "paths": { "minItems": 1 } }
+      }
+    },
+    "networkPermission": {
+      "title": "NetworkPermission",
+      "description": "Either `domains` (a list, possibly empty) or `any: true`. Traffic to the Model Gateway is implied and not declared.",
+      "type": "object",
+      "properties": {
+        "domains": {
+          "description": "At most 20 lower-case domain names, optionally prefixed with `*.`, without duplicates.",
+          "type": "array",
+          "maxItems": 20,
+          "items": { "$ref": "#/$defs/domain" }
+        },
+        "any": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "domain": {
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^(?:\\*\\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+    }
+  }
+}

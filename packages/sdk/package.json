@@ -1,0 +1,25 @@
+{
+  "name": "@harness-store/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "SDK for Node Harness authors: launch environment, Gateway client and Model Slot helpers.",
+  "type": "module",
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  }
+}

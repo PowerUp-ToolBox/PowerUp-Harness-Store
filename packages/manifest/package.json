@@ -1,0 +1,47 @@
+{
+  "name": "@harness-store/manifest",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Single source of truth for the Harness Manifest: JSON Schema, types, validators and CLI.",
+  "type": "module",
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "default": "./dist/node/index.js"
+    },
+    "./manifest-v1.schema.json": "./dist/manifest-v1.schema.json"
+  },
+  "bin": {
+    "harness-manifest": "./bin/harness-manifest.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "generate": "node scripts/generate-types.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit && node scripts/generate-types.mjs --check",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
+    "fflate": "^0.8.3",
+    "semver": "^7.8.5"
+  },
+  "devDependencies": {
+    "@types/semver": "^7.8.0",
+    "fast-check": "^4.10.2",
+    "json-schema-to-typescript": "^16.0.0",
+    "prettier": "^3.9.9",
+    "vite": "^8.3.1"
+  }
+}

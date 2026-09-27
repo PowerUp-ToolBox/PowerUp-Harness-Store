@@ -1,0 +1,10 @@
+{
+  "description": "models.slots declares only a fast Slot.",
+  "problems": [
+    {
+      "code": "slot_default_missing",
+      "path": "models.slots.default"
+    }
+  ],
+  "warnings": []
+}

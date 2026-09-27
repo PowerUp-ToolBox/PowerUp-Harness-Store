@@ -1,0 +1,10 @@
+{
+  "description": "summary must be at most 120 characters.",
+  "problems": [
+    {
+      "code": "schema_max_length",
+      "path": "summary"
+    }
+  ],
+  "warnings": []
+}

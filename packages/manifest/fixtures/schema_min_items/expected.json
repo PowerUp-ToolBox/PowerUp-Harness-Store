@@ -1,0 +1,10 @@
+{
+  "description": "platforms must not be empty.",
+  "problems": [
+    {
+      "code": "schema_min_items",
+      "path": "platforms"
+    }
+  ],
+  "warnings": []
+}

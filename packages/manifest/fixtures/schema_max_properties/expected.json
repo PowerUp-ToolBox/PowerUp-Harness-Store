@@ -1,0 +1,10 @@
+{
+  "description": "At most 8 Model Slots (this Manifest declares 9).",
+  "problems": [
+    {
+      "code": "schema_max_properties",
+      "path": "models.slots"
+    }
+  ],
+  "warnings": []
+}

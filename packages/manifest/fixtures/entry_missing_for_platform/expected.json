@@ -1,0 +1,10 @@
+{
+  "description": "A binary Harness declares win32-x64 but has no entry for it.",
+  "problems": [
+    {
+      "code": "entry_missing_for_platform",
+      "path": "entry.win32-x64"
+    }
+  ],
+  "warnings": []
+}

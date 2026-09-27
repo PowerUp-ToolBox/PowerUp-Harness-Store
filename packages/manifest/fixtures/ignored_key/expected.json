@@ -1,0 +1,10 @@
+{
+  "description": "A terminal UI Kind with a web-only option: a warning, not a problem.",
+  "problems": [],
+  "warnings": [
+    {
+      "code": "ignored_key",
+      "path": "ui.readyTimeoutSeconds"
+    }
+  ]
+}

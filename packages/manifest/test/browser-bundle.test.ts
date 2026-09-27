@@ -1,0 +1,223 @@
+/**
+ * Ticket P0-01.2, "How to verify" step 4 and acceptance criterion 8: the package's main entry
+ * bundles for a browser target (the Electron renderer) and runs without any Node-only global.
+ */
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { builtinModules } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createContext, runInContext } from 'node:vm';
+import { build } from 'vite';
+import type { Plugin, Rolldown } from 'vite';
+import { beforeAll, describe, expect, it } from 'vitest';
+import {
+  findings,
+  fixtureNames,
+  loadFixture,
+  manifestExpectation,
+  minimalManifest,
+  packageRoot,
+} from './helpers.js';
+import type { FixtureExpectation } from './helpers.js';
+import { fixtureDir, hostileArchive, readTree, zipFolder } from './support/packages.js';
+
+/** Fails the build on any Node built-in instead of letting Vite stub it for the browser. */
+function forbidNodeBuiltins(): Plugin {
+  const builtins = new Set(builtinModules);
+  return {
+    name: 'forbid-node-builtins',
+    enforce: 'pre',
+    resolveId(source) {
+      if (
+        source.startsWith('node:') ||
+        builtins.has(source) ||
+        builtins.has(source.split('/')[0] ?? '')
+      ) {
+        this.error(`The browser bundle imports the Node built-in "${source}"`);
+      }
+      return null;
+    },
+  };
+}
+
+/** A browser build of `entry` as one IIFE script, the way a renderer bundler would see it. */
+function bundleForBrowser(entry: string) {
+  return build({
+    root: packageRoot,
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [forbidNodeBuiltins()],
+    build: {
+      write: false,
+      minify: false,
+      target: 'es2022',
+      lib: { entry, formats: ['iife'], name: 'HarnessManifest' },
+    },
+  }) as Promise<Rolldown.RolldownOutput | Rolldown.RolldownOutput[]>;
+}
+
+let code = '';
+
+beforeAll(async () => {
+  const output = await bundleForBrowser('src/index.ts');
+  const chunks = [output]
+    .flat()
+    .flatMap((result) => result.output)
+    .filter((item): item is Rolldown.OutputChunk => item.type === 'chunk');
+  expect(chunks).toHaveLength(1);
+  code = chunks[0]?.code ?? '';
+});
+
+interface BundledPackage {
+  validateManifest: (input: unknown, options?: unknown) => unknown;
+  validatePackage: (source: unknown, options?: unknown) => Promise<unknown>;
+  diffForReconsent: (previous: unknown, next: unknown) => unknown;
+  ArchiveSource: { open: (archive: unknown) => Promise<unknown> };
+  InMemorySource: new (files: unknown) => unknown;
+  PROBLEM_CODES: Record<string, string>;
+}
+
+/**
+ * Runs the bundle in a fresh V8 context holding only ECMAScript built-ins plus the two web
+ * platform globals the package uses (TextDecoder for byte input, URL inside the JSON Schema
+ * library), both of which browsers, Electron's renderer and Deno provide. No process, Buffer,
+ * require, module or globalThis.fetch exists there.
+ */
+function loadInSandbox(): BundledPackage {
+  const sandbox = createContext({ TextDecoder, URL });
+  runInContext(code, sandbox, { filename: 'harness-manifest.iife.js' });
+  const exported = (sandbox as { HarnessManifest?: BundledPackage }).HarnessManifest;
+  if (!exported) throw new Error('The bundle did not define HarnessManifest');
+  return exported;
+}
+
+describe('browser bundle of @harness-store/manifest', () => {
+  it('builds for the browser without any Node built-in', () => {
+    expect(code.length).toBeGreaterThan(1000);
+  });
+
+  it('would fail to build if the entry point imported a Node built-in (the guard works)', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'manifest-bundle-'));
+    try {
+      const entry = join(scratch, 'uses-fs.ts');
+      writeFileSync(
+        entry,
+        "import { readFileSync } from 'node:fs';\nexport const read = readFileSync;\n",
+      );
+      await expect(bundleForBrowser(entry)).rejects.toThrow(/Node built-in "node:fs"/);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('contains no eval or new Function, so it runs under a strict Content Security Policy', () => {
+    expect(code).not.toMatch(/\beval\s*\(/);
+    expect(code).not.toMatch(/\bnew\s+Function\s*\(/);
+    expect(code).not.toMatch(/\bFunction\s*\(\s*["'`]/);
+  });
+
+  it.each(fixtureNames())(
+    'validates fixtures/%s in a sandbox without Node globals exactly as in Node',
+    (name) => {
+      const { validateManifest } = loadInSandbox();
+      const { manifestText, expected: fixture } = loadFixture(name);
+      const expected = { ...manifestExpectation(fixture), options: fixture.options };
+      // Results cross the realm boundary as JSON.
+      const result = JSON.parse(
+        JSON.stringify(validateManifest(manifestText, expected.options)),
+      ) as {
+        ok: boolean;
+        problems?: FixtureExpectation['problems'];
+        warnings: FixtureExpectation['warnings'];
+      };
+      expect(result.ok).toBe(expected.problems.length === 0);
+      expect(findings(result.problems ?? [])).toEqual(findings(expected.problems));
+      expect(findings(result.warnings)).toEqual(findings(expected.warnings));
+    },
+  );
+
+  // Bytes cross the realm boundary as they are: the bundle must recognise another realm's
+  // Uint8Array (ArrayBuffer.isView), as it would for bytes from a worker or an iframe.
+  it.each(fixtureNames())(
+    'validates fixtures/%s zipped and in memory, in the sandbox, exactly as in Node',
+    async (name) => {
+      const { validatePackage, ArchiveSource, InMemorySource } = loadInSandbox();
+      const { expected } = loadFixture(name);
+      const sources = [
+        await ArchiveSource.open(zipFolder(fixtureDir(name))),
+        new InMemorySource(new Map(readTree(fixtureDir(name)).files)),
+      ];
+      for (const source of sources) {
+        const result = JSON.parse(
+          JSON.stringify(await validatePackage(source, expected.options)),
+        ) as {
+          problems?: FixtureExpectation['problems'];
+          warnings: FixtureExpectation['warnings'];
+        };
+        expect(findings(result.problems ?? [])).toEqual(findings(expected.problems));
+        expect(findings(result.warnings)).toEqual(findings(expected.warnings));
+      }
+    },
+  );
+
+  it('rejects the hostile archives in the sandbox too', async () => {
+    const { validatePackage, ArchiveSource } = loadInSandbox();
+    for (const name of ['archive_path_traversal', 'archive_symlink', 'archive_invalid']) {
+      const result = (await validatePackage(await ArchiveSource.open(hostileArchive(name)))) as {
+        problems: FixtureExpectation['problems'];
+      };
+      expect(findings(result.problems)).toEqual(
+        findings(loadFixture(name).expected.archive?.problems ?? []),
+      );
+    }
+  });
+
+  it('diffs Manifests for re-consent in the sandbox', () => {
+    const { diffForReconsent } = loadInSandbox();
+    const previous = minimalManifest();
+    const next = { ...minimalManifest(), entry: 'dist/main.js' };
+    expect(JSON.parse(JSON.stringify(diffForReconsent(previous, next)))).toEqual({
+      required: true,
+      reasons: ['entry_changed'],
+      added: ['entry:dist/main.js'],
+      removed: ['entry:dist/index.js'],
+    });
+  });
+
+  it('accepts UTF-8 bytes in the sandbox too', () => {
+    const { validateManifest } = loadInSandbox();
+    const bytes = new TextEncoder().encode(loadFixture('valid-minimal-node').manifestText);
+    expect((validateManifest(bytes) as { ok: boolean }).ok).toBe(true);
+  });
+
+  // Workers and some isolate hosts run with far less stack than Node's default (about 984 KB).
+  // The JSON Schema library gathers errors with push(...errors), so a document at the value limit
+  // with thousands of problems overflows a 60 KB stack inside the library.
+  it('returns problems instead of throwing on a host with a small stack', () => {
+    const manifest = minimalManifest();
+    const slots = (manifest.models as { slots: Record<string, unknown> }).slots;
+    for (let i = 0; i < 1_950; i++) slots[`S${String(i)}`] = 5;
+    const scratch = mkdtempSync(join(tmpdir(), 'manifest-stack-'));
+    try {
+      const script = join(scratch, 'small-stack.cjs');
+      writeFileSync(
+        script,
+        `${code}\nconst result = HarnessManifest.validateManifest(${JSON.stringify(manifest)});\n` +
+          'process.stdout.write(JSON.stringify(result.problems.map((p) => p.messageKey)));\n',
+      );
+      const run = (stackKb: number) => {
+        const child = spawnSync(process.execPath, [`--stack-size=${String(stackKb)}`, script], {
+          encoding: 'utf8',
+        });
+        expect(child.stderr).toBe('');
+        expect(child.status).toBe(0);
+        return JSON.parse(child.stdout) as string[];
+      };
+      expect(run(60)).toEqual(['schema_invalid_json.too_many_problems']);
+      expect(run(984)).toContain('schema_pattern.slotName');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+});

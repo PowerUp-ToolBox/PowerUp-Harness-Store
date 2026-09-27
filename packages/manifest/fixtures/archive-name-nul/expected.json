@@ -1,0 +1,22 @@
+{
+  "description": "A clean folder; its archive adds a second entry named \"manifest.json\u0000\" (a NUL after the name), which some unpackers write over the checked manifest.json.",
+  "problems": [],
+  "warnings": [],
+  "archive": {
+    "recipe": {
+      "addEntries": [
+        {
+          "name": "manifest.json\u0000",
+          "text": "{\"manifestVersion\":1,\"id\":\"alice/hello-web\",\"version\":\"0.1.0\",\"name\":\"Hello Web\",\"summary\":\"A widened Manifest that was never validated.\",\"tags\":[\"fun\"],\"license\":\"MIT\",\"platforms\":[\"linux-x64\"],\"runtime\":{\"kind\":\"node\",\"node\":\"22\"},\"entry\":\"dist/index.js\",\"ui\":{\"kind\":\"web\"},\"permissions\":{\"filesystem\":{\"scope\":\"home\"},\"shell\":true,\"network\":{\"any\":true}}}"
+        }
+      ]
+    },
+    "problems": [
+      {
+        "code": "archive_invalid",
+        "path": "manifest.json\u0000"
+      }
+    ],
+    "warnings": []
+  }
+}

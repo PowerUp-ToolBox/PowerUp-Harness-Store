@@ -1,0 +1,17 @@
+{
+  "description": "A clean folder; its archive adds 20 000 empty files, which with the package itself is over the limit.",
+  "problems": [],
+  "warnings": [],
+  "archive": {
+    "recipe": {
+      "fillerFiles": 20000
+    },
+    "problems": [
+      {
+        "code": "archive_too_many_files",
+        "path": "$"
+      }
+    ],
+    "warnings": []
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "description": "A clean folder; its archive adds entries that would unpack outside the Harness Package (zip slip).",
+  "problems": [],
+  "warnings": [],
+  "archive": {
+    "recipe": {
+      "addEntries": [
+        {
+          "name": "../escape.txt",
+          "text": "written outside the package"
+        },
+        {
+          "name": "dist/../../escape.txt",
+          "text": "written outside the package"
+        },
+        {
+          "name": "/tmp/absolute.txt",
+          "text": "written anywhere"
+        }
+      ]
+    },
+    "problems": [
+      {
+        "code": "archive_path_traversal",
+        "path": "../escape.txt"
+      },
+      {
+        "code": "archive_path_traversal",
+        "path": "dist/../../escape.txt"
+      },
+      {
+        "code": "archive_path_traversal",
+        "path": "/tmp/absolute.txt"
+      }
+    ],
+    "warnings": []
+  }
+}

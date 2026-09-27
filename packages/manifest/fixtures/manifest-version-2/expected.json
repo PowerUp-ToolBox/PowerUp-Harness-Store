@@ -1,0 +1,10 @@
+{
+  "description": "This validator understands manifestVersion 1 only.",
+  "problems": [
+    {
+      "code": "schema_enum",
+      "path": "manifestVersion"
+    }
+  ],
+  "warnings": []
+}

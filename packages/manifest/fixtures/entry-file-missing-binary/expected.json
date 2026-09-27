@@ -1,0 +1,14 @@
+{
+  "description": "A binary Harness for three platforms without the executable for win32-x64.",
+  "problems": [
+    {
+      "code": "entry_missing_for_platform",
+      "path": "entry.win32-x64"
+    }
+  ],
+  "warnings": [],
+  "manifest": {
+    "problems": [],
+    "warnings": []
+  }
+}

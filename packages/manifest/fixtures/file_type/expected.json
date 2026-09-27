@@ -1,0 +1,18 @@
+{
+  "description": "The icon is a JPEG named icon.png, and a screenshot named .png holds a JPEG too.",
+  "problems": [
+    {
+      "code": "file_type",
+      "path": "assets/icon.png"
+    },
+    {
+      "code": "file_type",
+      "path": "assets/screenshot-1.png"
+    }
+  ],
+  "warnings": [],
+  "manifest": {
+    "problems": [],
+    "warnings": []
+  }
+}

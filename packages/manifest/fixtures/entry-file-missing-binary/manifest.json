@@ -1,0 +1,62 @@
+{
+  "manifestVersion": 1,
+  "id": "alice/code-reviewer",
+  "version": "2.1.0-beta.3",
+  "name": "Code Reviewer",
+  "summary": "Reviews the diff in your Workspace and suggests fixes.",
+  "tags": ["coding", "devops"],
+  "license": "Apache-2.0",
+  "homepage": "https://example.com/code-reviewer",
+  "sourceRepo": "https://github.com/alice/code-reviewer",
+  "channel": "stable",
+  "platforms": ["darwin-arm64", "win32-x64", "linux-x64"],
+  "runtime": {
+    "kind": "binary"
+  },
+  "entry": {
+    "darwin-arm64": "bin/mac-arm64/reviewer",
+    "win32-x64": "bin/win-x64/reviewer.exe",
+    "linux-x64": "bin/linux-x64/reviewer"
+  },
+  "ui": {
+    "kind": "terminal"
+  },
+  "workspace": "required",
+  "models": {
+    "slots": {
+      "default": {
+        "description": "Main reasoning model used for reviews",
+        "requirements": {
+          "tools": true,
+          "minContext": 64000,
+          "vision": false,
+          "json": false
+        },
+        "recommended": ["anthropic/claude-sonnet-4-5", "openai/gpt-5", "deepseek/deepseek-chat"]
+      },
+      "fast": {
+        "description": "Cheap model for summarising diffs",
+        "requirements": {
+          "tools": false,
+          "minContext": 16000
+        },
+        "recommended": ["ollama/qwen3:8b", "openai/gpt-5-mini"]
+      }
+    }
+  },
+  "permissions": {
+    "filesystem": {
+      "scope": "paths",
+      "paths": ["~/.gitconfig", "~/.config/code-reviewer"]
+    },
+    "shell": true,
+    "network": {
+      "domains": ["api.github.com", "*.githubusercontent.com"]
+    }
+  },
+  "changelog": "## 2.1.0-beta.3\n\n- Reviews staged changes as well as commits.",
+  "x-internal": {
+    "build": "ci-1234",
+    "owner": "alice"
+  }
+}

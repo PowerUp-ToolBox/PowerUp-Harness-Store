@@ -1,0 +1,13 @@
+{
+  "description": "Version 1.1.0 is not greater than the published 1.2.0.",
+  "options": {
+    "publishedVersions": ["1.0.0", "1.2.0"]
+  },
+  "problems": [
+    {
+      "code": "version_not_greater",
+      "path": "version"
+    }
+  ],
+  "warnings": []
+}

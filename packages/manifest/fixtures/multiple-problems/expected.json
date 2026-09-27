@@ -1,0 +1,22 @@
+{
+  "description": "Independent problems are all reported in one pass: no default Slot, a missing name, an unknown key and a bad platform.",
+  "problems": [
+    {
+      "code": "schema_required",
+      "path": "name"
+    },
+    {
+      "code": "slot_default_missing",
+      "path": "models.slots.default"
+    },
+    {
+      "code": "unknown_key",
+      "path": "foo"
+    },
+    {
+      "code": "schema_enum",
+      "path": "platforms[1]"
+    }
+  ],
+  "warnings": []
+}
