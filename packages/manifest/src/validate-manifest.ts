@@ -63,7 +63,7 @@ export function inspectManifest(
     // The JSON Schema library gathers errors with `push(...errors)`. The value limit keeps their
     // number far below what Node's default stack takes, but a host with a much smaller stack
     // (some workers and isolates) can still overflow it.
-    if (!(error instanceof RangeError)) throw error;
+    if (!isStackOverflow(error)) throw error;
     const problem = createProblem('schema_invalid_json.too_many_problems', []);
     return { result: { ok: false, problems: [problem], warnings: [] }, document };
   }
@@ -84,6 +84,18 @@ export function inspectManifest(
 
   if (problems.length > 0) return { result: { ok: false, problems, warnings }, document };
   return { result: { ok: true, manifest: document as Manifest, warnings }, document };
+}
+
+/**
+ * V8 reports running out of stack as a RangeError, except when it runs out while compiling a
+ * regular expression (the library tests a schema `pattern`): that is a SyntaxError ending in
+ * `: Stack overflow` (Node 24 and later hit it first on a small stack).
+ */
+function isStackOverflow(error: unknown): boolean {
+  return (
+    error instanceof RangeError ||
+    (error instanceof SyntaxError && error.message.endsWith(': Stack overflow'))
+  );
 }
 
 /**

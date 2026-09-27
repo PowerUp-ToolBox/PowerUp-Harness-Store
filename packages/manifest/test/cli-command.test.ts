@@ -193,15 +193,23 @@ describe('P0-01.4 How to verify, with the built command', () => {
         cli.stdout.pipe(parser.stdin);
         let parsed = '';
         let stderr = '';
-        let status = -1;
         parser.stdout.setEncoding('utf8').on('data', (chunk: string) => (parsed += chunk));
         cli.stderr.setEncoding('utf8').on('data', (chunk: string) => (stderr += chunk));
         cli.on('error', reject);
         parser.on('error', reject);
-        cli.on('close', (code) => (status = code ?? -1));
+        // The parser can close before the command does, so its status and stderr are awaited.
+        const cliClosed = new Promise<number>((done) => {
+          cli.on('close', (code) => {
+            done(code ?? -1);
+          });
+        });
         parser.on('close', (code) => {
-          if (code === 0) resolve({ status, parsed, stderr });
-          else reject(new Error(`the JSON validator exited with ${String(code)}`));
+          if (code !== 0) reject(new Error(`the JSON validator exited with ${String(code)}`));
+          else {
+            void cliClosed.then((status) => {
+              resolve({ status, parsed, stderr });
+            });
+          }
         });
       });
 

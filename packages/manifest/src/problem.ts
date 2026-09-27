@@ -78,7 +78,7 @@ export const stringifyJson: (value: unknown) => string | undefined = JSON.string
  * {@link PREVIEW_LENGTH} code points is cut and ends in `…`. For JSON values the result is
  * `JSON.stringify` cut to that length, but the work is bounded by the length too: a value from an
  * untrusted Manifest may be nested thousands of levels deep (which overflows the call stack of
- * `JSON.stringify`) or hold millions of items.
+ * `JSON.stringify` before Node 26) or hold millions of items.
  */
 export function preview(value: unknown): string {
   let out = '';

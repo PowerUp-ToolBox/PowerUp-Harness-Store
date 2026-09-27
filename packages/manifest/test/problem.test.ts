@@ -28,14 +28,15 @@ describe('preview', () => {
     for (const value of values) expect(preview(value)).toBe(truncate(JSON.stringify(value)));
   });
 
-  it('renders values nested far deeper than JSON.stringify can, in bounded time', () => {
+  // A million levels overflow a recursive printer such as JSON.stringify in Node 22 and 24 (Node
+  // 26's does not recurse, so the test does not assert that it throws).
+  it('renders values nested far deeper than the call stack allows, in bounded time', () => {
     let deepArray: unknown = [];
     let deepObject: unknown = {};
     for (let i = 0; i < 1_000_000; i++) {
       deepArray = [deepArray];
       deepObject = { a: deepObject };
     }
-    expect(() => JSON.stringify(deepArray)).toThrow(RangeError);
     expect(preview(deepArray)).toBe(`${'['.repeat(60)}…`);
     expect(preview(deepObject)).toBe(`${'{"a":'.repeat(12)}…`);
   });
