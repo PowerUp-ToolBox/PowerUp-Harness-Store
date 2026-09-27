@@ -22,17 +22,17 @@ A pnpm monorepo with the agreed layout and one command to test everything, plus 
 2. As a developer, I want each app and package to have its own test script and a root script that runs them all, so that CI and local runs use the same entry point.
 3. As a developer, I want shared TypeScript, ESLint and Prettier configuration at the root, so that every package follows the same rules without copy-paste.
 4. As a developer, I want the workspace layout (`apps/desktop`, `apps/store`, `packages/manifest`, `packages/gateway`, `packages/sdk`, `examples/*`) created with placeholder READMEs, so that later specs have a known home.
-5. As a Publisher, I want a JSON Schema for the Manifest published from the package, so that my editor can validate and autocomplete `manifest.json`.
+5. As a Publisher, I want a JSON Schema for the Manifest published from the package, so that my editor can validate and autocomplete `manifest.json` (a top-level `$schema` key pointing at it is allowed and ignored by validation).
 6. As a Publisher, I want to run a CLI against my Harness folder and see every problem at once, so that I fix them in one pass instead of one publish attempt at a time.
 7. As a Publisher, I want the CLI to accept either a directory or a zip archive, so that I can check the exact artifact I am about to upload.
 8. As a Publisher, I want each problem to name the JSON path, a stable code and a human message, so that I understand what to change and where.
 9. As a Publisher, I want the CLI to exit non-zero when problems exist, so that I can wire it into my own CI.
 10. As a Publisher, I want unknown top-level Manifest keys rejected but `x-` prefixed keys ignored, so that I can keep private metadata without breaking validation.
 11. As a Publisher, I want a clear error when my `id` publisher segment does not match my GitHub login, so that I fix it before uploading (the CLI accepts an optional `--publisher` flag to check this locally).
-12. As a Publisher, I want `binary` Harnesses validated so that every declared platform has an entry and every entry file exists in the archive, so that I do not ship a package that cannot launch on a platform I claimed.
+12. As a Publisher, I want `binary` Harnesses validated so that every declared platform has an entry and that entry's file exists in the archive, so that I do not ship a package that cannot launch on a platform I claimed. An entry for a platform I did not declare is ignored, with a warning.
 13. As a Publisher, I want `node` Harnesses validated so that `entry` is a string pointing at an existing `.js`/`.mjs`/`.cjs` file, so that the Runtime can start them.
 14. As a Publisher, I want the required files (`manifest.json`, `README.md`, `assets/icon.png`) checked and the icon's dimensions verified as 512×512 PNG, so that my listing renders correctly.
-15. As a Publisher, I want screenshot limits (count, size, type) enforced locally, so that I do not discover them after a long upload.
+15. As a Publisher, I want screenshot limits (count, size, type) checked locally, so that I do not discover them after a long upload. A wrong file type is a problem; too many or too large screenshots are warnings.
 16. As a Publisher, I want a `default` Slot to be mandatory and Slot names, counts and recommended model id formats checked, so that the Gateway can always resolve my requests.
 17. As a Publisher, I want all three permission keys required, so that I am forced to state filesystem, shell and network explicitly.
 18. As a Store operator, I want the same `validatePackage()` to run server-side in the `publish` function, so that a tampered client cannot upload an invalid package.
@@ -47,17 +47,17 @@ A pnpm monorepo with the agreed layout and one command to test everything, plus 
 
 ## Implementation Decisions
 
-- **Monorepo**: pnpm workspaces; Node LTS pinned via `.nvmrc` and `engines`; TypeScript strict; Vitest for all packages; a root `test`, `lint`, `typecheck`, `build` script that fans out to workspaces. `apps/store` is a Supabase project (Deno for Edge Functions) and is excluded from the TypeScript project references but included in the root test script through its own runner.
+- **Monorepo**: pnpm workspaces; Node 22 LTS pinned in `.nvmrc` (what CI runs), with `engines` admitting every Node version the toolchain supports (22.13 and later 22.x, 24, 26 and later); TypeScript strict; Vitest for all packages; a root `test`, `lint`, `typecheck`, `build` script that fans out to workspaces. `apps/store` holds the Supabase project (Deno for Edge Functions; a placeholder until P0-07 creates it) and is excluded from the TypeScript project references but included in the root test script through its own runner.
 - **Package contract**: `packages/manifest` exports `manifestSchema` (JSON Schema draft 2020-12), `Manifest` type (generated from the schema, checked in), `validateManifest(input: unknown, options?): ValidationResult`, `validatePackage(source: DirectorySource | ArchiveSource, options?): Promise<ValidationResult>`, `diffForReconsent(previous: Manifest, next: Manifest): ReconsentDiff`, and `PROBLEM_CODES`. Options: `{ publisher?: string; publishedVersions?: string[] }`.
 - **ValidationResult** shape (decision-encoding snippet):
   ```ts
   type Problem = { path: string; code: string; message: string; messageKey: string; params?: Record<string, string | number> }
   type ValidationResult = { ok: true; manifest: Manifest; warnings: Problem[] } | { ok: false; problems: Problem[]; warnings: Problem[] }
   ```
-  Warnings are non-blocking (e.g. README longer than 20 KB, no screenshots). Problems block.
+  Warnings are non-blocking (e.g. README longer than 50 KB, more than 5 screenshots, a key that does not apply to the chosen UI Kind or runtime kind). Problems block.
 - **Problem codes** are stable snake_case strings grouped by prefix: `schema_*` (type/enum/pattern), `file_missing`, `file_type`, `icon_dimensions`, `archive_symlink`, `archive_path_traversal`, `archive_too_large`, `archive_too_many_files`, `entry_missing_for_platform`, `slot_default_missing`, `publisher_mismatch`, `version_not_greater`, `version_invalid`, `unknown_key`. Adding a code is additive; codes are never renamed.
 - **Sources**: `DirectorySource` reads a folder; `ArchiveSource` reads a zip via a streaming reader that never extracts to disk during validation. Both expose the same `listFiles()`/`readFile(path)` interface so rule code is source-agnostic. A third `InMemorySource` (map of path → bytes) exists for tests and the Edge Function.
-- **Rule order**: (1) parse JSON, (2) schema, (3) semantic rules (slots, entry per platform, unknown keys), (4) file presence and archive limits, (5) options-dependent rules (publisher, versions). All rules run; validation does not stop at the first problem, except that file rules are skipped when the schema is invalid in a way that makes paths meaningless.
+- **Rule order**: (1) archive safety and limits, from the file listing alone, whatever the Manifest says; (2) parse `manifest.json`; (3) schema (types, enums, patterns, limits, Slot names and counts, the `default` Slot, unknown keys); (4) semantic rules (entry per platform, duplicates, strict semver, changelog size, network access, ignored keys); (5) options-dependent rules (publisher, versions); (6) file presence (required files, icon, screenshots, entry files). All rules run; validation does not stop at the first problem, except that: entry file checks are skipped when the schema is invalid in a way that makes paths meaningless; a `manifest.json` that is over 1 MB or too large to check (more than 2 000 JSON values) is the only Manifest problem reported, while the archive rules and the required-file, icon and screenshot checks still run; and an archive that is not a readable zip, or that lists more than 100 000 entries, gets that single problem and nothing else is checked.
 - **Semver**: use a standard semver library; pre-release allowed; build metadata rejected.
 - **Icon check**: read PNG header only (IHDR width/height), no image decoding library.
 - **CLI**: `harness-manifest validate <path> [--publisher <login>] [--json]`; human output lists problems grouped by path; `--json` prints the ValidationResult. Exit code 1 on problems, 0 otherwise (warnings do not change the exit code).
