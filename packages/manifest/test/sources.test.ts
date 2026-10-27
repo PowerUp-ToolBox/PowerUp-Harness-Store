@@ -716,7 +716,7 @@ describe('ArchiveSource: bounded work while opening', () => {
   });
 
   it('charges a stream that throws on its last byte for what it inflated before', async () => {
-    // Sixteen entries, none sharing bytes, each declaring 500 MB: the first 64 KB of the 100 MB
+    // Sixteen entries, none sharing bytes, each declaring about 500 MB: the first 64 KB of the 100 MB
     // stream (which inflate to about 64 MB) and one byte, so the stream needs more than the entry
     // holds. Before the fix, the whole 64 KB went to the inflater in one final push that threw
     // without counting its output: nothing was charged, all 16 were confirmed, and a 1 MB zip
@@ -725,7 +725,7 @@ describe('ArchiveSource: bounded work while opening', () => {
     const records = Array.from({ length: 16 }, (_, i) => ({
       ...zerosEntry(`${String(i)}.bin`),
       compressedData: truncated,
-      declaredSize: PACKAGE_LIMITS.maxArchiveBytes - 64 * 1024,
+      declaredSize: PACKAGE_LIMITS.maxArchiveBytes - 128 * 1024,
     }));
     const started = performance.now();
     const source = await ArchiveSource.open(buildZip(records));
@@ -736,6 +736,88 @@ describe('ArchiveSource: bounded work while opening', () => {
     for (const entry of rest) {
       expect((entry.unsupported as { detail: string }).detail).toMatch(budgetSpent);
     }
+  });
+
+  it('charges a stream that throws on its last byte for the stored block that byte completes', async () => {
+    // held.bin: a non-final stored block of 65 534 bytes and one more byte. The inflater holds
+    // the block until the trial's last byte completes it, then throws for want of the next block:
+    // the block's output is never counted, so it is charged what the inflater held. small.bin's
+    // declared size, with the charge for its own last byte, fits in what held.bin leaves only if
+    // that block goes uncharged.
+    const block = new Uint8Array(5 + 65_534 + 1);
+    block.set([0x00, 0xfe, 0xff, 0x01, 0x00]); // BFINAL 0, stored; LEN 65 534 and its complement
+    const source = await open([
+      {
+        name: 'held.bin',
+        method: 8,
+        compressedData: block,
+        crc: 0,
+        declaredSize: 65_534,
+        dataDescriptor: true,
+      },
+      {
+        name: 'small.bin',
+        method: 8,
+        compressedData: deflateRawSync('x'),
+        crc: 0,
+        declaredSize: PACKAGE_LIMITS.maxArchiveBytes - 100_000,
+        dataDescriptor: true,
+      },
+    ]);
+    const [held, small] = source.listEntries().entries;
+    expect(held).not.toHaveProperty('unsupported');
+    expect((small?.unsupported as { detail: string }).detail).toMatch(budgetSpent);
+  });
+
+  it('charges the scan of a stored data-descriptor entry against the same budget', async () => {
+    // A stored entry's 1 MB is scanned for a copy of its descriptor, and charged for it: the
+    // Deflate entry after it would fit in the 500 MB alone, but not in what the scan leaves.
+    const reader = zipReader([
+      { name: 'zeros.bin', zeros: MB, dataDescriptor: true },
+      {
+        name: 'after.bin',
+        method: 8,
+        compressedData: deflateRawSync('x'),
+        crc: 0,
+        declaredSize: PACKAGE_LIMITS.maxArchiveBytes - MB / 2,
+        dataDescriptor: true,
+      },
+    ]);
+    const [zerosFile, after] = (await ArchiveSource.open(reader)).listEntries().entries;
+    expect(zerosFile).not.toHaveProperty('unsupported');
+    expect((after?.unsupported as { detail: string }).detail).toMatch(budgetSpent);
+  });
+
+  it('stops at the end of a Deflate stream, however many bytes follow it', async () => {
+    // An empty final block (03 00), then 16 MB of zeros, in an entry that declares no content.
+    // The inflater keeps every byte pushed after the end of a stream, without inflating it, and
+    // copies them all again on each push: pushing the whole entry took about 5 s, uncharged.
+    const data = new Uint8Array(16 * MB);
+    data.set([0x03, 0x00]);
+    const reader = sparseReader(
+      buildZip([
+        {
+          name: 'early.bin',
+          method: 8,
+          compressedData: data,
+          crc: 0,
+          declaredSize: 0,
+          dataDescriptor: true,
+        },
+      ]),
+      0,
+    );
+    const started = performance.now();
+    const source = await ArchiveSource.open(reader);
+    expect(performance.now() - started).toBeLessThan(1000);
+
+    expect(source.listEntries().entries[0]?.unsupported).toEqual({
+      reason: 'inconsistent',
+      detail: expect.stringMatching(/Deflate stream ends before/) as unknown,
+    });
+    // The end record, the central directory, the local header, the data descriptor, and two 64 KB
+    // slices of data (the stream's end, and the 64 KB after it): not the 256 of the whole entry.
+    expect(reader.reads).toBe(6);
   });
 
   it('rejects an entry that declares more than the budget without inflating it', async () => {
