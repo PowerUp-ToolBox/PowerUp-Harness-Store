@@ -8,7 +8,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32 as nodeCrc32, deflateRawSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ArchiveSource, InMemorySource, PACKAGE_LIMITS, PackageReadError } from '../src/index.js';
+import {
+  ArchiveSource,
+  InMemorySource,
+  PACKAGE_LIMITS,
+  PackageReadError,
+  validatePackage,
+} from '../src/index.js';
 import type { PackageListing, RandomAccessReader } from '../src/index.js';
 import { DirectorySource, fileReader, openArchiveFile } from '../src/node/index.js';
 import { crc32 } from '../src/zip/crc32.js';
@@ -20,6 +26,7 @@ import {
   localRecord,
   sparseReader,
   writeZipFile,
+  zipReader,
 } from './support/zip-writer.js';
 import type { DataDescriptorSpec, ZipEntrySpec } from './support/zip-writer.js';
 
@@ -618,6 +625,137 @@ describe('ArchiveSource: entries that differ for a streaming unpacker', () => {
     const source = await open([{ name: 'clean.bin', method: 0, data, dataDescriptor: true }]);
     expect(source.listEntries().entries[0]).not.toHaveProperty('unsupported');
     expect(await source.readFile('clean.bin')).toHaveLength(data.length);
+  });
+});
+
+/**
+ * Confirming data-descriptor entries inflates or scans their data while the archive is opened,
+ * before validatePackage() checks anything (#113). Entries that share bytes are reported before
+ * anything is inflated, and one 500 MB budget bounds the work for the whole archive.
+ */
+describe('ArchiveSource: bounded work while opening', () => {
+  const MB = 1024 * 1024;
+  /** One Deflate stream of 100 MB of zeros (about 100 KB), with its CRC-32. */
+  const zeros = new Uint8Array(100 * MB);
+  const stream = deflateRawSync(zeros, { level: 9 });
+  const streamCrc = nodeCrc32(zeros);
+  /** A Deflate entry of that stream, followed by a data descriptor. */
+  const zerosEntry = (name: string): ZipEntrySpec => ({
+    name,
+    method: 8,
+    compressedData: stream,
+    crc: streamCrc,
+    declaredSize: zeros.length,
+    dataDescriptor: true,
+  });
+  const budgetSpent = /past the 500 MB it inflates or scans per archive/;
+
+  it('inflates a stream that 16 records point at once, and rejects the copies, in well under a second', async () => {
+    const records = [
+      zerosEntry('a.bin'),
+      ...Array.from({ length: 15 }, () => ({ ...zerosEntry('a.bin'), listedAt: 0 })),
+    ];
+    const zip = buildZip(records);
+    // Records the offset of every read: the stream's data starts after the 30-byte local header
+    // and the name.
+    const offsets: number[] = [];
+    const reader: RandomAccessReader = {
+      size: zip.length,
+      read: (offset, length) => {
+        offsets.push(offset);
+        return Promise.resolve(zip.subarray(offset, offset + length));
+      },
+    };
+    const started = performance.now();
+    const source = await ArchiveSource.open(reader);
+    const result = await validatePackage(source);
+    // Before #113, opening alone inflated the 100 MB stream 16 times (over 3 s).
+    expect(performance.now() - started).toBeLessThan(1000);
+
+    const [first, ...copies] = source.listEntries().entries;
+    expect(first).not.toHaveProperty('unsupported');
+    for (const copy of copies) {
+      expect(copy.unsupported).toEqual({
+        reason: 'inconsistent',
+        detail: 'it shares bytes of the archive with "a.bin"',
+      });
+    }
+    // Inflating starts with a read at the start of the stream's data: once, not once per record.
+    expect(offsets.filter((offset) => offset === 30 + 'a.bin'.length)).toHaveLength(1);
+    expect(result.ok).toBe(false);
+    expect(result.ok ? [] : result.problems.map((p) => p.messageKey)).toContain(
+      'archive_invalid.inconsistent',
+    );
+  });
+
+  it('confirms at most 500 MB in all, and reports the entries past it as inconsistent', async () => {
+    // Seven honest 100 MB entries: the first five fill the budget; the stored entry after them
+    // would fit what is left (nothing), but confirming stops once an entry does not.
+    const source = await open([
+      ...Array.from({ length: 6 }, (_, i) => zerosEntry(`${String(i)}.bin`)),
+      { name: 'empty.txt', method: 0, data: '', dataDescriptor: true },
+      { name: 'plain.txt', data: 'no data descriptor' },
+    ]);
+    const entries = source.listEntries().entries;
+    for (const entry of entries.slice(0, 5)) expect(entry).not.toHaveProperty('unsupported');
+    for (const entry of entries.slice(5, 7)) {
+      expect(entry.unsupported).toMatchObject({ reason: 'inconsistent' });
+      expect((entry.unsupported as { detail: string }).detail).toMatch(budgetSpent);
+    }
+    expect(entries[7]).not.toHaveProperty('unsupported');
+    await expect(source.readFile('5.bin')).rejects.toThrow(PackageReadError);
+
+    const result = await validatePackage(source);
+    const problem = result.ok ? undefined : result.problems.find((p) => p.path === '5.bin');
+    expect(problem).toMatchObject({
+      code: 'archive_invalid',
+      messageKey: 'archive_invalid.inconsistent',
+    });
+    expect(problem?.message).toMatch(/inflates or scans per archive/);
+  });
+
+  it('rejects an entry that declares more than the budget without inflating it', async () => {
+    const reader = sparseReader(
+      buildZip([
+        {
+          name: 'huge.bin',
+          method: 8,
+          compressedData: deflateRawSync('x'),
+          crc: 0,
+          declaredSize: PACKAGE_LIMITS.maxArchiveBytes + 1,
+          dataDescriptor: true,
+        },
+        { name: 'small.txt', data: 'small', dataDescriptor: true },
+      ]),
+      0,
+    );
+    const source = await ArchiveSource.open(reader);
+    for (const entry of source.listEntries().entries) {
+      expect((entry.unsupported as { detail: string }).detail).toMatch(budgetSpent);
+    }
+    // The end record, the central directory and one window of local headers: no data was read.
+    expect(reader.reads).toBe(3);
+  });
+
+  it('does not confirm the entries of an archive that is rejected as too large', async () => {
+    // A Deflate stream that ends early, which confirming would report, in an archive over 500 MB.
+    const content = 'x'.repeat(1000);
+    const early = Buffer.concat([deflateRawSync(content), Buffer.from('trailing bytes')]);
+    const reader = zipReader([
+      {
+        name: 'early.bin',
+        method: 8,
+        compressedData: early,
+        crc: nodeCrc32(content),
+        declaredSize: content.length,
+        dataDescriptor: true,
+      },
+      { name: 'padding.bin', zeros: PACKAGE_LIMITS.maxArchiveBytes },
+    ]);
+    const source = await ArchiveSource.open(reader);
+    expect(source.listEntries().entries[0]).not.toHaveProperty('unsupported');
+    const result = await validatePackage(source);
+    expect(result.ok ? [] : result.problems.map((p) => p.code)).toContain('archive_too_large');
   });
 });
 
