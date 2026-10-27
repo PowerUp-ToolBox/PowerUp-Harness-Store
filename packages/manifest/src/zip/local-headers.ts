@@ -59,6 +59,13 @@ const MAX_DEFLATE_RATIO = 1032;
  * 4 MB of extra work.
  */
 const MIN_PIECE = 4 * 1024;
+/**
+ * What the last byte of a Deflate stream's trial is charged when its push throws, as it does for
+ * every honest data-descriptor entry: the most that byte, and a symbol the inflater kept from
+ * before it, inflate to (a stored block it completes only copies bytes the archive holds). Its
+ * output is never counted (see deflateEndsEarly()).
+ */
+const LAST_BYTE_CHARGE = 2 * MAX_DEFLATE_RATIO;
 
 /** What is left of {@link VERIFY_BUDGET} while one archive's entries are confirmed. */
 interface Budget {
@@ -375,8 +382,12 @@ async function streamedEntryInconsistency(
     return undefined; // an unsupported method is reported already
   }
   // The work is known before it starts: a stored entry's data is scanned once, and a Deflate
-  // stream that inflates past its declared size is rejected as soon as it does.
-  const work = entry.method === METHOD_STORED ? entry.compressedSize : entry.uncompressedSize;
+  // stream that inflates past its declared size is rejected as soon as it does (an honest one
+  // is charged at most its size and LAST_BYTE_CHARGE).
+  const work =
+    entry.method === METHOD_STORED
+      ? entry.compressedSize
+      : entry.uncompressedSize + LAST_BYTE_CHARGE;
   if (work > budget.left) {
     budget.left = -1; // no later entry is confirmed either
     return BUDGET_SPENT;
@@ -457,6 +468,13 @@ function safeUint64(view: DataView, at: number): number {
  * byte, so the bytes after it belong to no data a reader using the central directory sees. The
  * work is bounded: inflating stops once the output passes `uncompressedSize`, and every byte of
  * output is taken from `budget`.
+ *
+ * A push that throws has inflated its piece before failing, but that output never reaches the
+ * callback that counts it: such a push is charged the most it could have inflated instead (its
+ * bytes and one more, for a symbol the inflater kept from the previous push, at Deflate's largest
+ * ratio). Every piece is pushed as more to come, which never throws for want of data, except the
+ * last byte of the trial, which is pushed alone as the final one: an honest stream that needs
+ * the entry's last byte throws there, and costs at most {@link LAST_BYTE_CHARGE}.
  */
 async function deflateEndsEarly(
   reader: RandomAccessReader,
@@ -468,32 +486,38 @@ async function deflateEndsEarly(
   const trial = compressedSize - 1;
   if (trial <= 0) return false;
   let produced = 0;
+  let uncounted = 0;
   const inflater = new Inflate((chunk) => {
     produced += chunk.length;
   });
   try {
     let consumed = 0;
     while (consumed < trial) {
+      const sliceStart = consumed;
       const slice = await reader.read(
-        dataStart + consumed,
-        Math.min(VERIFY_SLICE, trial - consumed),
+        dataStart + sliceStart,
+        Math.min(VERIFY_SLICE, trial - sliceStart),
       );
+      const sliceEnd = sliceStart + slice.length;
       // In pieces that, even at Deflate's largest ratio, cannot inflate far past the declared size.
-      for (let at = 0; at < slice.length;) {
+      while (consumed < sliceEnd) {
         const room = uncompressedSize - produced;
-        const end = Math.min(
-          slice.length,
-          at + Math.max(MIN_PIECE, Math.ceil(room / MAX_DEFLATE_RATIO)),
+        let end = Math.min(
+          sliceEnd,
+          consumed + Math.max(MIN_PIECE, Math.ceil(room / MAX_DEFLATE_RATIO)),
         );
-        consumed += end - at;
+        if (end === trial && end - consumed > 1) end = trial - 1; // the last byte goes alone
+        const piece = slice.subarray(consumed - sliceStart, end - sliceStart);
+        consumed = end;
         try {
-          inflater.push(slice.subarray(at, end), consumed >= trial);
+          inflater.push(piece, end === trial);
         } catch {
-          // The stream needs more than the first (compressedSize - 1) bytes: it ends no earlier
-          // than the central directory says, so a streaming unpacker reaches the same descriptor.
+          // The stream needs more than the first (compressedSize - 1) bytes (or its data is
+          // invalid, which reading the entry reports): it ends no earlier than the central
+          // directory says, so a streaming unpacker reaches the same descriptor.
+          uncounted = (piece.length + 1) * MAX_DEFLATE_RATIO;
           return false;
         }
-        at = end;
         // More output than the entry declares: a streaming reader and a reader using the central
         // directory cannot agree on it, so treat it as ending early.
         if (produced > uncompressedSize) return true;
@@ -503,7 +527,7 @@ async function deflateEndsEarly(
     // byte, hiding the bytes after it from readers that use the central directory.
     return true;
   } finally {
-    budget.left -= produced;
+    budget.left -= produced + uncounted;
   }
 }
 

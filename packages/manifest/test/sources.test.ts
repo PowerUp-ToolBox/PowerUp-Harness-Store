@@ -689,29 +689,53 @@ describe('ArchiveSource: bounded work while opening', () => {
   });
 
   it('confirms at most 500 MB in all, and reports the entries past it as inconsistent', async () => {
-    // Seven honest 100 MB entries: the first five fill the budget; the stored entry after them
-    // would fit what is left (nothing), but confirming stops once an entry does not.
+    // Five honest 100 MB entries: each is charged its 100 MB and the most its last byte inflates
+    // to, so the first four are confirmed and the fifth does not fit what is left. The empty
+    // stored entry after it would fit, but confirming stops once an entry does not.
     const source = await open([
-      ...Array.from({ length: 6 }, (_, i) => zerosEntry(`${String(i)}.bin`)),
+      ...Array.from({ length: 5 }, (_, i) => zerosEntry(`${String(i)}.bin`)),
       { name: 'empty.txt', method: 0, data: '', dataDescriptor: true },
       { name: 'plain.txt', data: 'no data descriptor' },
     ]);
     const entries = source.listEntries().entries;
-    for (const entry of entries.slice(0, 5)) expect(entry).not.toHaveProperty('unsupported');
-    for (const entry of entries.slice(5, 7)) {
+    for (const entry of entries.slice(0, 4)) expect(entry).not.toHaveProperty('unsupported');
+    for (const entry of entries.slice(4, 6)) {
       expect(entry.unsupported).toMatchObject({ reason: 'inconsistent' });
       expect((entry.unsupported as { detail: string }).detail).toMatch(budgetSpent);
     }
-    expect(entries[7]).not.toHaveProperty('unsupported');
-    await expect(source.readFile('5.bin')).rejects.toThrow(PackageReadError);
+    expect(entries[6]).not.toHaveProperty('unsupported');
+    await expect(source.readFile('4.bin')).rejects.toThrow(PackageReadError);
 
     const result = await validatePackage(source);
-    const problem = result.ok ? undefined : result.problems.find((p) => p.path === '5.bin');
+    const problem = result.ok ? undefined : result.problems.find((p) => p.path === '4.bin');
     expect(problem).toMatchObject({
       code: 'archive_invalid',
       messageKey: 'archive_invalid.inconsistent',
     });
     expect(problem?.message).toMatch(/inflates or scans per archive/);
+  });
+
+  it('charges a stream that throws on its last byte for what it inflated before', async () => {
+    // Sixteen entries, none sharing bytes, each declaring 500 MB: the first 64 KB of the 100 MB
+    // stream (which inflate to about 64 MB) and one byte, so the stream needs more than the entry
+    // holds. Before the fix, the whole 64 KB went to the inflater in one final push that threw
+    // without counting its output: nothing was charged, all 16 were confirmed, and a 1 MB zip
+    // inflated 1 GB. Now each push is counted, and the first entry leaves too little for another.
+    const truncated = Buffer.concat([stream.subarray(0, 64 * 1024), new Uint8Array(1)]);
+    const records = Array.from({ length: 16 }, (_, i) => ({
+      ...zerosEntry(`${String(i)}.bin`),
+      compressedData: truncated,
+      declaredSize: PACKAGE_LIMITS.maxArchiveBytes - 64 * 1024,
+    }));
+    const started = performance.now();
+    const source = await ArchiveSource.open(buildZip(records));
+    expect(performance.now() - started).toBeLessThan(1000);
+
+    const [first, ...rest] = source.listEntries().entries;
+    expect(first).not.toHaveProperty('unsupported');
+    for (const entry of rest) {
+      expect((entry.unsupported as { detail: string }).detail).toMatch(budgetSpent);
+    }
   });
 
   it('rejects an entry that declares more than the budget without inflating it', async () => {
