@@ -148,7 +148,7 @@ type Body = { ok: true; value: unknown } | { ok: false };
 
 interface AppEnv {
   Bindings: HttpBindings;
-  Variables: { recorded: RecordedRequest; body: Body; endedByServer: () => void };
+  Variables: { body: Body; endedByServer: () => void };
 }
 
 type Ctx = Context<AppEnv>;
@@ -192,7 +192,6 @@ function createApp(state: FakeState): Hono<AppEnv> {
     outgoing.once('close', () => {
       if (!outgoing.writableFinished && !endedByServer && !state.closing) recorded.aborted = true;
     });
-    c.set('recorded', recorded);
     c.set('body', body);
     c.set('endedByServer', () => {
       endedByServer = true;

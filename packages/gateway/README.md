@@ -54,9 +54,9 @@ The request's `model` picks a scenario by exact name (an unknown name gets 404 `
 
 ## Scripts
 
-| Command          | What it does                                                                               |
-| ---------------- | ------------------------------------------------------------------------------------------ |
-| `pnpm test`      | Vitest over `test/` (offline: a connection beyond loopback throws); run `pnpm build` first |
-| `pnpm lint`      | ESLint with the shared root config                                                         |
-| `pnpm typecheck` | `tsc --noEmit` against `tsconfig.json` (sources and tests)                                 |
-| `pnpm build`     | Emits `dist/` from `tsconfig.build.json`                                                   |
+| Command          | What it does                                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `pnpm test`      | Vitest over `test/` (offline: a connection beyond loopback throws); run `pnpm build` first                        |
+| `pnpm lint`      | ESLint with the shared root config (type-aware; run `pnpm build` first)                                           |
+| `pnpm typecheck` | `tsc --noEmit` against `tsconfig.json` (sources and tests); run `pnpm build` first                                |
+| `pnpm build`     | Emits `dist/` from `tsconfig.build.json`; the tests import the package by its own name, which resolves to `dist/` |

@@ -86,7 +86,11 @@ describe('lifecycle', () => {
   it('runs offline: the test setup refuses connections beyond loopback', async () => {
     // 192.0.2.1 is TEST-NET-1, reserved for documentation; it is never reached.
     expect(() => connect({ host: '192.0.2.1', port: 80 })).toThrow(/offline/);
-    await expect(fetch('http://192.0.2.1/v1/models')).rejects.toThrow();
+    // fetch is the path the SDKs use: the rejection must come from the guard,
+    // not from an ordinary network error.
+    await expect(fetch('http://192.0.2.1/v1/models')).rejects.toMatchObject({
+      cause: { message: expect.stringMatching(/offline/) as unknown },
+    });
   });
 
   it('accepts a fixed port (the fake stands in for Ollama on 11434 in end-to-end tests)', async () => {

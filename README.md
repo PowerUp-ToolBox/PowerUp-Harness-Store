@@ -25,14 +25,14 @@ Pick the lowest-numbered open issue in the current milestone whose "Blocked by" 
 Prerequisites: **Node 22 LTS** (pinned in [`.nvmrc`](./.nvmrc); `nvm use` picks it up) and **pnpm 10.33.0** (pinned in `package.json#packageManager`; `corepack enable` provides it). Node 22 matches the Node the Runtime bundles for Harnesses (see [`manifest-spec.md`](./docs/tech/manifest-spec.md) §3). `engines.node` is `^22.13.0 || ^24.0.0 || >=26.0.0`, the Node versions both ESLint 10 and Vitest 5 support (so Node 24 LTS works too; Node 23 and 25 do not); `pnpm install` refuses anything else.
 
 ```sh
-pnpm install     # the only setup step; no environment variables needed
+pnpm install     # install dependencies, then build once; no environment variables needed
 pnpm build       # tsc --build of every package that has a build script
 pnpm lint        # ESLint in every TypeScript package and on root-level JS, then Prettier --check
 pnpm typecheck   # tsc --noEmit in every TypeScript package
 pnpm test        # every package's test script (Vitest; apps/store has its own runner)
 ```
 
-On a fresh clone, run `pnpm build` before `pnpm typecheck` or `pnpm test`: packages depend on each other through `workspace:*` and import each other's built `dist/` (a package's own tests may import it by its package name too). Rebuild after changing a package that another one imports.
+On a fresh clone, run `pnpm build` before `pnpm lint`, `pnpm typecheck` or `pnpm test`: packages depend on each other through `workspace:*` and import each other's built `dist/` (a package's own tests may import it by its package name too). Rebuild after changing a package that another one imports.
 
 CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs exactly these commands, in this order, on every push and pull request.
 
