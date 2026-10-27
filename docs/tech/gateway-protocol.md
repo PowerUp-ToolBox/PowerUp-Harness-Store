@@ -49,7 +49,7 @@ Validation (`400 invalid_request`, details in `message`):
 - `model` (string) and `messages` (non-empty array) are required. A supported field of the wrong type is rejected; `null` counts as absent. `user` and `metadata` are not checked.
 - Message roles are `system`, `developer` (sent upstream as `system`), `user`, `assistant` and `tool`; any other role is rejected. System messages stay where the Harness put them.
 - Content parts are `text` everywhere, plus `image_url` in `user` messages with an `http(s)` URL (fetched by the Provider, never by the Gateway) or a base64 data URL of an image (`data:image/<type>[;...];base64,<data>`). Any other data URL (a PDF, audio, text, data that is not valid base64), any other part type, or an image outside a `user` message, is rejected.
-- A `tool` message's `tool_call_id` must match a `tool_calls` entry of an earlier `assistant` message.
+- A `tool` message's `tool_call_id` must match a `tool_calls` entry of an earlier `assistant` message, and every `tool_calls` entry must get its `tool` message before the next `system`, `developer` or `user` message and before the end of `messages` (as OpenAI requires).
 - A `tool_choice` naming a function must name one in `tools`, and `tool_choice: "required"` needs at least one tool.
 
 `tool_choice` is sent to the Provider, never enforced by the Gateway: a reply that ignores it (plain text for `required`, a tool call for `none`) is returned as the Provider sent it.
@@ -104,7 +104,7 @@ All errors use `{ "error": { "code", "message", "type": "harness_store" | "provi
 - `provider_message`: the upstream `error.message`; else the raw upstream body, cut to 1000 characters; else the network error's message.
 - `provider_code`: the upstream `error.code`, when it is a string.
 
-Any occurrence of the Connection's API key in these fields is replaced with `[redacted]`. The Gateway never retries a failed upstream call.
+Any occurrence of the Connection's API key in these fields is replaced with `[redacted]`, before the raw body is cut to 1000 characters. The Gateway never retries a failed upstream call.
 
 `provider_timeout` covers two timeouts, both 120 s by default and configurable by the Gateway's host: the Provider's response headers must arrive within the first-byte timeout, and once they have, no gap between two chunks of the response body (streamed or not) may exceed the idle timeout. A timeout aborts the upstream request.
 

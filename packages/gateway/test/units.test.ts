@@ -222,6 +222,17 @@ describe('providerError', () => {
     expect(JSON.stringify(mapped)).not.toContain(key);
     expect(mapped.fields.provider_message).toBe('Key [redacted] is invalid.');
   });
+
+  it('redacts the key before cutting a raw body, so no prefix of it survives the cut', () => {
+    const key = 'sk-plain-0123456789abcdef';
+    // The key starts at character 985, so a cut at 1000 would go through it.
+    const body = `${'x'.repeat(980)} key ${key} is invalid`;
+    const mapped = providerError(apiCallError({ statusCode: 401, responseBody: body }), key);
+    expect(JSON.stringify(mapped)).not.toContain(key.slice(0, 5));
+    expect(mapped.fields.provider_message).toBe(
+      `${'x'.repeat(980)} key [redacted] is invalid`.slice(0, 1000),
+    );
+  });
 });
 
 describe('usage and finish reasons', () => {

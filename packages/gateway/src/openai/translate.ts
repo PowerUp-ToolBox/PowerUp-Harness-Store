@@ -77,11 +77,35 @@ function userMessage(content: Extract<ChatMessage, { role: 'user' }>['content'])
   };
 }
 
+/**
+ * The 400 message for a tool call still waiting for its result, or `undefined` when none is.
+ * `before` is the index of the message that arrived too early; absent at the end of `messages`.
+ */
+function missingToolResult(open: ReadonlyMap<string, number>, before?: number): string | undefined {
+  const first = open.entries().next();
+  if (first.done === true) return undefined;
+  const [id, index] = first.value;
+  const where =
+    before === undefined ? 'by the end of messages' : `before messages.${String(before)}`;
+  return `messages.${String(index)}: tool call ${id} has no tool result ${where}.`;
+}
+
+/**
+ * Translates the messages. Tool calls and results must pair up the way the AI SDK requires: each
+ * `tool` message answers an earlier assistant tool call, and every tool call is answered before
+ * the next user or system message and before the end of `messages` (OpenAI rejects the same).
+ */
 function toMessages(messages: readonly ChatMessage[]): ModelMessage[] | string {
   /** Tool names by tool call id, from the assistant messages seen so far. */
   const toolNames = new Map<string, string>();
+  /** The index of the assistant message for each tool call not yet answered, in call order. */
+  const open = new Map<string, number>();
   const result: ModelMessage[] = [];
   for (const [index, message] of messages.entries()) {
+    if (message.role === 'system' || message.role === 'developer' || message.role === 'user') {
+      const missing = missingToolResult(open, index);
+      if (missing !== undefined) return missing;
+    }
     switch (message.role) {
       case 'system':
       case 'developer':
@@ -100,6 +124,7 @@ function toMessages(messages: readonly ChatMessage[]): ModelMessage[] | string {
         if (text !== '') content.push({ type: 'text', text });
         for (const call of message.tool_calls ?? []) {
           toolNames.set(call.id, call.function.name);
+          open.set(call.id, index);
           content.push({
             type: 'tool-call',
             toolCallId: call.id,
@@ -115,6 +140,7 @@ function toMessages(messages: readonly ChatMessage[]): ModelMessage[] | string {
         if (toolName === undefined) {
           return `messages.${String(index)}: tool_call_id ${message.tool_call_id} matches no earlier assistant tool call.`;
         }
+        open.delete(message.tool_call_id);
         result.push({
           role: 'tool',
           content: [
@@ -130,7 +156,7 @@ function toMessages(messages: readonly ChatMessage[]): ModelMessage[] | string {
       }
     }
   }
-  return result;
+  return missingToolResult(open) ?? result;
 }
 
 /** A JSON response format whose output is the raw reply text: invalid JSON is never an error. */

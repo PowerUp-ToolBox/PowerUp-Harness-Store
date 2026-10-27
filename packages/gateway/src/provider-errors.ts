@@ -58,23 +58,24 @@ export function providerError(error: unknown, apiKey: string | undefined): Mappe
   const hide = (text: string) =>
     apiKey === undefined || apiKey === '' ? text : text.replaceAll(apiKey, '[redacted]');
   const fields: Record<string, unknown> = {};
-  let message = error instanceof Error ? error.message : String(error);
+  // Every source is redacted before anything else touches it, so a cut never splits the key.
+  let message = hide(error instanceof Error ? error.message : String(error));
   if (APICallError.isInstance(error)) {
     const status = error.statusCode;
     if (status !== undefined && (status < 200 || status > 299)) fields.provider_status = status;
     const upstream = upstreamError(error.responseBody);
     if (typeof upstream?.message === 'string' && upstream.message !== '') {
-      message = upstream.message;
+      message = hide(upstream.message);
     } else if (error.responseBody !== undefined && error.responseBody !== '') {
-      message = error.responseBody.slice(0, MAX_RAW_MESSAGE);
+      message = hide(error.responseBody).slice(0, MAX_RAW_MESSAGE);
     }
     if (typeof upstream?.code === 'string') fields.provider_code = hide(upstream.code);
   }
   if (message === '') message = 'The Provider call failed.';
-  fields.provider_message = hide(message);
+  fields.provider_message = message;
   return {
     code: 'provider_error',
-    message: `The Provider returned an error: ${hide(message)}`,
+    message: `The Provider returned an error: ${message}`,
     fields,
   };
 }

@@ -70,6 +70,19 @@ function complete(
 
 const hello = [{ role: 'user', content: 'hello there world' }];
 
+/** An assistant message calling `lookup` once per id. */
+function assistantCalls(...ids: string[]) {
+  return {
+    role: 'assistant',
+    content: null,
+    tool_calls: ids.map((id) => ({
+      id,
+      type: 'function',
+      function: { name: 'lookup', arguments: '{}' },
+    })),
+  };
+}
+
 async function errorOf(response: Response) {
   return ((await response.json()) as { error: Record<string, unknown> }).error;
 }
@@ -378,6 +391,22 @@ describe('tool calls and images', () => {
     ]);
   });
 
+  it('accepts parallel tool calls once every one has its result', async () => {
+    const { url, token } = await start();
+    const response = await complete(url, token, {
+      model: `${FAKE}/fake/echo`,
+      messages: [
+        ...hello,
+        assistantCalls('c1', 'c2'),
+        { role: 'tool', tool_call_id: 'c2', content: 'two' },
+        { role: 'tool', tool_call_id: 'c1', content: 'one' },
+        { role: 'user', content: 'thanks' },
+      ],
+    });
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as Completion).choices[0]?.message.content).toBe('thanks');
+  });
+
   it.each([
     ['an http(s) URL', 'https://example.com/cat.png'],
     ['a data URL', 'data:image/png;base64,iVBORw0KGgo='],
@@ -498,6 +527,35 @@ describe('request validation', () => {
       {
         model: `${FAKE}/fake/echo`,
         messages: [...hello, { role: 'tool', tool_call_id: 'call_9', content: 'x' }],
+      },
+    ],
+    [
+      'a tool call left unanswered before the next user message',
+      {
+        model: `${FAKE}/fake/echo`,
+        messages: [...hello, assistantCalls('c1'), { role: 'user', content: 'never mind' }],
+      },
+    ],
+    [
+      'two parallel tool calls with only one tool result',
+      {
+        model: `${FAKE}/fake/echo`,
+        messages: [
+          ...hello,
+          assistantCalls('c1', 'c2'),
+          { role: 'tool', tool_call_id: 'c1', content: 'x' },
+        ],
+      },
+    ],
+    [
+      'a trailing assistant message with tool calls',
+      { model: `${FAKE}/fake/echo`, messages: [...hello, assistantCalls('c1')] },
+    ],
+    [
+      'a tool call left unanswered before a system message',
+      {
+        model: `${FAKE}/fake/echo`,
+        messages: [...hello, assistantCalls('c1'), { role: 'developer', content: 'Be brief.' }],
       },
     ],
     ['temperature as a string', { model: `${FAKE}/fake/echo`, messages: hello, temperature: '1' }],
