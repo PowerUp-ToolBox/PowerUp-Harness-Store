@@ -65,4 +65,14 @@ export interface GatewayOptions {
   tokenVerifier?: TokenVerifier;
   /** Default: debug logs dropped, errors to `console.error`. */
   logger?: Logger;
+  /**
+   * How long a Provider may take to send its response headers before the request fails with 504
+   * `provider_timeout`, in milliseconds. Default 120 000.
+   */
+  firstByteTimeoutMs?: number;
+  /**
+   * The longest gap allowed between two chunks of a Provider's response body, streamed or not,
+   * before the request fails with `provider_timeout`, in milliseconds. Default 120 000.
+   */
+  streamIdleTimeoutMs?: number;
 }

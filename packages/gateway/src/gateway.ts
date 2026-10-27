@@ -13,6 +13,7 @@ import type { LoopbackServer } from './serve.js';
 import { createInMemoryTokenVerifier, hashToken } from './tokens.js';
 import type { GatewayTokenClaims } from './tokens.js';
 import type { GatewayOptions, UsageRecord } from './types.js';
+import { DEFAULT_TIMEOUT_MS } from './upstream-fetch.js';
 
 /** The events a {@link Gateway} emits. */
 export interface GatewayEvents {
@@ -76,6 +77,10 @@ class ModelGateway extends EventEmitter<GatewayEvents> implements Gateway {
       verifier: this.#verifier,
       inFlight: this.#inFlight,
       logger: this.#logger,
+      timeouts: {
+        firstByteMs: options.firstByteTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+        idleMs: options.streamIdleTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+      },
       port: () => this.#port,
     });
   }

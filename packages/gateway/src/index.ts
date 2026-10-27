@@ -16,3 +16,6 @@ export type { HarnessContext } from './app.js';
 export { GATEWAY_ERROR_STATUS } from './errors.js';
 export type { GatewayErrorBody, GatewayErrorCode, GatewayErrorType } from './errors.js';
 export { MAX_BODY_BYTES } from './body.js';
+export { PROVIDER_IDS } from './providers.js';
+export type { ProviderId } from './providers.js';
+export type { ChatCompletion } from './openai/translate.js';

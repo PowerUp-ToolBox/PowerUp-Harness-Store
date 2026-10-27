@@ -1,10 +1,14 @@
 /**
- * The Gateway's small building blocks on their own: the JSON body reader, log redaction and the
- * in-memory token table.
+ * The Gateway's small building blocks on their own: the JSON body reader, log redaction, the
+ * in-memory token table, explicit model ids, Provider error mapping and usage translation.
  */
+import { APICallError } from 'ai';
 import { describe, expect, it } from 'vitest';
 import { MAX_BODY_BYTES, readJsonObject } from '../src/body.js';
 import { redact } from '../src/logging.js';
+import { toFinishReason, toUsage } from '../src/openai/translate.js';
+import { providerError } from '../src/provider-errors.js';
+import { PROVIDER_IDS, parseModelRef } from '../src/providers.js';
 import { createInMemoryTokenVerifier } from '../src/tokens.js';
 
 function post(body: string | Uint8Array | null, headers: Record<string, string> = {}): Request {
@@ -128,5 +132,138 @@ describe('in-memory token verifier', () => {
     verifier.revoke(token);
     expect(verifier.verify(token)).toBeNull();
     verifier.revoke(token);
+  });
+});
+
+describe('parseModelRef', () => {
+  it('splits an explicit id at the first slash', () => {
+    expect(parseModelRef('openrouter/anthropic/claude-sonnet-4-5')).toEqual({
+      kind: 'explicit',
+      providerId: 'openrouter',
+      model: 'anthropic/claude-sonnet-4-5',
+    });
+    expect(parseModelRef('openai-compatible:vllm-2/qwen3:8b')).toEqual({
+      kind: 'explicit',
+      providerId: 'openai-compatible:vllm-2',
+      model: 'qwen3:8b',
+    });
+  });
+
+  it('accepts every Provider id of the protocol', () => {
+    expect(PROVIDER_IDS).toHaveLength(14);
+    for (const id of PROVIDER_IDS) {
+      expect(parseModelRef(`${id}/m`)).toEqual({ kind: 'explicit', providerId: id, model: 'm' });
+    }
+  });
+
+  it('reads a value without a slash as a Slot name', () => {
+    expect(parseModelRef('default')).toEqual({ kind: 'slot', slot: 'default' });
+  });
+
+  it.each([
+    'acme/m',
+    'openai-compatible:/m',
+    'openai-compatible:-x/m',
+    'OpenAI/m',
+    'openai/',
+    'openai/a b',
+  ])('rejects %s', (model) => {
+    expect(parseModelRef(model)).toBeNull();
+  });
+});
+
+describe('providerError', () => {
+  const apiCallError = (fields: Partial<ConstructorParameters<typeof APICallError>[0]>) =>
+    new APICallError({
+      message: 'Bad Request',
+      url: 'http://127.0.0.1/v1/chat/completions',
+      requestBodyValues: {},
+      ...fields,
+    });
+
+  it('takes the status, message and code from an OpenAI-shaped error body', () => {
+    const error = apiCallError({
+      statusCode: 400,
+      responseBody: JSON.stringify({ error: { message: 'Context too long.', code: 'too_long' } }),
+    });
+    expect(providerError(error, undefined)).toEqual({
+      code: 'provider_error',
+      message: expect.stringContaining('Context too long.') as string,
+      fields: {
+        provider_status: 400,
+        provider_message: 'Context too long.',
+        provider_code: 'too_long',
+      },
+    });
+  });
+
+  it('falls back to the raw body, cut to 1000 characters', () => {
+    const error = apiCallError({ statusCode: 503, responseBody: 'x'.repeat(5000) });
+    expect(providerError(error, undefined).fields).toEqual({
+      provider_status: 503,
+      provider_message: 'x'.repeat(1000),
+    });
+  });
+
+  it('uses the error message when there is no response, without a status', () => {
+    const error = apiCallError({ message: 'Cannot connect to API: ECONNREFUSED' });
+    expect(providerError(error, undefined).fields).toEqual({
+      provider_message: 'Cannot connect to API: ECONNREFUSED',
+    });
+  });
+
+  it("redacts the Connection's API key wherever the Provider echoes it", () => {
+    const key = 'my-plain-key-without-prefix';
+    const error = apiCallError({
+      statusCode: 401,
+      responseBody: JSON.stringify({ error: { message: `Key ${key} is invalid.`, code: key } }),
+    });
+    const mapped = providerError(error, key);
+    expect(JSON.stringify(mapped)).not.toContain(key);
+    expect(mapped.fields.provider_message).toBe('Key [redacted] is invalid.');
+  });
+});
+
+describe('usage and finish reasons', () => {
+  const usage = (input: number | undefined, output: number | undefined, cached?: number) => ({
+    inputTokens: input,
+    inputTokenDetails: {
+      noCacheTokens: undefined,
+      cacheReadTokens: cached,
+      cacheWriteTokens: undefined,
+    },
+    outputTokens: output,
+    outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+    totalTokens: undefined,
+  });
+
+  it('reports usage only when both token counts are known, never estimated', () => {
+    expect(toUsage(usage(3, 4))).toEqual({
+      prompt_tokens: 3,
+      completion_tokens: 4,
+      total_tokens: 7,
+    });
+    expect(toUsage(usage(3, undefined))).toBeUndefined();
+    expect(toUsage(usage(undefined, 4))).toBeUndefined();
+  });
+
+  it('includes cached prompt tokens when there are some', () => {
+    expect(toUsage(usage(10, 1, 6))).toEqual({
+      prompt_tokens: 10,
+      completion_tokens: 1,
+      total_tokens: 11,
+      prompt_tokens_details: { cached_tokens: 6 },
+    });
+  });
+
+  it.each([
+    ['stop', 'stop'],
+    ['length', 'length'],
+    ['tool-calls', 'tool_calls'],
+    ['content-filter', 'content_filter'],
+    ['error', 'stop'],
+    ['other', 'stop'],
+  ] as const)('maps the finish reason %s to %s', (reason, mapped) => {
+    expect(toFinishReason(reason)).toBe(mapped);
   });
 });

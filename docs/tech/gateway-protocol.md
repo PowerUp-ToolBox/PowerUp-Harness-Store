@@ -43,11 +43,27 @@ Request bodies are JSON whatever the `Content-Type` says, and at most 20 MB. A b
 
 Request body follows OpenAI Chat Completions. Supported fields: `model`, `messages` (text and image-url content parts), `tools`, `tool_choice`, `temperature`, `top_p`, `max_tokens` / `max_completion_tokens`, `stop`, `stream`, `stream_options.include_usage`, `response_format` (`text`, `json_object`, `json_schema` best-effort), `seed` (best-effort), `user` (ignored), `metadata` (ignored). Unsupported fields are ignored, never rejected.
 
+Exactly these fields reach the Provider; everything else is dropped, including `n` (always 1), `presence_penalty` / `frequency_penalty`, `logprobs`, `parallel_tool_calls` and vendor-specific extras. ADR-0005's best-effort forwarding of vendor extras is not built in P0. When both are sent, `max_completion_tokens` wins over `max_tokens`. No inbound header is ever forwarded upstream; the Provider sees only the Connection's credentials.
+
+Validation (`400 invalid_request`, details in `message`):
+- `model` (string) and `messages` (non-empty array) are required. A supported field of the wrong type is rejected; `null` counts as absent. `user` and `metadata` are not checked.
+- Message roles are `system`, `developer` (sent upstream as `system`), `user`, `assistant` and `tool`; any other role is rejected. System messages stay where the Harness put them.
+- Content parts are `text` everywhere, plus `image_url` in `user` messages with an `http(s)` URL (fetched by the Provider, never by the Gateway) or a `data:` URL. Any other part type, or an image outside a `user` message, is rejected.
+- A `tool` message's `tool_call_id` must match a `tool_calls` entry of an earlier `assistant` message.
+
+`response_format` `json_object` and `json_schema` are passed to the Provider as structured-output requests, but the reply is returned as raw text: output that is not valid JSON is never an error. Tools are only described to the Provider; the Gateway never runs one, so each request is a single model call.
+
 `model` is one of:
 - a **Slot name** declared in the Harness Manifest (`default`, `fast`, ...), the normal case;
 - an explicit **`provider/model`** id (see §6), for advanced Harnesses; allowed only if the User has a Connection for that Provider.
 
+A `model` containing `/` is an explicit id, split at the first `/` (`openrouter/anthropic/claude-sonnet-4-5` is the model `anthropic/claude-sonnet-4-5` at `openrouter`). The Provider part must be a Provider id of §6, or `openai-compatible:<name>` with `<name>` matching `^[a-z0-9][a-z0-9-]*$`, and the model part must be non-empty without whitespace; otherwise the request gets `404 unknown_slot`. A `model` without `/` is a Slot name (Slot names never contain `/`). An explicit id never consults the Slot Bindings; it needs a Connection for its Provider, else `403 provider_not_connected`.
+
+A request is checked in this order: body validation (`400`), then model resolution (`404`, `409`, `403`), then the upstream call (`502`, `504`). Only a request that gets as far as the upstream call reaches a Provider.
+
 Response shape and streaming (`text/event-stream`, `data: {...}` chunks, `data: [DONE]`) follow OpenAI. The `model` field in the response contains the **resolved** `provider/model` so a Harness can display what actually answered. Usage is reported in the final chunk when `stream_options.include_usage` is true and always in non-streaming responses.
+
+A non-streaming response is `{ id: "chatcmpl_<uuid>", object: "chat.completion", created, model, choices: [{ index: 0, message, finish_reason }], usage? }`, with `created` in epoch seconds and `message` = `{ role: "assistant", content: string | null, tool_calls? }` (`content` is `null` only when the reply is tool calls alone). `finish_reason` is `stop`, `length`, `tool_calls` or `content_filter`; any other Provider reason is reported as `stop`. Reasoning output is dropped. `usage` (`prompt_tokens`, `completion_tokens`, `total_tokens`, and `prompt_tokens_details.cached_tokens` when the Provider reported cached tokens) is present only when the Provider reported both input and output tokens; it is never estimated.
 
 ## 4. Slot resolution (normative)
 
@@ -76,9 +92,18 @@ All errors use `{ "error": { "code", "message", "type": "harness_store" | "provi
 | 409 | `slot_unbound` | Resolution found nothing (see §4) |
 | 500 | `internal_error` | A Gateway bug or a failing host callback; logged, never retried |
 | 502 | `provider_error` | Upstream error; `provider_status` and `provider_message` included verbatim |
-| 504 | `provider_timeout` | No first byte within 120 s |
+| 504 | `provider_timeout` | No response headers within 120 s, or a 120 s gap in the response body |
 
 `type` is `provider` for `provider_error` and `provider_timeout` and `harness_store` for every other code.
+
+`provider_error` carries what the Provider said:
+- `provider_status`: the upstream HTTP status, when the Provider answered with an error status. A Provider that could not be reached, or that broke off a response, gives a `provider_error` without it.
+- `provider_message`: the upstream `error.message`; else the raw upstream body, cut to 1000 characters; else the network error's message.
+- `provider_code`: the upstream `error.code`, when it is a string.
+
+Any occurrence of the Connection's API key in these fields is replaced with `[redacted]`. The Gateway never retries a failed upstream call.
+
+`provider_timeout` covers two timeouts, both 120 s by default and configurable by the Gateway's host: the Provider's response headers must arrive within the first-byte timeout, and once they have, no gap between two chunks of the response body (streamed or not) may exceed the idle timeout. A timeout aborts the upstream request.
 
 Reserved for the cloud Gateway (P2-01), never emitted locally in P0: `402 insufficient_credits`, `429 rate_limited`.
 

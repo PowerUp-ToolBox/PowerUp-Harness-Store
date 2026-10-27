@@ -7,6 +7,8 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { HttpBindings } from '@hono/node-server';
 import type { ModelRequirements } from '@harness-store/manifest';
+import { handleChatCompletion } from './completions.js';
+import type { CompletionTrace } from './completions.js';
 import { errorResponse } from './errors.js';
 import { RequestAbortedError, unlessAborted } from './in-flight.js';
 import type { InFlightRegistry } from './in-flight.js';
@@ -14,6 +16,7 @@ import type { Logger } from './logging.js';
 import { hashToken } from './tokens.js';
 import type { GatewayTokenClaims, TokenVerifier } from './tokens.js';
 import type { GatewayOptions } from './types.js';
+import type { UpstreamTimeouts } from './upstream-fetch.js';
 
 /** The body of `GET /v1/harness/context`. */
 export interface HarnessContext {
@@ -27,7 +30,8 @@ export interface HarnessContext {
 }
 
 export interface AppDeps {
-  readonly options: Pick<GatewayOptions, 'getManifest'>;
+  readonly options: Pick<GatewayOptions, 'getManifest' | 'getConnection'>;
+  readonly timeouts: UpstreamTimeouts;
   readonly verifier: TokenVerifier;
   readonly inFlight: InFlightRegistry;
   readonly logger: Logger;
@@ -41,6 +45,8 @@ interface AppEnv {
     claims: GatewayTokenClaims;
     /** Aborted when the request's token is revoked or the Gateway closes. */
     signal: AbortSignal;
+    /** What a chat completion resolved to and got from upstream, for the request log. */
+    trace: CompletionTrace;
   };
 }
 
@@ -75,18 +81,22 @@ function notSupported(c: Ctx): Response {
 }
 
 export function createApp(deps: AppDeps): Hono<AppEnv> {
-  const { options, verifier, inFlight, logger } = deps;
+  const { options, timeouts, verifier, inFlight, logger } = deps;
   const app = new Hono<AppEnv>();
 
   // Request metadata at debug level; never bodies or headers.
   app.use(async (c, next) => {
     const started = performance.now();
+    const trace: CompletionTrace = {};
+    c.set('trace', trace);
     await next();
     logger.debug('request', {
       method: c.req.method,
       path: c.req.path,
       harnessId: (c.var.claims as GatewayTokenClaims | undefined)?.harnessId,
+      ...(trace.model !== undefined && { model: trace.model }),
       status: c.res.status,
+      ...(trace.providerStatus !== undefined && { providerStatus: trace.providerStatus }),
       durationMs: Math.round(performance.now() - started),
     });
   });
@@ -139,6 +149,13 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     };
     return c.json(body);
   });
+
+  app.post('/v1/chat/completions', (c) =>
+    handleChatCompletion(
+      { options, timeouts },
+      { request: c.req.raw, signal: c.var.signal, trace: c.var.trace },
+    ),
+  );
 
   app.notFound(notSupported);
 

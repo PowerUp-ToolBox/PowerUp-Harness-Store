@@ -414,7 +414,6 @@ describe('routing', () => {
     ['PUT', '/v1/harness/context'],
     ['HEAD', '/v1/harness/context'],
     ['GET', '/v1/chat/completions'],
-    ['POST', '/v1/chat/completions'],
     ['GET', '/v1/models'],
     ['GET', '/'],
     ['GET', '/harness/context'],
