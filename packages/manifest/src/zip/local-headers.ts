@@ -45,12 +45,11 @@ const WINDOW = 64 * 1024;
 const VERIFY_SLICE = 64 * 1024;
 /**
  * Confirming the data-descriptor entries of one archive inflates their Deflate streams and scans
- * their stored data: this many bytes in total (no Harness Package holds more than this,
- * compressed), however many entries the archive has, plus at most what one last piece of
- * {@link MIN_PIECE} bytes, with the bytes the inflater held before it, inflates to. Every byte
- * inflated is charged, including the output of a push that throws. A hostile "zip bomb", many
- * central directory records pointing at one stream, or bytes after the end of a stream cannot
- * make the check do unbounded work.
+ * their stored data: at most this many bytes in total (no Harness Package holds more than this,
+ * compressed), however many entries the archive has. Every byte inflated is charged, including
+ * the output of a push that throws, and an entry is only started when the most it can be charged
+ * fits in what is left. A hostile "zip bomb", many central directory records pointing at one
+ * stream, or bytes after the end of a stream cannot make the check do unbounded work.
  */
 const VERIFY_BUDGET = PACKAGE_LIMITS.maxArchiveBytes;
 /** Deflate's largest ratio, rounded up: one compressed byte inflates to at most this many bytes. */
@@ -70,12 +69,15 @@ const MIN_PIECE = 4 * 1024;
  */
 const MAX_HELD = 65_535 + 4 + 2;
 /**
- * What the last byte of a Deflate stream's trial is charged when its push throws, as it does for
- * every honest data-descriptor entry: the most that byte, the bytes the inflater held before it
- * (at most {@link MAX_HELD}: a stored block it completes) and a symbol among them inflate to. Its
- * output is never counted (see deflateEndsEarly()).
+ * The most confirming a Deflate data-descriptor entry is charged past its declared size, about
+ * 4.1 MB: one push, made while the output has not passed that size, inflates at most the bytes
+ * the inflater held before it (at most {@link MAX_HELD}: a stored block it completes) and its own
+ * bytes and one more (a symbol among the held ones) at Deflate's largest ratio, and a piece is at
+ * most {@link MIN_PIECE} bytes, or few enough to stay within 2 KB of the declared size. An entry
+ * is only confirmed when its declared size and this fit in what is left of {@link VERIFY_BUDGET},
+ * so the budget is never overspent.
  */
-const LAST_BYTE_CHARGE = MAX_HELD + 2 * MAX_DEFLATE_RATIO;
+export const MAX_OVERRUN = MAX_HELD + (MIN_PIECE + 1) * MAX_DEFLATE_RATIO;
 
 /** What is left of {@link VERIFY_BUDGET} while one archive's entries are confirmed. */
 interface Budget {
@@ -131,7 +133,8 @@ export interface LocalLayout {
  * Entries that share bytes are reported before anything is inflated, so each stream is inflated
  * at most once, and all the confirming shares one budget ({@link VERIFY_BUDGET}): the entries it
  * does not reach are reported as inconsistent. An archive that validatePackage() rejects for its
- * listing alone (too many entries, or too large) is not confirmed at all.
+ * listing alone (a truncated listing, more files than PACKAGE_LIMITS.maxFiles, or over
+ * PACKAGE_LIMITS.maxArchiveBytes) is not confirmed at all.
  *
  * @throws only what the reader throws (an I/O error): a problem with the archive is reported in
  *   the result.
@@ -184,9 +187,14 @@ export async function readLocalHeaders(
   // Entries past the listing limit were never read, so their bytes would look unlisted.
   if (directory.truncated) unlisted = undefined;
 
-  // An archive that is truncated or too large is rejected from its listing alone: its entries are
-  // not confirmed.
-  if (!directory.truncated && reader.size <= PACKAGE_LIMITS.maxArchiveBytes) {
+  // An archive with too many entries or too large is rejected from its listing alone: its entries
+  // are not confirmed. Folders do not count as files, as for validatePackage().
+  const files = entries.filter((entry) => entry.kind !== 'directory').length;
+  if (
+    !directory.truncated &&
+    files <= PACKAGE_LIMITS.maxFiles &&
+    reader.size <= PACKAGE_LIMITS.maxArchiveBytes
+  ) {
     await confirmStreamedEntries(reader, walk);
   }
 
@@ -392,12 +400,10 @@ async function streamedEntryInconsistency(
     return undefined; // an unsupported method is reported already
   }
   // The work is known before it starts: a stored entry's data is scanned once (and charged its
-  // length), and a Deflate stream that inflates past its declared size is rejected as soon as it
-  // does (an honest one is charged at most its size and LAST_BYTE_CHARGE).
+  // length), and a Deflate stream is charged at most its declared size and MAX_OVERRUN, as it is
+  // rejected as soon as it inflates past that size.
   const work =
-    entry.method === METHOD_STORED
-      ? entry.compressedSize
-      : entry.uncompressedSize + LAST_BYTE_CHARGE;
+    entry.method === METHOD_STORED ? entry.compressedSize : entry.uncompressedSize + MAX_OVERRUN;
   if (work > budget.left) {
     budget.left = -1; // no later entry is confirmed either
     return BUDGET_SPENT;
@@ -478,15 +484,15 @@ function safeUint64(view: DataView, at: number): number {
  * byte, so the bytes after it belong to no data a reader using the central directory sees. The
  * work is bounded: inflating stops once the output passes `uncompressedSize`, or once the stream
  * has ended (the inflater then holds more than {@link MAX_HELD} bytes), and every byte of output
- * is taken from `budget`.
+ * is taken from `budget`, at most `uncompressedSize` and {@link MAX_OVERRUN} in all.
  *
  * A push that throws has inflated before failing, but that output never reaches the callback
  * that counts it: such a push is charged the most it could have inflated instead (the bytes the
  * inflater held, as a stored block, and its own bytes and one more, for a symbol among the held
  * ones, at Deflate's largest ratio). Every piece is pushed as more to come, which never throws
  * for want of data, except the last byte of the trial, which is pushed alone as the final one: an
- * honest stream that needs the entry's last byte throws there, and costs at most
- * {@link LAST_BYTE_CHARGE}.
+ * honest stream that needs the entry's last byte throws there, and costs at most about 66 KB past
+ * what it inflated before.
  */
 async function deflateEndsEarly(
   reader: RandomAccessReader,
@@ -528,7 +534,8 @@ async function deflateEndsEarly(
           // The stream needs more than the first (compressedSize - 1) bytes (or its data is
           // invalid, which reading the entry reports): it ends no earlier than the central
           // directory says, so a streaming unpacker reaches the same descriptor.
-          uncounted = held + (piece.length + 1) * MAX_DEFLATE_RATIO;
+          // A fresh inflater holds nothing, even when heldBytes() cannot tell.
+          uncounted = Math.min(held, MAX_HELD) + (piece.length + 1) * MAX_DEFLATE_RATIO;
           return false;
         }
         // More output than the entry declares: a streaming reader and a reader using the central

@@ -19,6 +19,7 @@ import type { PackageListing, RandomAccessReader } from '../src/index.js';
 import { DirectorySource, fileReader, openArchiveFile } from '../src/node/index.js';
 import { crc32 } from '../src/zip/crc32.js';
 import { CP437_HIGH, decodeName } from '../src/zip/central-directory.js';
+import { MAX_OVERRUN } from '../src/zip/local-headers.js';
 import { fixtureDir, zipFolder } from './support/packages.js';
 import {
   buildZip,
@@ -690,8 +691,8 @@ describe('ArchiveSource: bounded work while opening', () => {
 
   it('confirms at most 500 MB in all, and reports the entries past it as inconsistent', async () => {
     // Five honest 100 MB entries: each is charged its 100 MB and the most its last byte inflates
-    // to, so the first four are confirmed and the fifth does not fit what is left. The empty
-    // stored entry after it would fit, but confirming stops once an entry does not.
+    // to, so the first four are confirmed and the fifth, with MAX_OVERRUN, does not fit what is
+    // left. The empty stored entry after it would fit, but confirming stops once an entry does not.
     const source = await open([
       ...Array.from({ length: 5 }, (_, i) => zerosEntry(`${String(i)}.bin`)),
       { name: 'empty.txt', method: 0, data: '', dataDescriptor: true },
@@ -716,7 +717,7 @@ describe('ArchiveSource: bounded work while opening', () => {
   });
 
   it('charges a stream that throws on its last byte for what it inflated before', async () => {
-    // Sixteen entries, none sharing bytes, each declaring about 500 MB: the first 64 KB of the 100 MB
+    // Sixteen entries, none sharing bytes, each declaring 492 MB: the first 64 KB of the 100 MB
     // stream (which inflate to about 64 MB) and one byte, so the stream needs more than the entry
     // holds. Before the fix, the whole 64 KB went to the inflater in one final push that threw
     // without counting its output: nothing was charged, all 16 were confirmed, and a 1 MB zip
@@ -725,7 +726,7 @@ describe('ArchiveSource: bounded work while opening', () => {
     const records = Array.from({ length: 16 }, (_, i) => ({
       ...zerosEntry(`${String(i)}.bin`),
       compressedData: truncated,
-      declaredSize: PACKAGE_LIMITS.maxArchiveBytes - 128 * 1024,
+      declaredSize: PACKAGE_LIMITS.maxArchiveBytes - 8 * MB,
     }));
     const started = performance.now();
     const source = await ArchiveSource.open(buildZip(records));
@@ -742,8 +743,8 @@ describe('ArchiveSource: bounded work while opening', () => {
     // held.bin: a non-final stored block of 65 534 bytes and one more byte. The inflater holds
     // the block until the trial's last byte completes it, then throws for want of the next block:
     // the block's output is never counted, so it is charged what the inflater held. small.bin's
-    // declared size, with the charge for its own last byte, fits in what held.bin leaves only if
-    // that block goes uncharged.
+    // declared size, with MAX_OVERRUN, fits in what held.bin leaves only if that block goes
+    // uncharged.
     const block = new Uint8Array(5 + 65_534 + 1);
     block.set([0x00, 0xfe, 0xff, 0x01, 0x00]); // BFINAL 0, stored; LEN 65 534 and its complement
     const source = await open([
@@ -760,7 +761,7 @@ describe('ArchiveSource: bounded work while opening', () => {
         method: 8,
         compressedData: deflateRawSync('x'),
         crc: 0,
-        declaredSize: PACKAGE_LIMITS.maxArchiveBytes - 100_000,
+        declaredSize: PACKAGE_LIMITS.maxArchiveBytes - MAX_OVERRUN - 10_000,
         dataDescriptor: true,
       },
     ]);
@@ -779,7 +780,7 @@ describe('ArchiveSource: bounded work while opening', () => {
         method: 8,
         compressedData: deflateRawSync('x'),
         crc: 0,
-        declaredSize: PACKAGE_LIMITS.maxArchiveBytes - MB / 2,
+        declaredSize: PACKAGE_LIMITS.maxArchiveBytes - MAX_OVERRUN - MB / 2,
         dataDescriptor: true,
       },
     ]);
@@ -839,6 +840,36 @@ describe('ArchiveSource: bounded work while opening', () => {
     for (const entry of source.listEntries().entries) {
       expect((entry.unsupported as { detail: string }).detail).toMatch(budgetSpent);
     }
+    // The end record, the central directory and one window of local headers: no data was read.
+    expect(reader.reads).toBe(3);
+  });
+
+  it('starts a Deflate entry only when the most it can inflate fits in the budget', async () => {
+    // A stream that inflates past its declared size is stopped after the push that passes it,
+    // which can inflate up to MAX_OVERRUN (about 4 MB) more: an entry is only started when that
+    // fits too, so the 500 MB are never overspent.
+    const declaring = (declaredSize: number) =>
+      sparseReader(
+        buildZip([
+          {
+            name: 'edge.bin',
+            method: 8,
+            compressedData: deflateRawSync('x'),
+            crc: 0,
+            declaredSize,
+            dataDescriptor: true,
+          },
+        ]),
+        0,
+      );
+    const fits = (
+      await ArchiveSource.open(declaring(PACKAGE_LIMITS.maxArchiveBytes - MAX_OVERRUN))
+    ).listEntries().entries[0];
+    expect(fits).not.toHaveProperty('unsupported');
+
+    const reader = declaring(PACKAGE_LIMITS.maxArchiveBytes - MAX_OVERRUN + 1);
+    const [past] = (await ArchiveSource.open(reader)).listEntries().entries;
+    expect((past?.unsupported as { detail: string }).detail).toMatch(budgetSpent);
     // The end record, the central directory and one window of local headers: no data was read.
     expect(reader.reads).toBe(3);
   });
