@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing/fake-provider": {
+      "types": "./dist/testing/fake-provider.d.ts",
+      "default": "./dist/testing/fake-provider.js"
     }
   },
   "files": [
@@ -20,6 +24,16 @@
     "build": "tsc --build tsconfig.build.json",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "hono": "^4.13.14"
+  },
+  "devDependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.80",
+    "ai": "^7.0.155",
+    "openai": "^7.45.1",
+    "zod": "^4.6.7"
   }
 }

@@ -26,13 +26,15 @@ Prerequisites: **Node 22 LTS** (pinned in [`.nvmrc`](./.nvmrc); `nvm use` picks 
 
 ```sh
 pnpm install     # the only setup step; no environment variables needed
+pnpm build       # tsc --build of every package that has a build script
 pnpm lint        # ESLint in every TypeScript package and on root-level JS, then Prettier --check
 pnpm typecheck   # tsc --noEmit in every TypeScript package
 pnpm test        # every package's test script (Vitest; apps/store has its own runner)
-pnpm build       # tsc --build of every package that has a build script
 ```
 
-CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs exactly these commands on every push and pull request.
+On a fresh clone, run `pnpm build` before `pnpm typecheck` or `pnpm test`: packages depend on each other through `workspace:*` and import each other's built `dist/` (a package's own tests may import it by its package name too). Rebuild after changing a package that another one imports.
+
+CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs exactly these commands, in this order, on every push and pull request.
 
 To check a Harness Package (a folder or a zip) the way the Store will, build the Manifest package and run its CLI: `pnpm --filter @harness-store/manifest build`, then `node packages/manifest/bin/harness-manifest.js validate <path>`. See [`packages/manifest`](./packages/manifest/README.md#command-line-harness-manifest-validate) for its options, output and exit status.
 

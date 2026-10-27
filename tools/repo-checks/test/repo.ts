@@ -30,8 +30,11 @@ export const P0_LAYOUT = {
 /** Workspace globs every product package must live under. */
 export const LAYOUT_GLOBS = Object.keys(P0_LAYOUT).map((dir) => `${dir}/*`);
 
-/** The four root commands a developer and CI both run. */
-export const ROOT_COMMANDS = ['lint', 'typecheck', 'test', 'build'] as const;
+/**
+ * The four root commands a developer and CI both run, in CI order. Build comes first: packages
+ * import each other's dist/ through workspace:*, so lint, typecheck and test need it.
+ */
+export const ROOT_COMMANDS = ['build', 'lint', 'typecheck', 'test'] as const;
 
 export interface PackageJson {
   name?: string;
