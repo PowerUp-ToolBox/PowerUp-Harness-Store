@@ -7,7 +7,13 @@ import { EventEmitter } from 'node:events';
 import { connect } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGateway, createInMemoryTokenVerifier } from '../src/index.js';
-import type { Gateway, GatewayTokenClaims, Logger, TokenVerifier } from '../src/index.js';
+import type {
+  Gateway,
+  GatewayOptions,
+  GatewayTokenClaims,
+  Logger,
+  TokenVerifier,
+} from '../src/index.js';
 import { baseOptions, claims, manifestWith, rawRequest, startGateway } from './support/gateway.js';
 import type { TestGateway } from './support/gateway.js';
 
@@ -238,10 +244,11 @@ describe('Gateway Token authentication', () => {
 
 describe('revoking requests in flight', () => {
   /** A Gateway whose getManifest waits until the test releases it. */
-  async function startHeld() {
+  async function startHeld(overrides: Partial<GatewayOptions> = {}) {
     const calls: string[] = [];
     const release = deferred<null>();
     const test = await start({
+      ...overrides,
       getManifest: (harnessId) => {
         calls.push(harnessId);
         return release.promise;
@@ -287,7 +294,10 @@ describe('revoking requests in flight', () => {
   });
 
   it('close() ends requests in flight and resolves without waiting for them', async () => {
-    const { gateway, url, reached } = await startHeld();
+    const debug = vi.fn<Logger['debug']>();
+    const { gateway, url, reached } = await startHeld({
+      logger: { debug, error: () => undefined },
+    });
     const token = gateway.issueToken(claims());
     const pending = get(url, '/harness/context', token).then(
       (response) => response.status,
@@ -296,6 +306,14 @@ describe('revoking requests in flight', () => {
     await reached(1);
     await gateway.close();
     expect(await pending).toBe('connection closed');
+    // The handler itself was stopped, not only its connection: getManifest never settles, so the
+    // request is logged only because close() aborted it (401 invalid_token, like a revoke).
+    await vi.waitFor(() => {
+      expect(debug).toHaveBeenCalledWith(
+        'request',
+        expect.objectContaining({ path: '/v1/harness/context', status: 401 }),
+      );
+    });
   });
 });
 
@@ -503,6 +521,29 @@ describe('GET /v1/harness/context', () => {
     const logged = JSON.stringify(error.mock.calls);
     expect(logged).toContain('database is locked');
     expect(logged).not.toContain('sk-abcdefgh12345678');
+  });
+
+  it('answers 500 internal_error, not invalid_host, when a callback rejects with a non-Error', async () => {
+    const error = vi.fn<Logger['error']>();
+    const { gateway, url } = await start({
+      logger: { debug: () => undefined, error },
+      // Hono's onError only sees Errors; anything else makes the app's fetch reject.
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      getManifest: () => Promise.reject('database is locked'),
+    });
+    const token = gateway.issueToken(claims());
+    const response = await get(url, '/harness/context', token);
+    expect(response.status).toBe(500);
+    expect(await errorOf(response)).toEqual({
+      code: 'internal_error',
+      message: expect.any(String) as string,
+      type: 'harness_store',
+    });
+    expect(error).toHaveBeenCalledWith('internal error', {
+      method: 'GET',
+      path: '/v1/harness/context',
+      error: 'database is locked',
+    });
   });
 });
 

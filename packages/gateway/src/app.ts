@@ -57,6 +57,16 @@ export function invalidHost(): Response {
   return errorResponse('invalid_host', 'The Host header must name the Gateway on loopback.');
 }
 
+/** Logs an unexpected error (metadata and the redacted error only) and answers 500 `internal_error`. */
+export function internalError(
+  logger: Logger,
+  error: unknown,
+  fields: Record<string, unknown>,
+): Response {
+  logger.error('internal error', { ...fields, error });
+  return errorResponse('internal_error', 'The Model Gateway failed to handle the request.');
+}
+
 function notSupported(c: Ctx): Response {
   return errorResponse(
     'not_supported',
@@ -136,13 +146,11 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     if (error instanceof RequestAbortedError) {
       return errorResponse('invalid_token', 'The Gateway Token was revoked.');
     }
-    logger.error('internal error', {
+    return internalError(logger, error, {
       method: c.req.method,
       path: c.req.path,
       harnessId: (c.var.claims as GatewayTokenClaims | undefined)?.harnessId,
-      error,
     });
-    return errorResponse('internal_error', 'The Model Gateway failed to handle the request.');
   });
 
   return app;

@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { getRequestListener } from '@hono/node-server';
+import { RequestError, getRequestListener } from '@hono/node-server';
 import type { HttpBindings } from '@hono/node-server';
 
 /** The only hosts a loopback server may bind to. */
@@ -40,7 +40,14 @@ export interface ServeLoopbackOptions {
    * which over HTTP/1.1 means a malformed `Host` header. Default: an empty 400.
    */
   onBadRequest?: () => Response;
+  /**
+   * Answers a request whose `fetch` threw or rejected instead of returning a `Response` (a Hono
+   * app rethrows anything that is not an `Error` past its `onError`). Default: an empty 500.
+   */
+  onError?: (error: unknown, request: Request) => Response;
 }
+
+const emptyResponse = (status: number) => () => new Response(null, { status });
 
 /**
  * Serves `fetch` (typically a Hono app's) over HTTP/1.1 on a loopback host. Shared by the Model
@@ -50,7 +57,12 @@ export interface ServeLoopbackOptions {
  */
 export async function serveLoopback(
   fetch: NodeFetch,
-  { host, port, onBadRequest }: ServeLoopbackOptions,
+  {
+    host,
+    port,
+    onBadRequest = emptyResponse(400),
+    onError = emptyResponse(500),
+  }: ServeLoopbackOptions,
 ): Promise<LoopbackServer> {
   if (!isLoopbackHost(host)) {
     throw new Error(
@@ -62,13 +74,23 @@ export async function serveLoopback(
   }
   const listener = getRequestListener(
     // Only HTTP/1.1 servers are created here, so env is always the HTTP/1.1 bindings.
-    (request, env) => fetch(request, env as HttpBindings),
+    async (request, env) => {
+      try {
+        return await fetch(request, env as HttpBindings);
+      } catch (error) {
+        return onError(error, request);
+      }
+    },
     {
       hostname: host,
       // Keep the process-wide Request and Response untouched: the host process (Electron's main
       // process, a test runner) shares them.
       overrideGlobalObjects: false,
-      ...(onBadRequest && { errorHandler: onBadRequest }),
+      // node-server sends both a failure to build the Request and a rejected `fetch` here. The
+      // wrapper above settles every `fetch`, so only a RequestError should arrive; anything else
+      // (a throwing `onError`) is still not a bad request.
+      errorHandler: (error) =>
+        error instanceof RequestError ? onBadRequest() : emptyResponse(500)(),
     },
   );
   // A request without a Host header reaches `fetch` (Node would answer it with a bare 400), so

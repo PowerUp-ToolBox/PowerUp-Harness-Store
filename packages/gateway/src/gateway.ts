@@ -4,9 +4,10 @@
  * process exits; tests do the same in-process against the fake Provider.
  */
 import { EventEmitter } from 'node:events';
-import { createApp, invalidHost } from './app.js';
+import { createApp, internalError, invalidHost } from './app.js';
 import { InFlightRegistry } from './in-flight.js';
 import { safeLogger } from './logging.js';
+import type { Logger } from './logging.js';
 import { serveLoopback, urlHost } from './serve.js';
 import type { LoopbackServer } from './serve.js';
 import { createInMemoryTokenVerifier, hashToken } from './tokens.js';
@@ -58,6 +59,7 @@ class ModelGateway extends EventEmitter<GatewayEvents> implements Gateway {
   readonly #verifier;
   readonly #inFlight = new InFlightRegistry();
   readonly #app;
+  readonly #logger: Logger;
   /** Launches with tokens from {@link issueToken}, so {@link close} can revoke them all. */
   readonly #launches = new Set<string>();
   #state: GatewayState = 'new';
@@ -68,11 +70,12 @@ class ModelGateway extends EventEmitter<GatewayEvents> implements Gateway {
   constructor(options: GatewayOptions) {
     super();
     this.#verifier = options.tokenVerifier ?? createInMemoryTokenVerifier();
+    this.#logger = safeLogger(options.logger);
     this.#app = createApp({
       options,
       verifier: this.#verifier,
       inFlight: this.#inFlight,
-      logger: safeLogger(options.logger),
+      logger: this.#logger,
       port: () => this.#port,
     });
   }
@@ -82,7 +85,18 @@ class ModelGateway extends EventEmitter<GatewayEvents> implements Gateway {
       throw new Error(`The Model Gateway cannot listen: it is already ${this.#state}.`);
     }
     this.#state = 'listening';
-    this.#server = serveLoopback(this.#app.fetch, { host, port, onBadRequest: invalidHost });
+    this.#server = serveLoopback(this.#app.fetch, {
+      host,
+      port,
+      onBadRequest: invalidHost,
+      // Reached only by what the app's onError cannot catch, such as a callback rejecting with
+      // something that is not an Error.
+      onError: (error, request) =>
+        internalError(this.#logger, error, {
+          method: request.method,
+          path: new URL(request.url).pathname,
+        }),
+    });
     let server: LoopbackServer;
     try {
       server = await this.#server;
