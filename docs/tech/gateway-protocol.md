@@ -5,8 +5,10 @@ The **Model Gateway** is the only path from a Harness to a language model. It ru
 ## 1. Discovery and authentication
 
 - Base URL: `$HARNESS_GATEWAY_URL` (form `http://127.0.0.1:<port>/v1`). The port is chosen at app start; Harnesses must read the variable, never hard-code it.
-- Every request carries `Authorization: Bearer $HARNESS_GATEWAY_TOKEN`. Tokens are random 256-bit strings issued per launch, bound to (Harness ID, version, launch id), and revoked when the process exits. Requests without a valid token get `401 { "error": { "code": "invalid_token" } }`.
-- The Gateway only listens on loopback. It rejects requests whose `Host` is not loopback and sets no CORS headers, so a browser page cannot call it directly; the Harness's own local server must proxy if its web UI needs model access (recommended pattern: the Harness backend calls the Gateway).
+- Every request carries `Authorization: Bearer $HARNESS_GATEWAY_TOKEN` (the scheme name is matched case-insensitively). Tokens are random 256-bit strings (base64url) issued per launch, bound to the claims `{ harnessId, harnessVersion, launchId, issuedAt, locale, workspace? }`, and revoked when the process exits. They have no time-based expiry: a token lives until it is revoked or the Gateway stops, and one launch may hold several. Requests without a valid token get `401 { "error": { "code": "invalid_token" } }`. Revocation is immediate: a request already in flight for a revoked token that has not sent its response headers yet gets the same 401.
+- The Gateway only listens on loopback (`127.0.0.1`, `::1` or `localhost`). It sets no CORS headers, so a browser page cannot call it directly; the Harness's own local server must proxy if its web UI needs model access (recommended pattern: the Harness backend calls the Gateway).
+- The `Host` header must be exactly `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, where `<port>` is the Gateway's port (the name is matched case-insensitively). Any other `Host`, a malformed one or none gets `403 { "error": { "code": "invalid_host" } }`, whatever the token, so a web page cannot reach the Gateway through DNS rebinding.
+- Checks run in this order: `Host`, then the token, then routing. An unknown path without a valid token is therefore `401`, not `404`.
 
 ## 2. Endpoints
 
@@ -16,7 +18,26 @@ The **Model Gateway** is the only path from a Harness to a language model. It ru
 | `GET` | `/v1/models` | Lists the calling Harness's Slots and their current bindings |
 | `GET` | `/v1/harness/context` | Non-OpenAI extension: returns `{ harnessId, version, locale, workspace?, slots: {...} }` |
 
-Anything else returns `404 { "error": { "code": "not_supported" } }`. Embeddings, images, audio and the Responses API are not part of P0.
+Anything else, including another method on these paths (`HEAD` too), returns `404 { "error": { "code": "not_supported" } }`. Embeddings, images, audio and the Responses API are not part of P0.
+
+`GET /v1/harness/context` answers from the Gateway Token's claims and the Harness's installed Manifest:
+
+```json
+{
+  "harnessId": "alice/hello",
+  "version": "1.2.3",
+  "locale": "zh-CN",
+  "workspace": "/Users/alice/project",
+  "slots": {
+    "default": { "description": "Main model", "requirements": { "tools": true } },
+    "fast": { "requirements": {} }
+  }
+}
+```
+
+`version` is the Harness Version, `locale` the app's locale at launch, and `workspace` is present only when the launch has a Workspace. `slots` lists every Model Slot the Manifest declares, with its `description` when there is one and its Model Requirements (`{}` when none are declared). It never contains binding data; the current bindings are listed by `GET /v1/models`.
+
+Request bodies are JSON whatever the `Content-Type` says, and at most 20 MB. A body that is larger, is not valid JSON or is not a JSON object gets `400 invalid_request`.
 
 ## 3. `POST /v1/chat/completions`
 
@@ -46,13 +67,18 @@ All errors use `{ "error": { "code", "message", "type": "harness_store" | "provi
 
 | HTTP | code | Meaning |
 |---|---|---|
-| 400 | `invalid_request` | Body fails validation (details in `message`) |
-| 401 | `invalid_token` | Missing/expired Gateway Token |
+| 400 | `invalid_request` | Body fails validation (details in `message`), is not a JSON object or is larger than 20 MB |
+| 401 | `invalid_token` | Missing, unknown or revoked Gateway Token |
+| 403 | `invalid_host` | `Host` header is not the Gateway on loopback (§1) |
 | 403 | `provider_not_connected` | Explicit `provider/model` for a Provider with no Connection |
+| 404 | `not_supported` | Unknown path, or a method the path does not serve (§2) |
 | 404 | `unknown_slot` | `model` is neither a declared Slot nor a valid `provider/model` |
 | 409 | `slot_unbound` | Resolution found nothing (see §4) |
+| 500 | `internal_error` | A Gateway bug or a failing host callback; logged, never retried |
 | 502 | `provider_error` | Upstream error; `provider_status` and `provider_message` included verbatim |
 | 504 | `provider_timeout` | No first byte within 120 s |
+
+`type` is `provider` for `provider_error` and `provider_timeout` and `harness_store` for every other code.
 
 Reserved for the cloud Gateway (P2-01), never emitted locally in P0: `402 insufficient_credits`, `429 rate_limited`.
 

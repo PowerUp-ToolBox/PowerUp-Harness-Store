@@ -1,16 +1,58 @@
 # @harness-store/gateway
 
-> Status: P0-02.2 (the [fake Provider](#fake-provider-harness-storegatewaytestingfake-provider)) is in. The Model Gateway server and its Provider adapters arrive in the rest of P0-02.
+> Status: P0-02.1 (the [Gateway server](#the-gateway-server) with Gateway Token auth and `GET /v1/harness/context`) and P0-02.2 (the [fake Provider](#fake-provider-harness-storegatewaytestingfake-provider)) are in. `POST /v1/chat/completions`, `GET /v1/models`, the Provider adapters and Usage Records arrive in the rest of P0-02.
 
 The **Model Gateway**: the local service, hosted by the **Runtime**, that is the only path from a running **Harness** to any model. It is a loopback HTTP server that speaks the OpenAI Chat Completions protocol, authenticates each request with the Harness's per-launch **Gateway Token**, resolves the requested **Model Slot** to the User's **Slot Binding** (Model Override, then Recommended Models, then Default Model), forwards the call to the chosen **Provider** through a **Connection** the Harness never sees, streams the answer back and writes a **Usage Record**.
 
-## What it will contain
-
-- A framework-independent Node HTTP server with no Electron dependency, so it is tested in-process against a fake Provider (the Gateway HTTP seam, [`architecture.md`](../../docs/tech/architecture.md) §8) and can be reused server-side later. The HTTP layer is [Hono](https://hono.dev) on `@hono/node-server`.
-- Provider adapters built on the Vercel AI SDK, plus data-only presets for OpenAI-compatible Providers.
-- Documented error codes such as `slot_unbound`.
+The HTTP layer is [Hono](https://hono.dev) on `@hono/node-server`, with no Electron dependency, so the Gateway is tested in-process against the fake Provider (the Gateway HTTP seam, [`architecture.md`](../../docs/tech/architecture.md) §8) and can be reused server-side later. Provider adapters will be built on the Vercel AI SDK, with data-only presets for OpenAI-compatible Providers.
 
 Normative reference: [`docs/tech/gateway-protocol.md`](../../docs/tech/gateway-protocol.md). Spec: [`P0-02`](../../docs/delivery/specs/P0-02-model-gateway-core.md).
+
+## The Gateway server
+
+```ts
+import { createGateway } from '@harness-store/gateway';
+
+const gateway = createGateway({
+  getManifest: (harnessId) => installed.manifestOf(harnessId), // Manifest | null
+  resolveBinding: ({ harnessId, slot }) => bindings.resolve(harnessId, slot), // Binding | null
+  getConnection: (providerId) => connections.decrypt(providerId), // ConnectionSecret | null
+  onUsage: (record) => usage.insert(record),
+  // tokenVerifier: optional, defaults to in-memory per-launch tokens
+  // logger: optional, defaults to no debug logs and errors on console.error
+});
+
+const { port, url } = await gateway.listen(); // 127.0.0.1, OS-assigned port; url is HARNESS_GATEWAY_URL
+const token = gateway.issueToken({
+  harnessId: 'alice/hello',
+  harnessVersion: '1.2.3',
+  launchId,
+  locale: 'en',
+  workspace: '/Users/alice/project', // only when the launch has a Workspace
+}); // HARNESS_GATEWAY_TOKEN; the Gateway stamps issuedAt
+gateway.revokeLaunch(launchId); // when the Harness process exits
+await gateway.close();
+```
+
+- `listen(host = '127.0.0.1', port = 0)` accepts only `127.0.0.1`, `::1` and `localhost` and resolves to `{ port, url }` with `url` = `http://<host>:<port>/v1` (IPv6 in brackets). It rejects when called a second time or after `close()`.
+- `close()` revokes every token, fails every request in flight, destroys open connections and stops listening. It is idempotent.
+- `issueToken(claims)` returns 32 random bytes, base64url. Tokens live until `revokeToken(token)`, `revokeLaunch(launchId)` (every token of that launch) or `close()`. Revoking fails the matching requests in flight with 401 `invalid_token`.
+- The Gateway is an `EventEmitter`; it emits `usage` with each Usage Record once Usage Records land (P0-02.7).
+- Every request is checked in this order: the `Host` header (`127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, else 403 `invalid_host`), the Gateway Token (else 401 `invalid_token`), then routing (else 404 `not_supported`). No response carries a CORS header.
+- `GET /v1/harness/context` answers `{ harnessId, version, locale, workspace?, slots }` from the token's claims and the Manifest from `getManifest` (called on every request, never cached; `null` gives `slots: {}`).
+
+Types the host implements or receives (all exported):
+
+| Type                 | Shape                                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GatewayTokenClaims` | `{ harnessId, harnessVersion, launchId, issuedAt, locale, workspace? }`; `issuedAt` is epoch ms                                                                           |
+| `TokenVerifier`      | `{ issue(claims): string; verify(token): claims \| null; revoke(token): void; revokeLaunch(launchId): void }`; the default keeps tokens keyed by their SHA-256, never raw |
+| `Binding`            | `{ providerId, model, source: 'override' \| 'recommended' \| 'default_same_name' \| 'default' }`                                                                          |
+| `ConnectionSecret`   | `{ apiKey?, baseUrl? }`: the decrypted credential, and a base URL that overrides the Provider's default                                                                   |
+| `UsageRecord`        | `{ timestamp, harnessId, harnessVersion, slot, provider, model, promptTokens, completionTokens, cachedPromptTokens?, durationMs, status }`                                |
+| `Logger`             | `{ debug(message, fields?): void; error(message, fields?): void }`; every message and field is redacted (keys, Bearer tokens) before it reaches the logger                |
+
+A callback that throws or rejects gets the request 500 `internal_error` and is logged through `logger.error`.
 
 ## Fake Provider (`@harness-store/gateway/testing/fake-provider`)
 

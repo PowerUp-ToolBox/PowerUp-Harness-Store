@@ -49,6 +49,9 @@ importers:
 
   packages/gateway:
     dependencies:
+      '@harness-store/manifest':
+        specifier: workspace:*
+        version: link:../manifest
       '@hono/node-server':
         specifier: ^2.1.5
         version: 2.1.5(hono@4.13.14)

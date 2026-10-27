@@ -1,6 +1,6 @@
-import type { Server } from 'node:http';
+import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { createAdaptorServer } from '@hono/node-server';
+import { getRequestListener } from '@hono/node-server';
 import type { HttpBindings } from '@hono/node-server';
 
 /** The only hosts a loopback server may bind to. */
@@ -32,6 +32,16 @@ export interface LoopbackServer {
   close(): Promise<void>;
 }
 
+export interface ServeLoopbackOptions {
+  host: string;
+  port: number;
+  /**
+   * Answers a request that never reaches `fetch` because it cannot be turned into a `Request`,
+   * which over HTTP/1.1 means a malformed `Host` header. Default: an empty 400.
+   */
+  onBadRequest?: () => Response;
+}
+
 /**
  * Serves `fetch` (typically a Hono app's) over HTTP/1.1 on a loopback host. Shared by the Model
  * Gateway and the fake Provider so both bind, report their port and shut down the same way.
@@ -40,7 +50,7 @@ export interface LoopbackServer {
  */
 export async function serveLoopback(
   fetch: NodeFetch,
-  { host, port }: { host: string; port: number },
+  { host, port, onBadRequest }: ServeLoopbackOptions,
 ): Promise<LoopbackServer> {
   if (!isLoopbackHost(host)) {
     throw new Error(
@@ -50,14 +60,22 @@ export async function serveLoopback(
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
     throw new Error(`Invalid port ${String(port)}: expected an integer from 0 to 65535.`);
   }
-  const server = createAdaptorServer({
+  const listener = getRequestListener(
     // Only HTTP/1.1 servers are created here, so env is always the HTTP/1.1 bindings.
-    fetch: (request, env) => fetch(request, env as HttpBindings),
-    hostname: host,
-    // Keep the process-wide Request and Response untouched: the host process (Electron's main
-    // process, a test runner) shares them.
-    overrideGlobalObjects: false,
-  }) as Server;
+    (request, env) => fetch(request, env as HttpBindings),
+    {
+      hostname: host,
+      // Keep the process-wide Request and Response untouched: the host process (Electron's main
+      // process, a test runner) shares them.
+      overrideGlobalObjects: false,
+      ...(onBadRequest && { errorHandler: onBadRequest }),
+    },
+  );
+  // A request without a Host header reaches `fetch` (Node would answer it with a bare 400), so
+  // the app's own Host check answers it like any other bad Host.
+  const server = createServer({ requireHostHeader: false }, (request, response) => {
+    void listener(request, response);
+  });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => {
