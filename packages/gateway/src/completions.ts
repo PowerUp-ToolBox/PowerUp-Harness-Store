@@ -4,7 +4,8 @@
  * (404, 403), call the Provider through its adapter, then answer in the OpenAI shape, or with the
  * mapped Provider error (502, 504). Nothing before the upstream call reaches a Provider.
  */
-import { generateText } from 'ai';
+import { generateText, wrapLanguageModel } from 'ai';
+import type { LanguageModel } from 'ai';
 import { createLanguageModel } from './adapters.js';
 import { readJsonObject } from './body.js';
 import { errorResponse } from './errors.js';
@@ -74,6 +75,29 @@ async function resolveModel(
   return { providerId: ref.providerId, model: ref.model, slot: null, connection };
 }
 
+/**
+ * `model` with the Harness's `tool_choice` handed to the Provider below the AI SDK. Given the tool
+ * choice itself, the AI SDK checks the reply against it and throws when the Provider did not
+ * comply, which many Providers (small local models especially) do not. The Gateway passes the
+ * Provider's reply through instead, so it never enforces `tool_choice` itself.
+ */
+function withProviderToolChoice(
+  model: Exclude<LanguageModel, string>,
+  toolChoice: CallSettings['toolChoice'],
+): Exclude<LanguageModel, string> {
+  if (toolChoice === undefined || toolChoice === 'auto') return model;
+  const choice =
+    typeof toolChoice === 'string'
+      ? { type: toolChoice }
+      : { type: 'tool' as const, toolName: toolChoice.toolName };
+  return wrapLanguageModel({
+    model,
+    middleware: {
+      transformParams: ({ params }) => Promise.resolve({ ...params, toolChoice: choice }),
+    },
+  });
+}
+
 /** Calls the Provider and answers the `chat.completion`, or the mapped Provider error. */
 async function complete(
   resolved: ResolvedModel,
@@ -85,16 +109,20 @@ async function complete(
   const upstream = createUpstreamFetch(deps.timeouts);
   // Stop the upstream call when the Harness hangs up, too.
   const abortSignal = AbortSignal.any([signal, request.signal]);
-  const languageModel = createLanguageModel({
-    providerId: resolved.providerId,
-    model: resolved.model,
-    connection: resolved.connection,
-    fetch: upstream.fetch,
-  });
+  const { toolChoice, ...callSettings } = settings;
+  const languageModel = withProviderToolChoice(
+    createLanguageModel({
+      providerId: resolved.providerId,
+      model: resolved.model,
+      connection: resolved.connection,
+      fetch: upstream.fetch,
+    }),
+    toolChoice,
+  );
   try {
     const result = await generateText({
       model: languageModel,
-      ...settings,
+      ...callSettings,
       // OpenAI clients put system messages anywhere in `messages`; they come from the Harness.
       allowSystemInMessages: true,
       // Retries would repeat a failing call behind the Harness's back (and its Usage Record).
@@ -146,7 +174,15 @@ export async function handleChatCompletion(
   deps: CompletionDeps,
   call: CompletionRequest,
 ): Promise<Response> {
-  const body = await readJsonObject(call.request);
+  let body;
+  try {
+    body = await unlessAborted(readJsonObject(call.request), call.signal);
+  } catch {
+    // Revoked or closed while the body was arriving.
+    call.signal.throwIfAborted();
+    // The body stream fails only when the Harness hangs up mid-upload: nobody reads this response.
+    return new Response(null, { status: 499 });
+  }
   if (!body.ok) return errorResponse('invalid_request', body.message);
   const parsed = parseChatCompletionRequest(body.value);
   if (!parsed.ok) return errorResponse('invalid_request', parsed.message);

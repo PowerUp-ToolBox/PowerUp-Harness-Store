@@ -23,6 +23,10 @@ import type { ChatCompletionRequest, ChatMessage } from './request.js';
 export interface CallSettings {
   messages: ModelMessage[];
   tools?: ToolSet;
+  /**
+   * For the Provider only: the AI SDK enforces a tool choice it is given on the reply, while the
+   * Gateway passes the Provider's reply through whether or not it honoured the choice.
+   */
   toolChoice?: ToolChoice<ToolSet>;
   temperature?: number;
   topP?: number;
@@ -63,7 +67,8 @@ function userMessage(content: Extract<ChatMessage, { role: 'user' }>['content'])
     content: content.map((part) => {
       if (part.type === 'text') return { type: 'text', text: part.text };
       const { url } = part.image_url;
-      // http(s) URLs pass through for the Provider to fetch; data URLs carry their media type.
+      // http(s) URLs pass through for the Provider to fetch; data URLs carry their media type,
+      // which validation limited to image/*.
       if (/^data:/i.test(url)) {
         return { type: 'file', mediaType: /^data:([^;,]+)/i.exec(url)?.[1] ?? 'image', data: url };
       }
@@ -169,6 +174,16 @@ export function toCallSettings(request: ChatCompletionRequest): TranslateResult 
   }
   const choice = request.tool_choice;
   if (choice != null) {
+    const toolNames = new Set(request.tools?.map((entry) => entry.function.name));
+    if (typeof choice !== 'string' && !toolNames.has(choice.function.name)) {
+      return {
+        ok: false,
+        message: `tool_choice: the function ${choice.function.name} is not in tools.`,
+      };
+    }
+    if (choice === 'required' && toolNames.size === 0) {
+      return { ok: false, message: 'tool_choice: "required" needs at least one tool in tools.' };
+    }
     settings.toolChoice =
       typeof choice === 'string' ? choice : { type: 'tool', toolName: choice.function.name };
   }

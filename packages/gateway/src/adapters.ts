@@ -35,7 +35,7 @@ export function createLanguageModel({
   model,
   connection,
   fetch,
-}: AdapterInput): LanguageModel {
+}: AdapterInput): Exclude<LanguageModel, string> {
   const adapter = providerId.split(':')[0];
   if (adapter !== 'openai-compatible') {
     throw new Error(`No Provider adapter for ${providerId} yet.`);

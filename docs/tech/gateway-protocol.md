@@ -48,8 +48,11 @@ Exactly these fields reach the Provider; everything else is dropped, including `
 Validation (`400 invalid_request`, details in `message`):
 - `model` (string) and `messages` (non-empty array) are required. A supported field of the wrong type is rejected; `null` counts as absent. `user` and `metadata` are not checked.
 - Message roles are `system`, `developer` (sent upstream as `system`), `user`, `assistant` and `tool`; any other role is rejected. System messages stay where the Harness put them.
-- Content parts are `text` everywhere, plus `image_url` in `user` messages with an `http(s)` URL (fetched by the Provider, never by the Gateway) or a `data:` URL. Any other part type, or an image outside a `user` message, is rejected.
+- Content parts are `text` everywhere, plus `image_url` in `user` messages with an `http(s)` URL (fetched by the Provider, never by the Gateway) or a base64 data URL of an image (`data:image/<type>[;...];base64,<data>`). Any other data URL (a PDF, audio, text, data that is not valid base64), any other part type, or an image outside a `user` message, is rejected.
 - A `tool` message's `tool_call_id` must match a `tool_calls` entry of an earlier `assistant` message.
+- A `tool_choice` naming a function must name one in `tools`, and `tool_choice: "required"` needs at least one tool.
+
+`tool_choice` is sent to the Provider, never enforced by the Gateway: a reply that ignores it (plain text for `required`, a tool call for `none`) is returned as the Provider sent it.
 
 `response_format` `json_object` and `json_schema` are passed to the Provider as structured-output requests, but the reply is returned as raw text: output that is not valid JSON is never an error. Tools are only described to the Provider; the Gateway never runs one, so each request is a single model call.
 
@@ -61,7 +64,7 @@ A `model` containing `/` is an explicit id, split at the first `/` (`openrouter/
 
 A request is checked in this order: body validation (`400`), then model resolution (`404`, `409`, `403`), then the upstream call (`502`, `504`). Only a request that gets as far as the upstream call reaches a Provider.
 
-Response shape and streaming (`text/event-stream`, `data: {...}` chunks, `data: [DONE]`) follow OpenAI. The `model` field in the response contains the **resolved** `provider/model` so a Harness can display what actually answered. Usage is reported in the final chunk when `stream_options.include_usage` is true and always in non-streaming responses.
+Response shape and streaming (`text/event-stream`, `data: {...}` chunks, `data: [DONE]`) follow OpenAI. The `model` field in the response contains the **resolved** `provider/model` so a Harness can display what actually answered. Usage is reported in the final chunk when `stream_options.include_usage` is true and in non-streaming responses, in both cases only when the Provider reported it (see below).
 
 A non-streaming response is `{ id: "chatcmpl_<uuid>", object: "chat.completion", created, model, choices: [{ index: 0, message, finish_reason }], usage? }`, with `created` in epoch seconds and `message` = `{ role: "assistant", content: string | null, tool_calls? }` (`content` is `null` only when the reply is tool calls alone). `finish_reason` is `stop`, `length`, `tool_calls` or `content_filter`; any other Provider reason is reported as `stop`. Reasoning output is dropped. `usage` (`prompt_tokens`, `completion_tokens`, `total_tokens`, and `prompt_tokens_details.cached_tokens` when the Provider reported cached tokens) is present only when the Provider reported both input and output tokens; it is never estimated.
 

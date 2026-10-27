@@ -4,6 +4,8 @@
  * `openai-compatible:fake` at the fake, and the tests drive the Gateway with plain fetch and the
  * OpenAI SDK, asserting on the wire only (HTTP status, JSON bodies, what reached the fake).
  */
+import { connect } from 'node:net';
+import type { Socket } from 'node:net';
 import OpenAI from 'openai';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startFakeProvider } from '../src/testing/fake-provider.js';
@@ -246,11 +248,9 @@ describe('a successful completion', () => {
       expect(response.status).toBe(200);
       const body = (await response.json()) as Completion;
       expect(body.choices[0]?.message.content).toBe('not json at all');
+      // Both formats reach the Provider as structured-output requests.
+      expect(upstreamBody().response_format).toMatchObject(responseFormat);
     }
-    expect(upstreamBody().response_format).toMatchObject({
-      type: 'json_schema',
-      json_schema: { name: 'answer', schema: { type: 'object', properties: {} } },
-    });
   });
 });
 
@@ -308,6 +308,34 @@ describe('tool calls and images', () => {
     ]);
     expect(upstream.tool_choice).toEqual({ type: 'function', function: { name: 'lookup' } });
   });
+
+  it.each([
+    ['required', 'fake/echo', { content: 'find cats' }],
+    [
+      'none',
+      'fake/tool-call',
+      { content: null, tool_calls: [expect.objectContaining({ id: 'call_0' })] },
+    ],
+  ])(
+    'passes the reply through when the Provider ignores tool_choice %s',
+    async (toolChoice, model, message) => {
+      const error = vi.fn<Logger['error']>();
+      const { url, token } = await start({ logger: { debug: () => undefined, error } });
+      const response = await complete(url, token, {
+        model: `${FAKE}/${model}`,
+        messages: [{ role: 'user', content: 'find cats' }],
+        tools,
+        tool_choice: toolChoice,
+      });
+      expect(response.status).toBe(200);
+      expect(((await response.json()) as Completion).choices[0]?.message).toEqual({
+        role: 'assistant',
+        ...message,
+      });
+      expect(upstreamBody().tool_choice).toBe(toolChoice);
+      expect(error).not.toHaveBeenCalled();
+    },
+  );
 
   it('round-trips a tool result to the Provider', async () => {
     const { url, token } = await start();
@@ -421,6 +449,49 @@ describe('request validation', () => {
           },
         ],
       },
+    ],
+    ...[
+      ['without a comma', 'data:image/png;base64'],
+      ['with characters outside base64', 'data:image/png;base64,@@@###'],
+      ['with base64 of an impossible length', 'data:image/png;base64,iVBOR'],
+      ['without data', 'data:image/png;base64,'],
+      ['that is not base64', 'data:image/svg+xml,%3Csvg%2F%3E'],
+      ['of a PDF', 'data:application/pdf;base64,aGk='],
+      ['of audio', 'data:audio/wav;base64,aGk='],
+      ['of text', 'data:text/plain;base64,aGk='],
+      ['without a media type', 'data:;base64,aGk='],
+    ].map(([name, imageUrl]): [string, unknown] => [
+      `an image data URL ${String(name)}`,
+      {
+        model: `${FAKE}/fake/vision`,
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'image_url', image_url: { url: imageUrl } }],
+          },
+        ],
+      },
+    ]),
+    [
+      'a tool_choice naming a function not in tools',
+      {
+        model: `${FAKE}/fake/tool-call`,
+        messages: hello,
+        tools: [{ type: 'function', function: { name: 'lookup' } }],
+        tool_choice: { type: 'function', function: { name: 'nope' } },
+      },
+    ],
+    [
+      'a tool_choice naming a function without tools',
+      {
+        model: `${FAKE}/fake/tool-call`,
+        messages: hello,
+        tool_choice: { type: 'function', function: { name: 'lookup' } },
+      },
+    ],
+    [
+      'tool_choice required without tools',
+      { model: `${FAKE}/fake/echo`, messages: hello, tool_choice: 'required' },
     ],
     [
       'a tool result matching no tool call',
@@ -732,5 +803,81 @@ describe('authentication and secrets', () => {
     expect(logged).not.toContain('private question');
     expect(logged).not.toContain(API_KEY);
     expect(logged).not.toContain(token);
+  });
+});
+
+describe('a request body cut short', () => {
+  /**
+   * Sends a request's headers and the start of its body over a raw socket, resolving once the
+   * Gateway is reading the body (it answers `Expect: 100-continue` before handling the request).
+   */
+  function startUpload(url: string, token: string): Promise<Socket> {
+    const { port } = new URL(url);
+    return new Promise((resolve, reject) => {
+      const socket = connect({ host: '127.0.0.1', port: Number(port) });
+      socket.once('error', reject);
+      socket.once('data', () => {
+        resolve(socket);
+      });
+      socket.write(
+        [
+          'POST /v1/chat/completions HTTP/1.1',
+          `Host: 127.0.0.1:${port}`,
+          `Authorization: Bearer ${token}`,
+          'Content-Type: application/json',
+          'Content-Length: 1000',
+          'Expect: 100-continue',
+          '',
+          '{"model":',
+        ].join('\r\n'),
+      );
+    });
+  }
+
+  it('is not an internal error when the Harness hangs up mid-upload', async () => {
+    const debug = vi.fn<Logger['debug']>();
+    const error = vi.fn<Logger['error']>();
+    const { url, token } = await start({ logger: { debug, error } });
+    const socket = await startUpload(url, token);
+    socket.destroy();
+    await vi.waitFor(() => {
+      expect(debug).toHaveBeenCalledWith(
+        'request',
+        expect.objectContaining({ path: '/v1/chat/completions', status: 499 }),
+      );
+    });
+    expect(error).not.toHaveBeenCalled();
+    expect(fake.requests).toEqual([]);
+  });
+
+  it('is not an internal error when the Gateway closes mid-upload', async () => {
+    const debug = vi.fn<Logger['debug']>();
+    const error = vi.fn<Logger['error']>();
+    const { gateway, url, token } = await start({ logger: { debug, error } });
+    const socket = await startUpload(url, token);
+    await gateway.close();
+    await vi.waitFor(() => {
+      expect(debug).toHaveBeenCalledWith(
+        'request',
+        expect.objectContaining({ path: '/v1/chat/completions', status: 401 }),
+      );
+    });
+    expect(error).not.toHaveBeenCalled();
+    socket.destroy();
+  });
+
+  it('fails with 401 when the token is revoked mid-upload', async () => {
+    const { gateway, url, token } = await start();
+    const socket = await startUpload(url, token);
+    const reply = new Promise<string>((resolve) => {
+      let text = '';
+      socket.on('data', (chunk: Buffer) => {
+        text += chunk.toString();
+        if (text.includes('}}')) resolve(text);
+      });
+    });
+    gateway.revokeToken(token);
+    expect(await reply).toMatch(/^HTTP\/1\.1 401 [\s\S]*"code":"invalid_token"/);
+    socket.destroy();
   });
 });

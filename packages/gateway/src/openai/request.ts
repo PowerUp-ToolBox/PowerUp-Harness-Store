@@ -7,10 +7,29 @@ import { z } from 'zod';
 
 const textPart = z.looseObject({ type: z.literal('text'), text: z.string() });
 
+/**
+ * A base64 data URL of an image: `data:image/<subtype>[;<parameter>...];base64,<data>`. Any other
+ * data URL would reach the Provider as another modality (a PDF, audio, video), and data the AI SDK
+ * cannot decode would fail inside the upstream call instead of as a 400.
+ */
+const IMAGE_DATA_URL = /^data:image\/[\w.+-]+(?:;[^;,]+)*;base64,([\w+/-]*)(={0,2})$/i;
+
+/** Whether `url` is an image data URL whose data `atob` decodes (the AI SDK accepts base64url too). */
+function isImageDataUrl(url: string): boolean {
+  const [, data = '', padding = ''] = IMAGE_DATA_URL.exec(url) ?? [];
+  if (data === '') return false;
+  return padding === '' ? data.length % 4 !== 1 : (data.length + padding.length) % 4 === 0;
+}
+
 const imagePart = z.looseObject({
   type: z.literal('image_url'),
   image_url: z.looseObject({
-    url: z.string().regex(/^(https?:\/\/|data:)/i, 'expected an http(s) URL or a data URL'),
+    url: z
+      .string()
+      .refine(
+        (url) => /^https?:\/\//i.test(url) || isImageDataUrl(url),
+        'expected an http(s) URL or a base64 data URL of an image',
+      ),
   }),
 });
 
