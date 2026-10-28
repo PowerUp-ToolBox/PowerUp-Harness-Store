@@ -11,6 +11,7 @@ import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createHarnessWindowHandlers } from '../../src/main/runtime/harness-window-handlers.js';
 import { spawnPiped } from '../../src/main/runtime/piped-process.js';
 import type { HarnessWindows, WebWindowSpec } from '../../src/main/runtime/supervisor.js';
+import { freePort } from '../../src/main/runtime/web-port.js';
 import type { WebContentArea } from '../../src/shared/harness-ipc.js';
 import type { IpcEventName, IpcEvents, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
@@ -46,6 +47,10 @@ let opened: string[];
 let spawnFailure: Error | undefined;
 /** Whether the Harness's port accepted a connection right when its launch reported `ready`. */
 let acceptedWhenReady: Promise<boolean>[];
+/** When set, the OS's answers when the Runtime asks for a free port; the real ones otherwise. */
+let askPort: (() => Promise<number>) | undefined;
+/** When set, showing a Harness's page in its window throws it. */
+let showWebFailure: Error | undefined;
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'harness-store-web-'));
@@ -57,6 +62,8 @@ beforeEach(async () => {
   opened = [];
   spawnFailure = undefined;
   acceptedWhenReady = [];
+  askPort = undefined;
+  showWebFailure = undefined;
   windows = createFakeWindows();
   runtime = await startRuntime({
     dataDir: userData,
@@ -83,6 +90,7 @@ beforeEach(async () => {
     },
     spawnProcess: (options) =>
       spawnFailure === undefined ? spawnPiped(options) : Promise.reject(spawnFailure),
+    freePort: () => (askPort ?? freePort)(),
     harnessEnvironment: () => ({
       ...process.env,
       OPENAI_API_KEY: 'sk-parent-openai',
@@ -162,6 +170,7 @@ function createFakeWindows() {
       open.set(spec.launchId, onClosed);
     },
     showWeb(launchId, url) {
+      if (showWebFailure !== undefined) throw showWebFailure;
       shown.set(launchId, { url, port: Number(new URL(url).port), at: Date.now() });
     },
     hideWeb(launchId) {
@@ -335,6 +344,36 @@ describe('launching fixture-web', () => {
     expect(env.HARNESS_PORT).toBe(String(portOf(web)));
     expect(portOf(slow)).not.toBe(portOf(web));
   });
+
+  it('never gives two web launches preparing at once one port, though the OS offers it to both', async () => {
+    await install('fixture-web');
+    await install('fixture-slow-ready');
+    const same = await freePort();
+    let other = await freePort();
+    while (other === same) other = await freePort();
+    // Both launches ask before the OS answers either, and it answers both with `same`.
+    const offered = [same, same, other];
+    const held: (() => void)[] = [];
+    askPort = () => {
+      const port = offered.shift();
+      if (port === undefined) return freePort();
+      if (offered.length === 0) return Promise.resolve(port);
+      return new Promise((resolve) => {
+        held.push(() => {
+          resolve(port);
+        });
+        if (held.length === 2) for (const answer of held) answer();
+      });
+    };
+
+    const web = await launch('acme/fixture-web');
+    const slow = await launch('acme/fixture-slow-ready');
+    await waitForState(web, 'ready');
+    await waitForState(slow, 'ready', 8000);
+    expect(new Set([portOf(web), portOf(slow)])).toEqual(new Set([same, other]));
+    const { env } = (await served(web, '/env')) as { env: Record<string, string> };
+    expect(env.HARNESS_PORT).toBe(String(portOf(web)));
+  }, 10_000);
 
   it('a second launch while it starts or runs focuses its window and starts nothing', async () => {
     await install('fixture-web');
@@ -532,6 +571,35 @@ describe('waiting for the port', () => {
       /\[err\] fixture-hang: not listening on purpose\n(.*\n)*.*\[runtime\] Exited with code 3\n/,
     );
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'an error once its process started stops the process before the launch ends spawn_error',
+    async () => {
+      await install('fixture-web');
+      showWebFailure = new Error('The page could not be shown');
+      const launchId = await launch('acme/fixture-web');
+      await expect(waitForState(launchId, 'failed')).resolves.toMatchObject({
+        reason: 'spawn_error',
+        exitCode: 0,
+      });
+      expect(statesOf(launchId).map((each) => each.state)).toEqual([
+        'preparing',
+        'spawning',
+        'waiting-ready',
+        'stopping',
+        'failed',
+      ]);
+      // The shutdown sequence ran: nothing keeps the port, and a new launch may start.
+      expect(readFileSync(signalFile, 'utf8')).toBe('SIGTERM\n');
+      const log = readFileSync(logPath('fixture-web', launchId), 'utf8');
+      expect(log).toMatch(/\[runtime\] Could not start: The page could not be shown\n/);
+      const port = Number(/\(pid \d+\), port (\d+)\n/.exec(log)?.[1]);
+      await expect(accepts(port)).resolves.toBe(false);
+      expect(runtime.supervisor.isRunning('acme/fixture-web')).toBe(false);
+      expect(launchRows()).toMatchObject([{ launch_id: launchId, exit_code: 0 }]);
+      expect(windows.open.has(launchId)).toBe(false);
+    },
+  );
 
   it('a process that cannot be started fails spawn_error and revokes its token', async () => {
     await install('fixture-web');

@@ -14,7 +14,8 @@
  * WebContentsView laid over the window's page under the top bar, with no preload (page script
  * reaches neither Node nor Electron IPC), sandboxed, with context isolation, in a session of its
  * own that denies every permission. Only its origin, `http://127.0.0.1:<port>`, stays in the view;
- * other http(s) URLs open in the User's browser and every other scheme is blocked.
+ * other http(s) URLs open in the User's browser and every other scheme is blocked. That rule
+ * guards the main frame; the page's iframes load and redirect as page content.
  */
 import { join } from 'node:path';
 import {
@@ -29,6 +30,7 @@ import {
 import { HARNESS_EVENT_CHANNEL, type WebContentArea } from '../shared/harness-ipc.js';
 import type { IpcEventMessage } from '../shared/ipc.js';
 import {
+  harnessFrameNavigation,
   harnessNavigation,
   terminalWindowOptions,
   webContentPreferences,
@@ -157,8 +159,9 @@ export function createHarnessWindows(): ElectronHarnessWindows {
       const view = new WebContentsView({ webPreferences: preferences });
       view.setBackgroundColor('#ffffff');
       const contents = view.webContents;
-      const guard = (event: { url: string; preventDefault(): void }) => {
-        const where = harnessNavigation(event.url, origin);
+      // `will-redirect` fires for iframes too; their redirects are left alone.
+      const guard = (event: { url: string; isMainFrame: boolean; preventDefault(): void }) => {
+        const where = harnessFrameNavigation(event, origin);
         if (where === 'inside') return;
         event.preventDefault();
         if (where === 'external') void shell.openExternal(event.url);

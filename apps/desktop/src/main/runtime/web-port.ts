@@ -14,23 +14,26 @@ const CONNECT_TIMEOUT_MS = 1000;
 
 /**
  * A free TCP port on {@link LOOPBACK} for a web Harness's `HARNESS_PORT`: bound with port 0 so the
- * OS picks it, then released at once so the Harness can bind it itself. A port in `taken` (those
- * of the Harnesses running now) is never answered, so two running Harnesses never share one, even
- * when the OS hands a just-released port out again. Rejects when no port can be bound. `free`
- * asks the OS; tests replace it.
+ * OS picks it, then released at once so the Harness can bind it itself. Each port the OS answers
+ * is offered to `claim`, which takes it (true) or turns it down (false: a running Harness holds
+ * it, as the OS may hand a just-released port out again). `claim` runs right after the OS
+ * answered, with no await in between, so a caller that checks and records its ports there never
+ * gives one port to two Harnesses, even when several picks run at once. Rejects when no port can
+ * be claimed. `free` asks the OS; tests replace it.
  */
 export async function pickPort(
-  taken: ReadonlySet<number> = new Set(),
+  claim: (port: number) => boolean = () => true,
   free: () => Promise<number> = freePort,
 ): Promise<number> {
   for (let attempt = 0; attempt < PICK_ATTEMPTS; attempt += 1) {
     const port = await free();
-    if (!taken.has(port)) return port;
+    if (claim(port)) return port;
   }
-  throw new Error(`No free port on ${LOOPBACK} outside the ${String(taken.size)} in use`);
+  throw new Error(`No port on ${LOOPBACK} could be claimed in ${String(PICK_ATTEMPTS)} attempts`);
 }
 
-function freePort(): Promise<number> {
+/** Asks the OS for a free port on {@link LOOPBACK}: binds port 0, then releases it. */
+export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
     server.once('error', reject);

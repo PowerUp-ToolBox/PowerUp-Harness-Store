@@ -27,13 +27,31 @@ describe('pickPort', () => {
   it('never answers a port a running Harness has, even when the OS offers it again', async () => {
     const offered = [41001, 41002, 41003];
     const free = () => Promise.resolve(offered.shift() ?? 0);
-    await expect(pickPort(new Set([41001, 41002]), free)).resolves.toBe(41003);
+    const taken = new Set([41001, 41002]);
+    await expect(pickPort((port) => !taken.has(port), free)).resolves.toBe(41003);
+  });
+
+  it('checks and claims each port right after the OS answers, so picks at once never share one', async () => {
+    // The OS hands 41001 to both picks, the second one before the first has returned.
+    const offered = [41001, 41001, 41002];
+    const free = () => Promise.resolve(offered.shift() ?? 0);
+    const claimed = new Set<number>();
+    const claim = (port: number) => {
+      if (claimed.has(port)) return false;
+      claimed.add(port);
+      return true;
+    };
+    const ports = await Promise.all([pickPort(claim, free), pickPort(claim, free)]);
+    expect(ports.sort()).toEqual([41001, 41002]);
   });
 
   it('gives up when the OS keeps offering ports in use', async () => {
-    await expect(pickPort(new Set([41001]), () => Promise.resolve(41001))).rejects.toThrow(
-      /No free port/,
-    );
+    await expect(
+      pickPort(
+        () => false,
+        () => Promise.resolve(41001),
+      ),
+    ).rejects.toThrow(/could be claimed/);
   });
 });
 

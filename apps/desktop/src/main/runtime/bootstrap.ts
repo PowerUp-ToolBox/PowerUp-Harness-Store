@@ -124,6 +124,8 @@ export interface RuntimeOptions {
   readonly spawnPty?: PtySpawner;
   /** Starts a web Harness with its output piped. Default: `child_process.spawn`. */
   readonly spawnProcess?: PipedSpawner;
+  /** Asks the OS for a free loopback port, for a web Harness's `HARNESS_PORT`. Default: port 0. */
+  readonly freePort?: () => Promise<number>;
   /**
    * The environment a Harness inherits, before the launch contract strips and sets variables.
    * Default: this process's.
@@ -296,6 +298,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           windows: options.harnessWindows,
           spawnPty: options.spawnPty ?? spawnNodePty,
           ...(options.spawnProcess === undefined ? {} : { spawnProcess: options.spawnProcess }),
+          ...(options.freePort === undefined ? {} : { freePort: options.freePort }),
           nodeCommand: options.nodeCommand ?? {
             path: process.execPath,
             env: { ELECTRON_RUN_AS_NODE: '1' },

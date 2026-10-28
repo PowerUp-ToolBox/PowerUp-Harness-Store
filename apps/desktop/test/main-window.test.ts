@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  harnessFrameNavigation,
   harnessNavigation,
   harnessPartition,
   isAllowedExternalUrl,
@@ -154,5 +155,28 @@ describe('web Harness windows (P0-05.3)', () => {
     ['not a url', 'blocked'],
   ])('keep %s %s', (url, where) => {
     expect(harnessNavigation(url, 'http://127.0.0.1:52341')).toBe(where);
+  });
+
+  it('guards main-frame navigations and redirects by the same rule', () => {
+    const origin = 'http://127.0.0.1:52341';
+    expect(harnessFrameNavigation({ url: `${origin}/next`, isMainFrame: true }, origin)).toBe(
+      'inside',
+    );
+    expect(harnessFrameNavigation({ url: 'https://example.com/', isMainFrame: true }, origin)).toBe(
+      'external',
+    );
+    expect(harnessFrameNavigation({ url: 'file:///etc/passwd', isMainFrame: true }, origin)).toBe(
+      'blocked',
+    );
+  });
+
+  it('leaves an iframe redirect alone: neither cancelled nor opened in the browser', () => {
+    // An embedded widget whose server redirects http to https, as `will-redirect` reports it.
+    expect(
+      harnessFrameNavigation(
+        { url: 'https://example.com/widget', isMainFrame: false },
+        'http://127.0.0.1:52341',
+      ),
+    ).toBe('inside');
   });
 });

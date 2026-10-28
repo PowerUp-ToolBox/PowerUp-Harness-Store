@@ -141,6 +141,19 @@ export function harnessNavigation(url: string, origin: string): HarnessNavigatio
   return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? 'external' : 'blocked';
 }
 
+/**
+ * Where a navigation of a web Harness's view goes, as `will-navigate` and `will-redirect` report
+ * it. Only the main frame follows {@link harnessNavigation}: `will-redirect` also fires for the
+ * page's iframes, whose loads are page content (sandboxed like the page itself), so a subframe's
+ * redirect stays `inside`; it is neither cancelled nor opened in the User's browser.
+ */
+export function harnessFrameNavigation(
+  navigation: { readonly url: string; readonly isMainFrame: boolean },
+  origin: string,
+): HarnessNavigation {
+  return navigation.isMainFrame ? harnessNavigation(navigation.url, origin) : 'inside';
+}
+
 /** Links the renderer may hand to the OS browser (`shell.openExternal`): https only. */
 export function isAllowedExternalUrl(url: string): boolean {
   try {

@@ -28,7 +28,13 @@ import type { LaunchStore } from './launch-store.js';
 import { spawnPiped, type PipedSpawner } from './piped-process.js';
 import { processTreeEndsWithin, signalProcessTree } from './process-tree.js';
 import type { PtyExit, PtyProcess, PtySpawner } from './pty.js';
-import { DEFAULT_READY_TIMEOUT_SECONDS, LOOPBACK, pickPort, waitForPort } from './web-port.js';
+import {
+  DEFAULT_READY_TIMEOUT_SECONDS,
+  freePort,
+  LOOPBACK,
+  pickPort,
+  waitForPort,
+} from './web-port.js';
 
 /** How long a Harness has to exit after SIGTERM before it gets SIGKILL (architecture §4). */
 export const STOP_GRACE_MS = 5000;
@@ -127,6 +133,8 @@ export interface SupervisorOptions {
   readonly spawnPty: PtySpawner;
   /** Starts a web Harness with its output piped. Default: `child_process.spawn`. */
   readonly spawnProcess?: PipedSpawner;
+  /** Asks the OS for a free loopback port, for a web Harness's `HARNESS_PORT`. Default: port 0. */
+  readonly freePort?: () => Promise<number>;
   readonly nodeCommand: NodeCommand;
   /** The environment a Harness inherits before the launch contract applies. Default: this process's. */
   readonly environment?: () => Readonly<Record<string, string | undefined>>;
@@ -261,6 +269,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
   const now = options.now ?? (() => new Date());
   const environment = options.environment ?? (() => process.env);
   const spawnProcess = options.spawnProcess ?? spawnPiped;
+  const askPort = options.freePort ?? freePort;
   const openPath = options.openPath ?? (() => Promise.resolve());
   const logError =
     options.logError ??
@@ -283,12 +292,20 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     ...(launch.logTail === undefined ? {} : { logTail: launch.logTail }),
   });
 
+  /**
+   * Records a launch's new state and pushes it. A push that fails is logged, never thrown: the
+   * shutdown sequence and the end of a launch push states too, and must run to the end.
+   */
   const setState = (launch: Launch, state: LaunchState, reason?: LaunchFailure) => {
     launch.state = state;
     launch.reason = reason;
     const status = statusOf(launch);
-    options.emit(status);
-    if (launch.windowOpen) windows.send(launch.launchId, 'window.state', status);
+    try {
+      options.emit(status);
+      if (launch.windowOpen) windows.send(launch.launchId, 'window.state', status);
+    } catch (error) {
+      logError(`Could not send the state of launch ${launch.launchId}`, error);
+    }
   };
 
   const runtimeLine = (launch: Launch, text: string) => {
@@ -370,7 +387,15 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     await pruneLaunchLogs(logsDir, KEPT_LAUNCH_LOGS - 1);
     launch.log = openLaunchLog(join(logsDir, `${launch.launchId}.log`), { now });
     const web = manifest.ui.kind === 'web';
-    if (web) launch.port = await pickPort(portsInUse(launch));
+    if (web) {
+      // Checked and recorded in one step after the OS answers, so two web launches preparing at
+      // once never get the same port.
+      await pickPort((port) => {
+        if (portsInUse(launch).has(port)) return false;
+        launch.port = port;
+        return true;
+      }, askPort);
+    }
     if (stopWasRequested(launch)) {
       await finish(launch, { state: 'stopped' });
       return;
@@ -621,8 +646,16 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     prepare(launch).catch((error: unknown) => {
       logError(`Could not launch ${harnessId}`, error);
       runtimeLine(launch, `Could not start: ${messageOf(error)}`);
+      const end: LaunchEnd = { state: 'failed', reason: 'spawn_error' };
+      // A process already started is stopped with the shutdown sequence before the launch ends,
+      // so it never runs on, unseen, beside a new launch of the same Harness.
+      if (launch.pid !== null && !launch.processExited) {
+        launch.stopRequested = true;
+        launch.stopping ??= stopProcess(launch, launch.pid, end);
+      } else {
+        void finish(launch, end);
+      }
       if (launch.windowOpen) windows.close(launch.launchId);
-      void finish(launch, { state: 'failed', reason: 'spawn_error' });
     });
     return ok({ outcome: 'started', launchId: launch.launchId });
   };
