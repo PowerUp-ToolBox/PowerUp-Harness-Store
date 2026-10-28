@@ -13,7 +13,13 @@ Row-level security decides what is visible (see [`data-model.md`](./data-model.m
 | Harness detail | `harnesses?harness_id=eq.<id>&select=*,profiles(github_login,display_name,avatar_url),harness_versions(version,changelog,published_at,platforms,status,download_count)` (published versions only via RLS) |
 | Version manifest | `harness_versions?harness_id=eq.<uuid>&version=eq.<v>&select=manifest,readme,package_sha256,package_size,screenshot_paths` |
 | Publisher page | `profiles?github_login=eq.<login>&select=github_login,display_name,avatar_url,bio,created_at,harnesses(harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at)` |
-| Update check | RPC `latest_versions(harness_ids text[])` → `[{ harness_id, latest_version, permissions, entry_kind }]` |
+| Update check | RPC `latest_versions(harness_ids text[])` (`POST rpc/latest_versions` with `{ "harness_ids": [...] }`) → `[{ harness_id, store_status, latest_version, manifest }]`, see below |
+
+`latest_versions` (P0-07.4) answers one row per requested Harness ID, in the order given (duplicates included), at most 1000 IDs per call (more is `400`, SQLSTATE `22023`):
+- `store_status`: `available` (active, with a published version), `unpublished` (no published version left), `taken_down` (the Harness was taken down) or `not_found` (no such Harness).
+- `latest_version` and `manifest`: only when `available`, else `null`. `manifest` is the full stored Manifest of the latest published version, so it has everything `diffForReconsent(installed, latest)` compares (`permissions`, `runtime`, `entry`) and the `changelog`. Nothing of any other version, and nothing but the status of a Harness that is not available, is ever returned.
+- It reports the Harness's status only: a Takedown of an older version than the latest (one the User may have installed) is not reported in P0, and the takedown note is never public.
+- It is `SECURITY DEFINER` (row-level security would hide the taken-down and Unpublished-only Harnesses whose status it reports) and callable by anon and authenticated.
 
 Search is Postgres full-text (`websearch_to_tsquery`) over the `search` column (maintained by `refresh_harness`, not generated), ranked by `ts_rank` then `download_count`. `platform` filters `harness_versions.platforms @> ARRAY[platform]` on the latest version.
 
@@ -39,6 +45,7 @@ Every function answers an error with `{ "error": { "code", "message", ... } }`; 
 | 403 | `forbidden` | Not the owner, or not an administrator |
 | 404 | `not_found` | Unknown Harness or version, or one that is not visible |
 | 405 | `method_not_allowed` | Anything but `POST` |
+| 422 | `platform_not_supported` | `download` for a platform the Harness Version does not declare |
 | 409 | `harness_taken_down` | `publish` or `unpublish` against a taken-down Harness or version |
 | 429 | `rate_limited` | `publish` (20 per Publisher per 24 h) and `report` |
 | 500 | `internal_error` | Anything unexpected (logged by the function) |
@@ -75,7 +82,18 @@ A `409 version_not_greater` from a publish that lost a race (step 7 or 8) has no
 Known limitations (P0): the package is held in memory (an Edge Function has no disk to stream to), so publishing near the 500 MB limit needs more memory and a larger request than a hosted Edge Function allows; the gateway (and the local edge runtime) passes the Content-Length refusal on only once the whole body has arrived. A package object left by a crash between upload and commit, or kept because the database call's outcome was unknown, blocks that version number until it is removed by hand.
 
 ### `POST /functions/v1/download` (anon)
-Body `{ harness_id, version?, platform, app_version }`. Resolves the version (latest published if omitted), checks the platform is supported, inserts a `download_events` row, increments counters, returns `{ url (signed, 60 s), sha256, size, manifest }`.
+Body `{ harness_id, version?, platform, app_version }` (JSON). No account: the anon key is enough, and the function reads no `Authorization` header.
+
+Steps (P0-07.4):
+1. The body: `harness_id` a string; `version` absent, `null` or a string; `platform` one of the Manifest schema's platforms (`darwin-arm64`, `darwin-x64`, `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`); `app_version` a string of 1 to 64 characters. Anything else is `400 invalid_request`; other fields are ignored.
+2. The version: the one named, else the Harness's `latest_version` (the latest published one). An unknown Harness, a taken-down one, one with no published version, and a named version that does not exist or is Unpublished or taken down are all `404 not_found`.
+3. The platform: a version whose `platforms` does not include `platform` is `422 platform_not_supported`, before any URL is made and with nothing counted.
+4. A signed URL to `harness-packages/<package_path>` that expires after 60 seconds, on the Store's public origin (the function's `STORE_PUBLIC_URL`, else `SUPABASE_URL`).
+5. `record_download()` (SQL, service role only) counts the download in one transaction: a `download_events` row (`version_id`, `platform`, `app_version`, `created_at`; never an IP address or a user) and one more on `harness_versions.download_count` and `harnesses.download_count`. It checks under the row locks that the version is still published and its Harness still visible: an Unpublish or a Takedown that committed since step 2 is `404 not_found`, with nothing counted.
+
+`200` → `{ url, sha256, size, manifest }`: the signed URL, the package's hex SHA-256 and size in bytes, and the version's stored Manifest. The Manifest is the `jsonb` the Store keeps, so its key order and whitespace are not those of the package's `manifest.json`: compare the two as JSON values (deep equality), not as bytes; the SHA-256 guards the package itself. Other errors: `405`, `500`.
+
+The local stack sets `DOWNLOAD_URL_TTL_SECONDS` (supabase/functions/.env) to a few seconds so that the store tests can watch a URL expire; it only ever shortens the 60 s (1 to 60, anything else is 60), and a deployed Store does not set it.
 
 ### `POST /functions/v1/unpublish` (Publisher JWT)
 Body `{ harness_id, version }`. Marks the version `unpublished`, recomputes `latest_version`; if none remain the Harness stays `active` but is hidden from search (no latest version).

@@ -88,7 +88,7 @@ Immutable: an UPDATE trigger allows only `status`, `download_count` and `unpubli
 | `app_version` text | |
 | `created_at` timestamptz | |
 
-No IP or user identity stored.
+No IP or user identity stored: no column could hold one, and its only reference is to the Harness Version. `record_download(version_id, platform, app_version)` (service role only, called by the `download` function) inserts the row and adds one to `harness_versions.download_count` and `harnesses.download_count` in one transaction, after checking under the row locks that the version is still published and its Harness still visible (version row locked first, Harness row second, as every writer does).
 
 ### Added by P0 specs after this baseline
 - `admin_actions` (audit log of takedowns and Featured changes) and `harness_versions.takedown_note` — P0-12.
@@ -98,7 +98,7 @@ No IP or user identity stored.
 `purchases`, `entitlements`, `payouts` (P1-01); `reviews` (P1-04); `telemetry_events` (P1-06); `channels` are a column on versions already; `organizations`, `org_members`, `harness_visibility` (P2-04); `subscriptions`, `credit_ledger` (P2-01/02).
 
 ### RLS summary
-Every catalogue write uses the service role inside an Edge Function. anon and authenticated have no INSERT, UPDATE or DELETE privilege on any catalogue table and there is no write policy for them either, so an attempt fails with `42501 permission denied`. Internal SQL functions (`semver_key`, `refresh_harness`, the trigger functions, and `publishes_remaining` and `publish_version`, which only the `publish` function calls) have EXECUTE revoked from `public`, `anon` and `authenticated`, so PostgREST does not expose them as RPCs.
+Every catalogue write uses the service role inside an Edge Function. anon and authenticated have no INSERT, UPDATE or DELETE privilege on any catalogue table and there is no write policy for them either, so an attempt fails with `42501 permission denied`. Internal SQL functions (`semver_key`, `refresh_harness`, the trigger functions, `publishes_remaining` and `publish_version`, which only the `publish` function calls, and `record_download`, which only `download` calls) have EXECUTE revoked from `public`, `anon` and `authenticated`, so PostgREST does not expose them as RPCs. The public RPCs are granted to `anon` and `authenticated` explicitly: `latest_versions(harness_ids text[])` (P0-07.4) is `SECURITY DEFINER` with a fixed `search_path`, because it reports taken-down and Unpublished-only Harnesses that RLS hides; it returns only their status, and only the latest published version's `version` and `manifest` of an available one (api.md).
 - `profiles`: anon and authenticated may SELECT only `id`, `github_login`, `display_name`, `avatar_url`, `bio`, `created_at` (column privileges; `is_admin` stays private, so a `select=*` is refused). The owner may UPDATE `display_name`, `bio` and `avatar_url` only (column privileges plus a row policy `auth.uid() = id`).
 - `harnesses`: public read where `status = active and latest_version is not null`. This one rule hides taken-down and Unpublished-only Harnesses from Featured, home, search, detail and Publisher pages, with no query repeating the filter.
 - `harness_versions`: public read where `status = published` and the parent is active.

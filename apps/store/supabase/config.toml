@@ -421,6 +421,11 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/deno.json"
 
+[functions.download]
+enabled = true
+verify_jwt = false
+import_map = "./functions/deno.json"
+
 [analytics]
 # Not used by the Store; off to keep the local stack small.
 enabled = false

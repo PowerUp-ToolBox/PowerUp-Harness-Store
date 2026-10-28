@@ -10,3 +10,6 @@
 # @harness-store/manifest bundled for the Deno Edge Functions by `pnpm build`
 # (scripts/bundle-manifest.ts).
 functions/_shared/manifest.js
+
+# The local Edge Functions' environment: no secrets, committed (the root .gitignore ignores .env).
+!functions/.env

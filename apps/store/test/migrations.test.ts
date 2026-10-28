@@ -12,7 +12,7 @@ const files = readdirSync(dir).sort();
 const sql = files.map((file) => readFileSync(join(dir, file), 'utf8')).join('\n');
 
 /** Functions anon may call as RPCs (added by later P0-07 tickets). */
-const PUBLIC_RPCS = new Set<string>();
+const PUBLIC_RPCS = new Set<string>(['latest_versions']);
 
 function names(pattern: RegExp): string[] {
   return [...sql.matchAll(pattern)].map((match) => match[1] ?? '');
@@ -61,6 +61,15 @@ describe('supabase/migrations', () => {
       if (!PUBLIC_RPCS.has(name)) expect(revoked, name).toContain(name);
     }
   });
+
+  it('grant EXECUTE on each public RPC to anon and authenticated, never to PUBLIC', () => {
+    const revoked = listed(/revoke execute on function([^;]*)from public;/g);
+    const granted = listed(/grant execute on function([^;]*)to anon, authenticated\b/g);
+    for (const name of PUBLIC_RPCS) {
+      expect(revoked, name).toContain(name);
+      expect(granted, name).toContain(name);
+    }
+  });
 });
 
 describe('supabase/config.toml', () => {
@@ -78,5 +87,17 @@ describe('supabase/config.toml', () => {
 
   it('lets Storage accept a 500 MB Harness Package', () => {
     expect(section('storage')).toMatch(/^file_size_limit = "500MiB"$/m);
+  });
+
+  it('leaves the caller check to each Edge Function: verify_jwt is off for every function', () => {
+    const functions = readdirSync(join(import.meta.dirname, '..', 'supabase', 'functions'), {
+      withFileTypes: true,
+    })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('_'))
+      .map((entry) => entry.name);
+    expect(functions).toEqual(expect.arrayContaining(['download', 'publish']));
+    for (const name of functions) {
+      expect(section(`functions.${name}`)).toMatch(/^verify_jwt = false$/m);
+    }
   });
 });
