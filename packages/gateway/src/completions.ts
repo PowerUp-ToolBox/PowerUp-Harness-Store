@@ -20,6 +20,8 @@ import type { CallSettings } from './openai/translate.js';
 import { parseModelRef } from './providers.js';
 import { isProviderFailure, providerError, providerTimeout } from './provider-errors.js';
 import type { MappedProviderError } from './provider-errors.js';
+import { resolveSlot } from './slots.js';
+import type { SlotUnboundEvent } from './slots.js';
 import type { ConnectionSecret, GatewayOptions } from './types.js';
 import { createUpstreamFetch } from './upstream-fetch.js';
 import type { UpstreamFetch, UpstreamTimeouts } from './upstream-fetch.js';
@@ -35,7 +37,9 @@ export interface ResolvedModel {
 }
 
 export interface CompletionDeps {
-  readonly options: Pick<GatewayOptions, 'getConnection'>;
+  readonly options: Pick<GatewayOptions, 'getConnection' | 'getManifest' | 'resolveBinding'>;
+  /** Told about every request that fails with `slot_unbound`, so the Runtime can notify the User. */
+  readonly onSlotUnbound: (event: SlotUnboundEvent) => void;
   readonly timeouts: UpstreamTimeouts;
   /** For a Gateway bug that surfaces after a stream started, when no 500 can be sent anymore. */
   readonly logger: Logger;
@@ -58,6 +62,8 @@ export interface CompletionTrace {
 
 export interface CompletionRequest {
   readonly request: Request;
+  /** The calling Harness, from its Gateway Token. */
+  readonly harnessId: string;
   /** Aborted when the Gateway Token is revoked or the Gateway closes. */
   readonly signal: AbortSignal;
   readonly trace: CompletionTrace;
@@ -68,30 +74,50 @@ export interface CompletionRequest {
   readonly detach: () => () => void;
 }
 
+function unknownSlot(model: string): Response {
+  return errorResponse(
+    'unknown_slot',
+    `${JSON.stringify(model)} is neither a Model Slot of this Harness nor a valid provider/model id.`,
+  );
+}
+
 /**
- * Resolves `model` to a Provider, a model and a Connection, or answers the error. Slot names
- * resolve through Slot Bindings from P0-02.5 on; until then they are `unknown_slot`.
+ * Resolves `model` to a Provider, a model and a Connection, or answers the error. An explicit
+ * `provider/model` id is used as is. A Slot name must be declared in the Harness's Manifest (else
+ * 404 `unknown_slot`) and is resolved to its current Slot Binding (none: 409 `slot_unbound`).
+ * Either way the Provider needs a Connection, else 403 `provider_not_connected`.
  */
 async function resolveModel(
   model: string,
   deps: CompletionDeps,
-  signal: AbortSignal,
+  { harnessId, signal }: CompletionRequest,
 ): Promise<ResolvedModel | Response> {
   const ref = parseModelRef(model);
-  if (ref?.kind !== 'explicit') {
-    return errorResponse(
-      'unknown_slot',
-      `${JSON.stringify(model)} is neither a Model Slot of this Harness nor a valid provider/model id.`,
-    );
+  if (ref === null) return unknownSlot(model);
+  let target: { providerId: string; model: string; slot: string | null };
+  if (ref.kind === 'explicit') {
+    target = { providerId: ref.providerId, model: ref.model, slot: null };
+  } else {
+    const resolution = await resolveSlot(deps.options, harnessId, ref.slot, signal);
+    if (resolution.kind === 'unknown') return unknownSlot(model);
+    if (resolution.kind === 'unbound') {
+      deps.onSlotUnbound({ harnessId, slot: ref.slot });
+      return errorResponse(
+        'slot_unbound',
+        `No model is bound to the Model Slot ${JSON.stringify(ref.slot)}. Choose one on the Models page.`,
+        { slot: ref.slot },
+      );
+    }
+    target = { providerId: resolution.providerId, model: resolution.model, slot: ref.slot };
   }
-  const connection = await unlessAborted(deps.options.getConnection(ref.providerId), signal);
+  const connection = await unlessAborted(deps.options.getConnection(target.providerId), signal);
   if (connection === null) {
     return errorResponse(
       'provider_not_connected',
-      `There is no Connection for the Provider ${ref.providerId}.`,
+      `There is no Connection for the Provider ${target.providerId}.`,
     );
   }
-  return { providerId: ref.providerId, model: ref.model, slot: null, connection };
+  return { ...target, connection };
 }
 
 /**
@@ -376,7 +402,7 @@ export async function handleChatCompletion(
   const translated = toCallSettings(parsed.request);
   if (!translated.ok) return errorResponse('invalid_request', translated.message);
 
-  const resolved = await resolveModel(parsed.request.model, deps, call.signal);
+  const resolved = await resolveModel(parsed.request.model, deps, call);
   if (resolved instanceof Response) return resolved;
   call.trace.model = `${resolved.providerId}/${resolved.model}`;
   const { stream, stream_options: streamOptions } = parsed.request;

@@ -13,6 +13,7 @@ export { createInMemoryTokenVerifier } from './tokens.js';
 export type { GatewayTokenClaims, TokenVerifier } from './tokens.js';
 export type { Logger } from './logging.js';
 export type { HarnessContext } from './app.js';
+export type { ModelList, SlotModel, SlotUnboundEvent } from './slots.js';
 export { GATEWAY_ERROR_STATUS } from './errors.js';
 export type { GatewayErrorBody, GatewayErrorCode, GatewayErrorType } from './errors.js';
 export { MAX_BODY_BYTES } from './body.js';

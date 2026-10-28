@@ -13,6 +13,8 @@ import { errorResponse } from './errors.js';
 import { RequestAbortedError, unlessAborted } from './in-flight.js';
 import type { InFlightRegistry } from './in-flight.js';
 import type { Logger } from './logging.js';
+import { listSlotModels } from './slots.js';
+import type { SlotUnboundEvent } from './slots.js';
 import { hashToken } from './tokens.js';
 import type { GatewayTokenClaims, TokenVerifier } from './tokens.js';
 import type { GatewayOptions } from './types.js';
@@ -30,8 +32,10 @@ export interface HarnessContext {
 }
 
 export interface AppDeps {
-  readonly options: Pick<GatewayOptions, 'getManifest' | 'getConnection'>;
+  readonly options: Pick<GatewayOptions, 'getManifest' | 'getConnection' | 'resolveBinding'>;
   readonly timeouts: UpstreamTimeouts;
+  /** Told about every request that fails with `slot_unbound`. */
+  readonly onSlotUnbound: (event: SlotUnboundEvent) => void;
   readonly verifier: TokenVerifier;
   readonly inFlight: InFlightRegistry;
   readonly logger: Logger;
@@ -83,7 +87,7 @@ function notSupported(c: Ctx): Response {
 }
 
 export function createApp(deps: AppDeps): Hono<AppEnv> {
-  const { options, timeouts, verifier, inFlight, logger } = deps;
+  const { options, timeouts, verifier, inFlight, logger, onSlotUnbound } = deps;
   const app = new Hono<AppEnv>();
 
   // Request metadata at debug level; never bodies or headers. A stream is logged once it ends.
@@ -166,10 +170,20 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     return c.json(body);
   });
 
+  app.get('/v1/models', async (c) =>
+    c.json(await listSlotModels(options, c.var.claims.harnessId, c.var.signal)),
+  );
+
   app.post('/v1/chat/completions', (c) =>
     handleChatCompletion(
-      { options, timeouts, logger },
-      { request: c.req.raw, signal: c.var.signal, trace: c.var.trace, detach: c.var.detach },
+      { options, timeouts, logger, onSlotUnbound },
+      {
+        request: c.req.raw,
+        harnessId: c.var.claims.harnessId,
+        signal: c.var.signal,
+        trace: c.var.trace,
+        detach: c.var.detach,
+      },
     ),
   );
 

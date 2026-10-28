@@ -37,6 +37,20 @@ Anything else, including another method on these paths (`HEAD` too), returns `40
 
 `version` is the Harness Version, `locale` the app's locale at launch, and `workspace` is present only when the launch has a Workspace. `slots` lists every Model Slot the Manifest declares, with its `description` when there is one and its Model Requirements (`{}` when none are declared). It never contains binding data; the current bindings are listed by `GET /v1/models`.
 
+`GET /v1/models` lists every Model Slot the Harness's installed Manifest declares, in Manifest order, in the OpenAI list shape so OpenAI SDKs can read it:
+
+```json
+{
+  "object": "list",
+  "data": [
+    { "id": "default", "object": "model", "created": 0, "owned_by": "harness-store", "resolved_model": "anthropic/claude-sonnet-4-5" },
+    { "id": "fast", "object": "model", "created": 0, "owned_by": "harness-store", "resolved_model": null }
+  ]
+}
+```
+
+`id` is the Slot name, what the Harness sends as `model`. `resolved_model` is the Slot's current Slot Binding as `provider/model` (§4), resolved afresh on every call, or `null` when the Slot is unbound. Which rule of §4 chose the binding is never reported, and the listing does not check that the bound Provider has a Connection (a completion does). A Harness whose Manifest declares no Slots gets `data: []`.
+
 Request bodies are JSON whatever the `Content-Type` says, and at most 20 MB. A body that is larger, is not valid JSON or is not a JSON object gets `400 invalid_request`.
 
 ## 3. `POST /v1/chat/completions`
@@ -89,6 +103,13 @@ For a request with `model = <slot>` from Harness H:
 
 Resolution happens per request, so changing a binding in the app takes effect on the Harness's next call without restart. Model Requirements are advisory: the app warns when a binding does not satisfy them, the Gateway never blocks on them.
 
+The order above is implemented by the Gateway's host (the desktop app's binding service), which the Gateway asks for the Slot Binding on every request; the Gateway caches neither the Manifest nor any binding. For a request whose `model` is a Slot name, the Gateway:
+- answers `404 unknown_slot` when the Harness's installed Manifest does not declare that Slot, without resolving anything;
+- answers `409 slot_unbound` (with the `slot` field) when the host finds no binding, and tells the Runtime so it can raise the notification of step 5;
+- otherwise uses the binding's `provider/model` exactly like an explicit id (§3): the Provider needs a Connection, else `403 provider_not_connected`, and the response's `model` is the bound `provider/model`.
+
+A binding whose Provider id is not one of §6 or whose model name is empty or contains whitespace is a host bug and gets `500 internal_error`.
+
 ## 5. Errors
 
 All errors use `{ "error": { "code", "message", "type": "harness_store" | "provider", ... } }`.
@@ -98,10 +119,10 @@ All errors use `{ "error": { "code", "message", "type": "harness_store" | "provi
 | 400 | `invalid_request` | Body fails validation (details in `message`), is not a JSON object or is larger than 20 MB |
 | 401 | `invalid_token` | Missing, unknown or revoked Gateway Token |
 | 403 | `invalid_host` | `Host` header is not the Gateway on loopback (§1) |
-| 403 | `provider_not_connected` | Explicit `provider/model` for a Provider with no Connection |
+| 403 | `provider_not_connected` | The Provider of an explicit `provider/model`, or of a Slot's binding, has no Connection |
 | 404 | `not_supported` | Unknown path, or a method the path does not serve (§2) |
 | 404 | `unknown_slot` | `model` is neither a declared Slot nor a valid `provider/model` |
-| 409 | `slot_unbound` | Resolution found nothing (see §4) |
+| 409 | `slot_unbound` | Resolution found nothing (see §4); `slot` names the Slot |
 | 500 | `internal_error` | A Gateway bug or a failing host callback; logged, never retried |
 | 502 | `provider_error` | Upstream error; `provider_status` and `provider_message` included verbatim |
 | 504 | `provider_timeout` | No response headers within 120 s, or a 120 s gap in the response body |

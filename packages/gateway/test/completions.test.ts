@@ -625,7 +625,6 @@ describe('model resolution', () => {
   });
 
   it.each([
-    ['a Slot name (resolved from P0-02.5 on)', 'default'],
     ['an unknown Provider', 'acme/model-1'],
     ['a malformed openai-compatible name', 'openai-compatible:Fake_1/fake/echo'],
     ['an empty model name', `${FAKE}/`],

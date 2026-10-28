@@ -12,6 +12,7 @@ import { serveLoopback, urlHost } from './serve.js';
 import type { LoopbackServer } from './serve.js';
 import { createInMemoryTokenVerifier, hashToken } from './tokens.js';
 import type { GatewayTokenClaims } from './tokens.js';
+import type { SlotUnboundEvent } from './slots.js';
 import type { GatewayOptions, UsageRecord } from './types.js';
 import { DEFAULT_TIMEOUT_MS } from './upstream-fetch.js';
 
@@ -19,6 +20,12 @@ import { DEFAULT_TIMEOUT_MS } from './upstream-fetch.js';
 export interface GatewayEvents {
   /** A Usage Record, after `onUsage` received it. */
   usage: [record: UsageRecord];
+  /**
+   * A request named a declared Model Slot that has no Slot Binding and got 409 `slot_unbound`;
+   * the Runtime raises the desktop notification that links to the Models page. Emitted for every
+   * such request.
+   */
+  slot_unbound: [event: SlotUnboundEvent];
 }
 
 export interface ListenResult {
@@ -82,6 +89,14 @@ class ModelGateway extends EventEmitter<GatewayEvents> implements Gateway {
         idleMs: options.streamIdleTimeoutMs ?? DEFAULT_TIMEOUT_MS,
       },
       port: () => this.#port,
+      onSlotUnbound: (event) => {
+        // A failing listener is the host's bug; the Harness still gets its 409.
+        try {
+          this.emit('slot_unbound', event);
+        } catch (error) {
+          this.#logger.error('slot_unbound listener failed', { error });
+        }
+      },
     });
   }
 

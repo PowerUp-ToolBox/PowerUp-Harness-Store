@@ -414,7 +414,8 @@ describe('routing', () => {
     ['PUT', '/v1/harness/context'],
     ['HEAD', '/v1/harness/context'],
     ['GET', '/v1/chat/completions'],
-    ['GET', '/v1/models'],
+    ['POST', '/v1/models'],
+    ['HEAD', '/v1/models'],
     ['GET', '/'],
     ['GET', '/harness/context'],
   ])('%s %s with a valid token is 404 not_supported', async (method, path) => {

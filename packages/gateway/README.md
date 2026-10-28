@@ -1,6 +1,6 @@
 # @harness-store/gateway
 
-> Status: P0-02.1 (the [Gateway server](#the-gateway-server) with Gateway Token auth and `GET /v1/harness/context`), P0-02.2 (the [fake Provider](#fake-provider-harness-storegatewaytestingfake-provider)), P0-02.3 ([non-streaming chat completions](#post-v1chatcompletions) for explicit `provider/model` ids through the `openai-compatible` adapter) and P0-02.4 ([streaming](#streaming), tool calls, image parts and usage) are in. Slot resolution, `GET /v1/models`, the other Provider adapters and Usage Records arrive in the rest of P0-02.
+> Status: P0-02.1 (the [Gateway server](#the-gateway-server) with Gateway Token auth and `GET /v1/harness/context`), P0-02.2 (the [fake Provider](#fake-provider-harness-storegatewaytestingfake-provider)), P0-02.3 ([non-streaming chat completions](#post-v1chatcompletions) for explicit `provider/model` ids through the `openai-compatible` adapter), P0-02.4 ([streaming](#streaming), tool calls, image parts and usage) and P0-02.5 ([Model Slot resolution](#model-slots-and-get-v1models) and `GET /v1/models`) are in. The other Provider adapters and Usage Records arrive in the rest of P0-02.
 
 The **Model Gateway**: the local service, hosted by the **Runtime**, that is the only path from a running **Harness** to any model. It is a loopback HTTP server that speaks the OpenAI Chat Completions protocol, authenticates each request with the Harness's per-launch **Gateway Token**, resolves the requested **Model Slot** to the User's **Slot Binding** (Model Override, then Recommended Models, then Default Model), forwards the call to the chosen **Provider** through a **Connection** the Harness never sees, streams the answer back and writes a **Usage Record**.
 
@@ -38,7 +38,7 @@ await gateway.close();
 - `listen(host = '127.0.0.1', port = 0)` accepts only `127.0.0.1`, `::1` and `localhost` and resolves to `{ port, url }` with `url` = `http://<host>:<port>/v1` (IPv6 in brackets). It rejects when called a second time or after `close()`.
 - `close()` revokes every token, fails every request in flight, destroys open connections and stops listening. It is idempotent.
 - `issueToken(claims)` returns 32 random bytes, base64url. Tokens live until `revokeToken(token)`, `revokeLaunch(launchId)` (every token of that launch) or `close()`. Revoking fails the matching requests in flight with 401 `invalid_token`, or ends their open streams with an `invalid_token` error event and `[DONE]`.
-- The Gateway is an `EventEmitter`; it emits `usage` with each Usage Record once Usage Records land (P0-02.7).
+- The Gateway is an `EventEmitter`. It emits `slot_unbound` with `{ harnessId, slot }` for every request that gets 409 `slot_unbound` (the Runtime's cue for the "needs a model" notification; a throwing listener is logged and does not change the response), and `usage` with each Usage Record once Usage Records land (P0-02.7).
 - Every request is checked in this order: the `Host` header (`127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, else 403 `invalid_host`), the Gateway Token (else 401 `invalid_token`), then routing (else 404 `not_supported`). No response carries a CORS header.
 - `GET /v1/harness/context` answers `{ harnessId, version, locale, workspace?, slots }` from the token's claims and the Manifest from `getManifest` (called on every request, never cached; `null` gives `slots: {}`).
 - `firstByteTimeoutMs` bounds the wait for a Provider's response headers, `streamIdleTimeoutMs` the gap between two chunks of its response body; either one running out fails the request with 504 `provider_timeout` and aborts the upstream call.
@@ -48,7 +48,7 @@ await gateway.close();
 One pipeline per request, in the order the protocol fixes:
 
 1. **Validate** the body ([`src/openai/request.ts`](src/openai/request.ts), zod with loose objects): unknown fields are ignored, a supported field of the wrong type is 400 `invalid_request`.
-2. **Resolve** `model`: an explicit `provider/model` id needs `getConnection(providerId)` to return a Connection (else 403 `provider_not_connected`); a malformed id is 404 `unknown_slot`. Slot names are 404 `unknown_slot` until Slot resolution lands (P0-02.5).
+2. **Resolve** `model` ([`src/slots.ts`](src/slots.ts)): a Slot name resolves to its current Slot Binding ([below](#model-slots-and-get-v1models)); an explicit `provider/model` id is used as is, and a malformed one is 404 `unknown_slot`. Either way `getConnection(providerId)` must return a Connection, else 403 `provider_not_connected`.
 3. **Translate and call** ([`src/openai/translate.ts`](src/openai/translate.ts)): exactly the protocol's fields go to `generateText` (or `streamText` for `stream: true`) with `maxRetries: 0` and tools without `execute`, through the Provider's adapter ([`src/adapters.ts`](src/adapters.ts)) and the Gateway's timed `fetch` ([`src/upstream-fetch.ts`](src/upstream-fetch.ts)). No inbound header reaches the Provider.
 4. **Answer** an OpenAI `chat.completion` (or [a stream](#streaming)) whose `model` is the resolved `provider/model`, or map the failure ([`src/provider-errors.ts`](src/provider-errors.ts)) to 502 `provider_error` (`provider_status`, `provider_message`, `provider_code`, the Connection's key redacted) or 504 `provider_timeout`.
 
@@ -63,6 +63,19 @@ Tool calls (parallel ones included) come back as `tool_calls`, in the order the 
 The 200 headers wait for the Provider's first output, so every failure before it is an ordinary HTTP error. A failure after it (the Provider breaking off or sending an in-stream `{"error":{...}}`, the idle timeout, a revoked token) ends the stream with `data: {"error":{...}}` and `data: [DONE]`; `close()` drops open streams with no final event. A Harness that disconnects mid-stream aborts the upstream request; the request stays in flight (revocable) until its stream ends, and is logged then, with its whole duration and the code of the error event it ended with (`streamError`).
 
 Tool-call argument fragments are the Provider's text as streamed: concatenated, they equal the non-streaming `arguments` as JSON, not necessarily byte for byte. A call the Provider streamed no argument text for gets its parsed arguments (`{}`) in one fragment.
+
+#### Model Slots and `GET /v1/models`
+
+The Gateway does not implement the resolution order (Model Override, Recommended Models, Default Model); the host's `resolveBinding` does. The Gateway asks it, and `getManifest`, on every request and caches nothing, so a binding changed in the app applies to the Harness's very next call. For a Slot name in `model`:
+
+| The host says                                       | The Harness gets                                                                                                             |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| The Manifest does not declare the Slot (or is null) | 404 `unknown_slot`; `resolveBinding` is not called                                                                           |
+| `resolveBinding` returns `null`                     | 409 `slot_unbound` with `slot`, and the Gateway emits `slot_unbound`                                                         |
+| `resolveBinding` returns a `Binding`                | The completion from `binding.providerId`/`binding.model`, as an explicit id would get it; `source` never reaches the Harness |
+| A `Binding` with an invalid Provider id or model    | 500 `internal_error`, logged                                                                                                 |
+
+`GET /v1/models` answers `{ object: 'list', data: [{ id: <slot>, object: 'model', created: 0, owned_by: 'harness-store', resolved_model: 'provider/model' | null }] }` (type `ModelList`), one entry per declared Slot in Manifest order, calling `resolveBinding` for each Slot on every call. It never checks Connections and never reaches a Provider.
 
 Types the host implements or receives (all exported):
 
