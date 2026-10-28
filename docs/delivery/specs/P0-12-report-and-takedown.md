@@ -45,8 +45,8 @@ A Report dialog reachable from the detail page and the Library card menu (flow F
 - **Rate limit** client-side: at most 3 reports per Harness per install per 24 h, enforced locally with a friendly message; server-side per `docs/tech/api.md`.
 - **Submission** goes through IPC `store.report` to the `report` function; on failure the dialog keeps its content and offers Retry.
 - **Admin tooling**: a CLI in the Store app (run by an administrator with a service-role key from their machine) with commands `reports list [--open]`, `reports dismiss <id> --note`, `takedown <harness_id> [--version] --note`. The `takedown` command calls the `admin/takedown` function with an admin JWT; `reports list` and `dismiss` use service-role queries. No web admin UI in P0 (P1-05).
-- **Audit**: `admin/takedown` writes `resolution_note` and `resolved_at` on affected Reports and appends a row to an `admin_actions` table (added by this spec: id, admin_id, action, target_harness_id, target_version_id, note, created_at).
-- **Publisher visibility**: the Publisher-only RLS read policy from P0-08 also exposes taken-down versions of their own Harnesses with the takedown note (copied to `harness_versions.takedown_note`, added by this spec).
+- **Audit**: `admin/takedown` writes `resolution_note` and `resolved_at` on affected Reports and appends a row to an `admin_actions` table (added by P0-07.6: id, admin_id, action, target_harness_id, target_version_id, note, created_at).
+- **Publisher visibility**: the Publisher-only RLS read policy on `harness_versions` (added by P0-07.6, used by P0-08) exposes taken-down versions of their own Harnesses with the takedown note (copied to `harness_versions.takedown_note`, also added by P0-07.6).
 - **Client behaviour**: the update check (P0-10) already surfaces `store_status = taken_down`; this spec defines the UI: red banner on the Library card, warning on the detail view (which the client can still render from its locally stored Manifest), Update hidden, Launch allowed with a one-time confirmation "This Harness was removed from the Store. Launch anyway?".
 - **Copy** in `en` and `zh-CN`; reasons are translated, stored as enum values.
 

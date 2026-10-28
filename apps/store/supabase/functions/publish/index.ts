@@ -18,7 +18,9 @@
  * allow; the P0-07 spec records it.
  */
 import { createClient } from '@supabase/supabase-js';
-import { errorResponse, bearerToken, jsonResponse } from '../_shared/http.ts';
+import { signedInUser } from '../_shared/caller.ts';
+import type { CallerLookups } from '../_shared/caller.ts';
+import { errorResponse, jsonResponse } from '../_shared/http.ts';
 import {
   ArchiveSource,
   interpolate,
@@ -31,7 +33,6 @@ import {
   contentLengthError,
   HARNESS_TAKEN_DOWN,
   ICON_TOO_LARGE,
-  isBadToken,
   ownHarnessId,
   publishVersionError,
   RATE_LIMITED,
@@ -58,6 +59,16 @@ const admin = createClient(
   { auth: { persistSession: false, autoRefreshToken: false } },
 );
 
+const lookups: CallerLookups = {
+  getUser: (token) => admin.auth.getUser(token),
+  profile: (id) =>
+    admin
+      .from('profiles')
+      .select('github_login, is_admin')
+      .eq('id', id)
+      .maybeSingle<{ github_login: string | null; is_admin: boolean }>(),
+};
+
 const UNAUTHENTICATED: ApiError = {
   status: 401,
   code: 'unauthenticated',
@@ -71,28 +82,6 @@ function fail(error: ApiError, details?: Record<string, unknown>): Response {
 function serverError(what: string, cause: unknown): Response {
   console.error(what, cause);
   return errorResponse(500, 'internal_error', 'The Store could not publish this package.');
-}
-
-/**
- * The signed-in Publisher: their user id and GitHub login, or undefined for no or a bad token.
- * Throws when Auth cannot answer, so an outage is a 500 and never ends the caller's session.
- */
-async function publisherOf(request: Request) {
-  const token = bearerToken(request.headers.get('authorization'));
-  if (token === undefined) return undefined;
-  const { data, error } = await admin.auth.getUser(token);
-  if (error !== null) {
-    if (isBadToken(error)) return undefined;
-    throw error;
-  }
-  const profile = await admin
-    .from('profiles')
-    .select('github_login')
-    .eq('id', data.user.id)
-    .maybeSingle<{ github_login: string | null }>();
-  if (profile.error !== null) throw profile.error;
-  const login = profile.data?.github_login;
-  return login ? { id: data.user.id, login } : undefined;
 }
 
 /** manifest.json's bytes, if the package has one that can be read. */
@@ -152,7 +141,7 @@ async function publish(request: Request): Promise<Response> {
   if (request.method !== 'POST') {
     return errorResponse(405, 'method_not_allowed', 'Use POST.');
   }
-  const publisher = await publisherOf(request);
+  const publisher = await signedInUser(request.headers.get('authorization'), lookups);
   if (publisher === undefined) return fail(UNAUTHENTICATED);
 
   const lengthError = contentLengthError(request.headers.get('content-length'));

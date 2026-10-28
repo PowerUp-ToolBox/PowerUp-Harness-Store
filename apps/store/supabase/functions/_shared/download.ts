@@ -1,8 +1,9 @@
 /**
  * The request rules of the `download` Edge Function that need no network: the request body, which
  * version a request asks for, the platform check, the signed URL's lifetime and the public URL the
- * desktop app can reach. Plain TypeScript with no imports (see storage-paths.ts).
+ * desktop app can reach. Plain TypeScript with relative imports only (see storage-paths.ts).
  */
+import { isText } from './http.ts';
 
 /** An error answer: HTTP status, API error code and English message. */
 export interface DownloadError {
@@ -43,10 +44,6 @@ export const PLATFORM_NOT_SUPPORTED: DownloadError = {
 
 function invalid(message: string): DownloadError {
   return { status: 400, code: 'invalid_request', message };
-}
-
-function isText(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value !== '' && value.length <= maxLength;
 }
 
 /**

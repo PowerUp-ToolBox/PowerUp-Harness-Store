@@ -6,6 +6,8 @@ The Store exposes data through Supabase PostgREST (reads) and Edge Functions (wr
 
 Row-level security decides what is visible (see [`data-model.md`](./data-model.md) §1, RLS summary): a Harness is readable only when it is active and has a published version, and a Harness Version only when it is published and its Harness is active. Reads therefore never repeat those filters. `profiles` exposes only its public columns, so reads of it name their columns (a `select=*` is refused); reads of `harnesses` for lists name theirs too, so the `search` vector is not sent.
 
+These public reads are made with the anon key. A Publisher's session JWT additionally sees that Publisher's own Harness Versions in any status, with the takedown note (P0-07.6, data-model.md RLS summary), through the "Own versions" read below; it sees no more `harnesses` rows than anon, so the home rows, search and the Publisher page never show a Publisher their own hidden Harnesses.
+
 | Purpose | Call |
 |---|---|
 | Featured (home) | `harnesses?featured_rank=not.is.null&order=featured_rank&limit=12&select=<list columns>` |
@@ -16,6 +18,7 @@ Row-level security decides what is visible (see [`data-model.md`](./data-model.m
 | Version manifest | `harness_versions?harness_id=eq.<uuid>&version=eq.<v>&select=manifest,readme,package_sha256,package_size,screenshot_paths` |
 | Publisher page | `profiles?github_login=eq.<login>&select=github_login,display_name,avatar_url,bio,created_at,harnesses(<list columns>)&harnesses.order=download_count.desc,harness_id` |
 | Update check | RPC `latest_versions(harness_ids text[])` (`POST rpc/latest_versions` with `{ "harness_ids": [...] }`) → `[{ harness_id, store_status, latest_version, manifest }]`, see below |
+| Own versions (Publisher JWT; "My Harnesses", P0-08) | `harness_versions?select=harness_id:manifest->>id,version,status,takedown_note,download_count,published_at,unpublished_at&manifest->>id=like.<login>/*&order=published_at.desc`: every version of the Publisher's Harnesses, published, Unpublished or taken down (the filter keeps out the published versions of others, which the JWT also sees). A Harness's own status (`taken_down`) comes from `latest_versions` |
 
 `<list columns>` is `harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at`. `icon_path` is relative to the `harness-assets` bucket: the client shows `<Store base URL>/storage/v1/object/public/harness-assets/<icon_path>`. The home rows (P0-07.5) and the Publisher page need no filter of their own: row-level security leaves only active Harnesses with a published version, in Featured, Most downloaded, New and in the Publisher's nested `harnesses` alike (a Publisher with none still has their profile row, with `harnesses: []`). `harness_id` breaks ties so the order is stable. The indexes behind them: the unique constraint on `featured_rank`, and `harnesses (download_count desc)` and `harnesses (latest_published_at desc)`.
 
@@ -54,12 +57,12 @@ Every function answers an error with `{ "error": { "code", "message", ... } }`; 
 |---|---|---|
 | 400 | `invalid_request` | A body field is missing or malformed |
 | 401 | `unauthenticated` | No JWT, an invalid or expired one, or a user with no `profiles` row (no GitHub login) |
-| 403 | `forbidden` | Not the owner, or not an administrator |
+| 403 | `forbidden` | Not the owner (`unpublish`), or not an administrator (`admin/takedown`) |
 | 404 | `not_found` | Unknown Harness or version, or one that is not visible |
 | 405 | `method_not_allowed` | Anything but `POST` |
-| 409 | `harness_taken_down` | `publish` or `unpublish` against a taken-down Harness or version |
+| 409 | `harness_taken_down` | `publish` or `unpublish` against a taken-down Harness, or `unpublish` of a taken-down version |
 | 422 | `platform_not_supported` | `download` for a platform the Harness Version does not declare |
-| 429 | `rate_limited` | `publish` (20 per Publisher per 24 h) and `report` |
+| 429 | `rate_limited` | `publish` (20 per Publisher per 24 h) and `report` (5 per hour per IP address and per install) |
 | 500 | `internal_error` | Anything unexpected (logged by the function) |
 
 The functions check their own caller (config.toml `verify_jwt = false`): the Publisher and admin functions call Auth's `getUser` with the service role on the bearer token; `download` and `report` need no JWT. Only Auth's refusal of the token (a 401 or 403, or the codes `bad_jwt`, `no_authorization`, `user_not_found`, `session_not_found`, `session_expired`) is `401 unauthenticated`; Auth not answering (a network error, a 5xx, a 429) is `500 internal_error`, so the desktop app keeps the session and may retry. Every call still sends the anon key as `apikey`.
@@ -108,13 +111,39 @@ Steps (P0-07.4):
 The local stack sets `DOWNLOAD_URL_TTL_SECONDS` (supabase/functions/.env) to a few seconds so that the store tests can watch a URL expire; it only ever shortens the 60 s (1 to 60, anything else is 60), and a deployed Store does not set it.
 
 ### `POST /functions/v1/unpublish` (Publisher JWT)
-Body `{ harness_id, version }`. Marks the version `unpublished`, recomputes `latest_version`; if none remain the Harness stays `active` but is hidden from search (no latest version).
+Body `{ harness_id, version }` (JSON). The Publisher withdraws one of their Harness Versions (P0-07.6).
+
+Steps:
+1. Authenticate (`401 unauthenticated`).
+2. The body: `harness_id` and `version` non-empty strings, else `400 invalid_request`; other fields are ignored.
+3. `unpublish_version()` (SQL, service role only), in one transaction: an unknown Harness is `404 not_found`; another Publisher's Harness is `403 forbidden`; an unknown version is `404 not_found`; a taken-down Harness or version is `409 harness_taken_down` (its status stays as it is). Otherwise the version becomes `unpublished` (with `unpublished_at`); one already Unpublished is left as it is and is a success too (idempotent).
+
+The status trigger recomputes `latest_version` from the remaining published versions: the previous one becomes the latest, or there is none, and the Harness stays `active` but is hidden from every public read (row-level security, no latest version). The version disappears from the detail read, search and `download` at once; existing installs keep working.
+
+`200` → `{ harness_id, version, status: "unpublished", latest_version }` (the Harness's latest published version after the Unpublish, or `null`). Other errors: `405`, `500`.
 
 ### `POST /functions/v1/report` (anon or JWT)
-Body `{ harness_id, version?, reason, details, client_info }`. Rate limit: 5 per hour per IP (in-function, best-effort). Returns `{ id }`.
+Body `{ harness_id, version?, reason, details?, client_info? }` (JSON). No account: the anon key is enough (P0-07.6).
+
+Steps:
+1. The body: `harness_id` a string; `version` absent, `null` or a string; `reason` one of `malware`, `bypasses_gateway`, `broken`, `inappropriate`, `spam`, `other` (the `report_reason` enum of data-model.md); `details` absent, `null` or a string of at most 2000 characters; `client_info` absent, `null` or an object whose `install_id`, `app_version` and `platform`, each optional, are strings of 1 to 64 characters. Anything else is `400 invalid_request`. Only those three `client_info` fields are kept; the rest of it, and other body fields, are dropped.
+2. Rate limit, best effort by design (a deterrent, not a guarantee): 5 Reports per hour per IP address (the first `X-Forwarded-For` address, which a client can choose), counted in each function worker's memory and never stored (config.toml keeps workers with `policy = "per_worker"`); `429 rate_limited`.
+3. The reporter: a request whose bearer token is a signed-in Publisher's session records them as `reporter_id`. Without one, with the anon key, with a token Auth refuses or when Auth does not answer, the Report is anonymous; `report` never answers `401`.
+4. `submit_report()` (SQL, service role only): an unknown Harness, or a version the Harness does not have, is `404 not_found` (the Harness may be in any status). When `client_info.install_id` is given, a sixth Report within an hour from that install is `429 rate_limited`: this check against the stored Reports is exact, serialised per install id. Then the Report is stored, `open`.
+
+`201` → `{ id }`. Other errors: `405`, `500`. There is no anon or Publisher access to `reports` through PostgREST: this function is the only way in.
 
 ### `POST /functions/v1/admin/takedown` (admin JWT)
-Body `{ harness_id, version?, note }`. Sets `taken_down` on the version or the whole Harness; resolves related reports.
+Body `{ harness_id, version?, note }` (JSON). A Store administrator takes down a Harness Version, or a whole Harness (P0-07.6). A function's name cannot hold a `/`, so the Edge Function is named `admin` and serves this path; any other path under it is `404 not_found`.
+
+Steps:
+1. Authenticate (`401 unauthenticated`), then `profiles.is_admin` of the caller, looked up by the function and never read from a JWT claim (`403 forbidden`). Administrators are set by hand in the database.
+2. The body: `harness_id` a string; `version` absent, `null` or a string; `note` a string of 1 to 2000 characters, not only whitespace. Anything else is `400 invalid_request`.
+3. `take_down()` (SQL, service role only), in one transaction: an unknown Harness or version is `404 not_found`. Without `version`, every version not yet taken down becomes `taken_down` and the Harness too; with `version`, only that version (the Harness's `latest_version` moves back to the previous published version). The `note` is copied to `harness_versions.takedown_note` on every version it changes. Every `open` Report on the Harness becomes `resolved`, with `resolution_note = note` and `resolved_at`. One `admin_actions` row is written per call (`takedown_harness` or `takedown_version`), also when everything was already taken down.
+
+`200` → `{ harness_id, version, status: "taken_down", resolved_reports }` (`version` is `null` for a whole Harness; `resolved_reports` counts the Reports this call resolved). Other errors: `405`, `500`.
+
+A taken-down Harness disappears from every public read and from `download`, and `latest_versions` reports it as `taken_down`. The owning Publisher reads the note on their own versions (the "Own versions" read); nobody else can, and it is never in a public read.
 
 ## Desktop ↔ Runtime IPC (for completeness)
 The renderer never calls the Store or Providers directly. It calls Runtime methods over typed IPC: `store.search`, `store.detail`, `installs.list/install/update/uninstall`, `launch.start/stop`, `providers.list`, `connections.list/add/update/test/testDraft/models/detectLocal/remove`, `bindings.getGlobal/setGlobal` (P0-03; `bindings.getForHarness/setOverride/clearOverride/resolveAll` follow with Model Overrides), `auth.signIn/signOut/whoami` (P0-07.2), `usage.query`, `publish.validateFolder/publish`, `settings.get/set`. Each method returns `{ ok, data } | { ok: false, error }`. Decrypted API keys and Store tokens never cross IPC: the renderer sees only a masked key (its last 4 characters) and the signed-in identity. Progress (downloads, uploads) is streamed as events.

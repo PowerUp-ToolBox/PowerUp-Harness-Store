@@ -4,19 +4,19 @@ The backend of the **Store**: a Supabase project ([ADR-0006](../../docs/adr/0006
 
 ## Layout
 
-| Path                           | What                                                                                                                                                                                                                             |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `supabase/config.toml`         | Local stack settings (Supabase CLI). The GitHub provider's client id, secret and URL come from the environment (`supabase/.env.example`).                                                                                        |
-| `supabase/migrations/`         | The schema: tables, enums, triggers, row-level security, Storage buckets. Migrations are the only way it changes.                                                                                                                |
-| `supabase/functions/_shared/`  | Plain TypeScript modules with relative imports only, used by the Deno Edge Functions, the seed script and the unit tests (storage paths, README storage, HTTP errors, publish rules). Also `manifest.js`, generated (see below). |
-| `supabase/functions/<name>/`   | The Deno Edge Functions (`Deno.serve` entry files, not type-checked by `tsc`; the store tests exercise them over HTTP): `publish`, `download`.                                                                                   |
-| `supabase/functions/.env`      | The local Edge Functions' environment (committed, no secrets): `STORE_PUBLIC_URL`, and the test-only `DOWNLOAD_URL_TTL_SECONDS`.                                                                                                 |
-| `supabase/functions/deno.json` | The functions' imports: supabase-js, pinned as an `npm:` specifier.                                                                                                                                                              |
-| `scripts/bundle-manifest.ts`   | Bundles `@harness-store/manifest` (and its npm dependencies) into `supabase/functions/_shared/manifest.js` (gitignored); `pnpm build` runs it.                                                                                   |
-| `scripts/seed.ts`              | Seeds the local stack from the `packages/manifest` fixture packages.                                                                                                                                                             |
-| `scripts/supabase.ts`          | Runs the pinned Supabase CLI with the env(...) values of config.toml filled in (`node dist/scripts/supabase.js start`).                                                                                                          |
-| `test/`                        | Fast checks with no Docker (`pnpm test`): the shared modules and static rules every migration follows.                                                                                                                           |
-| `test-store/`                  | The Store seam: tests over HTTP against a running local stack (`pnpm test:store`).                                                                                                                                               |
+| Path                           | What                                                                                                                                                                                                                                                              |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `supabase/config.toml`         | Local stack settings (Supabase CLI). The GitHub provider's client id, secret and URL come from the environment (`supabase/.env.example`).                                                                                                                         |
+| `supabase/migrations/`         | The schema: tables, enums, triggers, row-level security, Storage buckets. Migrations are the only way it changes.                                                                                                                                                 |
+| `supabase/functions/_shared/`  | Plain TypeScript modules with relative imports only, used by the Deno Edge Functions, the seed script and the unit tests (storage paths, README storage, HTTP errors, the caller, the request rules of each function). Also `manifest.js`, generated (see below). |
+| `supabase/functions/<name>/`   | The Deno Edge Functions (`Deno.serve` entry files, not type-checked by `tsc`; the store tests exercise them over HTTP): `publish`, `download`, `unpublish`, `report`, `admin`.                                                                                    |
+| `supabase/functions/.env`      | The local Edge Functions' environment (committed, no secrets): `STORE_PUBLIC_URL`, and the test-only `DOWNLOAD_URL_TTL_SECONDS`.                                                                                                                                  |
+| `supabase/functions/deno.json` | The functions' imports: supabase-js, pinned as an `npm:` specifier.                                                                                                                                                                                               |
+| `scripts/bundle-manifest.ts`   | Bundles `@harness-store/manifest` (and its npm dependencies) into `supabase/functions/_shared/manifest.js` (gitignored); `pnpm build` runs it.                                                                                                                    |
+| `scripts/seed.ts`              | Seeds the local stack from the `packages/manifest` fixture packages.                                                                                                                                                                                              |
+| `scripts/supabase.ts`          | Runs the pinned Supabase CLI with the env(...) values of config.toml filled in (`node dist/scripts/supabase.js start`).                                                                                                                                           |
+| `test/`                        | Fast checks with no Docker (`pnpm test`): the shared modules and static rules every migration follows.                                                                                                                                                            |
+| `test-store/`                  | The Store seam: tests over HTTP against a running local stack (`pnpm test:store`).                                                                                                                                                                                |
 
 ## Local stack
 
@@ -51,7 +51,8 @@ Re-running the seed first deletes every catalogue row and every object in both b
 - Every catalogue write uses the service role (Edge Functions). anon and authenticated have no INSERT, UPDATE or DELETE privilege on any catalogue table and no write policy, so an attempt fails with `42501 permission denied`.
 - anon and authenticated read Harnesses that are `active` with a `latest_version`, published versions of active Harnesses, and the public columns of `profiles` (not `is_admin`, so a `select=*` on profiles is refused: name the columns). A Publisher may update their own `display_name`, `bio` and `avatar_url` only.
 - `harness-packages` is private; `harness-assets` is served by public URL but cannot be listed or written.
-- Internal SQL functions are not RPCs: EXECUTE is revoked from `public`, `anon` and `authenticated`.
+- A Publisher also reads every version of their own Harnesses in any status, with the takedown note (the owner policy on `harness_versions`, through `private.own_harness_ids()`); never more `harnesses` rows than anon.
+- Internal SQL functions are not RPCs: EXECUTE is revoked from `public`, `anon` and `authenticated`. `reports` and `admin_actions` are out of reach of anon and authenticated.
 
 ## Edge Functions
 
@@ -59,6 +60,10 @@ An Edge Function only sees the files under `supabase/functions`, both when serve
 
 - `publish` (P0-07.3): validates an uploaded Harness Package with `validatePackage()`, stores it and its assets, and records the Harness Version through the `publish_version()` SQL function.
 - `download` (P0-07.4): anonymous; resolves a published Harness Version (the latest when none is named), refuses a platform it does not declare, and answers a signed package URL (60 s) with the checksum, size and Manifest. The `record_download()` SQL function counts the download without storing an IP address or a user. The URL is on `STORE_PUBLIC_URL` (supabase/functions/.env), because `SUPABASE_URL` inside the local edge runtime is the gateway's address on the Docker network; that file also shortens the URL's lifetime to 5 s (`DOWNLOAD_URL_TTL_SECONDS`, 1 to 60, test-only) so the store tests can watch it expire.
+
+- `unpublish` (P0-07.6): the owning Publisher withdraws a version (idempotent); `unpublish_version()` refuses another Publisher's Harness (403) and a taken-down one (409), and the status trigger moves `latest_version` back.
+- `report` (P0-07.6): anonymous; one of the six reasons, stored through `submit_report()`. Rate limit 5 an hour per IP address (in the worker's memory, best effort) and per `client_info.install_id` (checked against the stored Reports).
+- `admin` (P0-07.6): serves `POST /functions/v1/admin/takedown` (a function's name cannot hold a `/`). Only a Publisher with `profiles.is_admin` (set by hand) may call it; `take_down()` takes down a version or the whole Harness, copies the note to `harness_versions.takedown_note`, resolves the open Reports and writes one `admin_actions` row per call.
 
 The update check is the `latest_versions(harness_ids text[])` RPC, which anon calls through PostgREST: for each ID its `store_status` (`available`, `unpublished`, `taken_down`, `not_found`) and, when available, the latest published version and its full Manifest.
 

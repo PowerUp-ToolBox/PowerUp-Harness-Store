@@ -43,6 +43,7 @@ describe('supabase/migrations', () => {
         'harness_versions',
         'reports',
         'download_events',
+        'admin_actions',
       ]),
     );
     const secured = new Set(names(/alter table public\.([a-z_]+) enable row level security/g));
@@ -60,6 +61,19 @@ describe('supabase/migrations', () => {
     for (const name of functions) {
       if (!PUBLIC_RPCS.has(name)) expect(revoked, name).toContain(name);
     }
+  });
+
+  it('keep the private schema out of the API, and its functions from anon', () => {
+    const config = readFileSync(join(import.meta.dirname, '..', 'supabase', 'config.toml'), 'utf8');
+    expect(/^schemas = (.*)$/m.exec(config)?.[1]).not.toContain('private');
+    const functions = names(/create (?:or replace )?function private\.([a-z_]+)\(/g);
+    expect(functions).toContain('own_harness_ids');
+    const revoked = new Set(
+      [...sql.matchAll(/revoke execute on function([^;]*)from public, anon;/g)].flatMap((match) =>
+        [...(match[1] ?? '').matchAll(/private\.([a-z_]+)/g)].map((name) => name[1] ?? ''),
+      ),
+    );
+    for (const name of functions) expect(revoked, name).toContain(name);
   });
 
   it('grant EXECUTE on each public RPC to anon and authenticated, never to PUBLIC', () => {
@@ -95,7 +109,9 @@ describe('supabase/config.toml', () => {
     })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('_'))
       .map((entry) => entry.name);
-    expect(functions).toEqual(expect.arrayContaining(['download', 'publish']));
+    expect(functions).toEqual(
+      expect.arrayContaining(['admin', 'download', 'publish', 'report', 'unpublish']),
+    );
     for (const name of functions) {
       expect(section(`functions.${name}`)).toMatch(/^verify_jwt = false$/m);
     }

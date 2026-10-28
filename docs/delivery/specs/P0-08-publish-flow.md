@@ -64,7 +64,7 @@ A Publish screen in the desktop app implementing flow F5 in `docs/ux/flows.md`: 
   any → idle (choose another folder)
   ```
 
-- **My Harnesses** reads the Publisher's Harnesses through PostgREST with the session JWT (RLS lets them see their own Unpublished versions in addition to published ones via a Publisher-only policy added in this spec's migration). Unpublish calls the function and refreshes the list.
+- **My Harnesses** reads the Publisher's Harness Versions through PostgREST with the session JWT: api.md's "Own versions" read, which returns every version of their Harnesses, published, Unpublished or taken down (with the takedown note), through the Publisher-only read policy on `harness_versions` that P0-07.6 added. Each Harness's own status (taken down, nothing published) comes from `latest_versions`; there is no owner policy on `harnesses` (it would leak a Publisher's hidden Harnesses into the public reads made with their session). The pre-flight version check may use the same read for the full version list. Unpublish calls the function and refreshes the list.
 - **Local install** reuses the Runtime's "install from folder" from P0-05; the Publish screen only triggers it and shows the result.
 - **Copy**: every user-facing string exists in `en` and `zh-CN`; the trust block in the preview uses the same component as the Store detail page (P0-09) so wording never diverges.
 
@@ -85,7 +85,7 @@ A Publish screen in the desktop app implementing flow F5 in `docs/ux/flows.md`: 
 
 ## Further Notes
 
-- The Publisher-only RLS policy for reading own Unpublished versions is the only schema change this spec introduces; keep it in its own migration.
+- This spec introduces no schema change: the Publisher-only RLS read policy on own versions (any status, with the takedown note) was added by P0-07.6.
 - A CLI publish path is deliberately not in P0; the folder picker is the single supported path.
 
 ## Blocked by

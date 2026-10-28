@@ -54,6 +54,40 @@ export async function call<T = unknown>(
   return { status: response.status, body: parsed as T };
 }
 
+export interface FunctionError {
+  error: { code: string; message: string };
+}
+
+/**
+ * `POST /functions/v1/<name>` with a JSON body, as the desktop app calls an Edge Function: the
+ * anon key as `apikey`, and `token` (a Publisher's session JWT) as the bearer when given.
+ */
+export async function callFunction<T>(
+  name: string,
+  body: unknown,
+  { token, headers = {} }: { token?: string; headers?: Record<string, string> } = {},
+): Promise<Reply<T & Partial<FunctionError>>> {
+  const response = await fetch(`${stack.apiUrl}/functions/v1/${name}`, {
+    method: 'POST',
+    headers: {
+      apikey: stack.anonKey,
+      'content-type': 'application/json',
+      ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+      ...headers,
+    },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  });
+  return {
+    status: response.status,
+    body: (await response.json()) as T & Partial<FunctionError>,
+  };
+}
+
+/** Makes `user` a Store administrator (`profiles.is_admin`, set by hand in the real Store). */
+export async function makeAdmin(user: TestUser): Promise<void> {
+  await serviceRest('PATCH', `profiles?id=eq.${user.id}`, { is_admin: true });
+}
+
 /** A PostgREST call that returns the affected rows. */
 export function rest<T = unknown>(
   caller: Caller,
@@ -83,8 +117,15 @@ function base64url(value: string | Buffer): string {
   return Buffer.from(value).toString('base64url');
 }
 
-/** An HS256 session JWT for `userId`, as Auth would issue it after sign-in. */
-export function mintJwt(userId: string, lifetimeSeconds = 3600): string {
+/**
+ * An HS256 session JWT for `userId`, as Auth would issue it after sign-in, with `claims` added to
+ * its payload.
+ */
+export function mintJwt(
+  userId: string,
+  lifetimeSeconds = 3600,
+  claims: Record<string, unknown> = {},
+): string {
   const now = Math.floor(Date.now() / 1000);
   const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = base64url(
@@ -94,6 +135,7 @@ export function mintJwt(userId: string, lifetimeSeconds = 3600): string {
       aud: 'authenticated',
       iat: now,
       exp: now + lifetimeSeconds,
+      ...claims,
     }),
   );
   const signature = createHmac('sha256', stack.jwtSecret).update(`${header}.${payload}`).digest();

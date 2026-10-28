@@ -400,7 +400,8 @@ allow_dynamic_registration = false
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.
-# `per_worker` (default) — enables hot reload during local development.
+# `per_worker` (default) — enables hot reload during local development. Also what keeps the
+# `report` function's in-memory per-IP counter between requests.
 # `oneshot` — fallback mode if hot reload causes issues (e.g. in large repos or with symlinks).
 policy = "per_worker"
 # Port to attach the Chrome inspector for debugging edge functions.
@@ -422,6 +423,22 @@ verify_jwt = false
 import_map = "./functions/deno.json"
 
 [functions.download]
+enabled = true
+verify_jwt = false
+import_map = "./functions/deno.json"
+
+[functions.unpublish]
+enabled = true
+verify_jwt = false
+import_map = "./functions/deno.json"
+
+[functions.report]
+enabled = true
+verify_jwt = false
+import_map = "./functions/deno.json"
+
+# Serves POST /functions/v1/admin/takedown: a function's name cannot hold a `/`.
+[functions.admin]
 enabled = true
 verify_jwt = false
 import_map = "./functions/deno.json"

@@ -42,7 +42,7 @@ One row per Harness (the thing with an ID); versions live in `harness_versions`.
 `refresh_harness(id)` recomputes `latest_version`, `latest_published_at`, `name`, `summary`, `tags`, `icon_path`, `search` and `download_count` from the versions. An `after insert` and an `after update of status` trigger on `harness_versions` call it, so the fields hold whoever writes. With no published version left, only `latest_version` and `latest_published_at` become null; the last listing fields stay (the Harness is hidden by RLS anyway). It locks the `harnesses` row (`for update`) before reading the versions, so two writers of different versions of one Harness (an Unpublish and a Takedown, a download and an Unpublish) cannot leave a latest version or download count read before the other one committed.
 
 ### `harness_versions`
-Immutable: an UPDATE trigger allows only `status`, `download_count` and `unpublished_at` to change, whatever the row's status (rows are only ever inserted as published). `status` only moves forward: `published` → `unpublished`, any status → `taken_down`. A new row whose `semver_key` sorts below an existing version of the same Harness is refused (a backstop: the full semver check, pre-release included, is validatePackage's `publishedVersions` option in `publish`).
+Immutable: an UPDATE trigger allows only `status`, `download_count`, `unpublished_at` and `takedown_note` to change, whatever the row's status (rows are only ever inserted as published). `status` only moves forward: `published` → `unpublished`, any status → `taken_down`. A new row whose `semver_key` sorts below an existing version of the same Harness is refused (a backstop: the full semver check, pre-release included, is validatePackage's `publishedVersions` option in `publish`).
 
 | column | type | notes |
 |---|---|---|
@@ -62,6 +62,7 @@ Immutable: an UPDATE trigger allows only `status`, `download_count` and `unpubli
 | `status` | enum `published` \| `unpublished` \| `taken_down` | |
 | `download_count` | bigint | |
 | `published_at`, `unpublished_at` | timestamptz | |
+| `takedown_note` | text null | ≤ 2000 chars; the administrator's note, copied by `admin/takedown` onto every version it changes; only ever set on a `taken_down` version (check constraint), readable by the owning Publisher only (P0-07.6) |
 
 ### `reports`
 
@@ -73,10 +74,26 @@ Immutable: an UPDATE trigger allows only `status`, `download_count` and `unpubli
 | `reporter_id` | uuid FK profiles null | anonymous allowed |
 | `reason` | enum `malware` \| `bypasses_gateway` \| `broken` \| `inappropriate` \| `spam` \| `other` | |
 | `details` | text | ≤ 2000 chars |
-| `client_info` | jsonb | app version, platform |
+| `client_info` | jsonb | `install_id`, `app_version`, `platform` only (the `report` function drops anything else); never an IP address. Indexed on `install_id` for the rate limit |
 | `status` | enum `open` \| `resolved` \| `dismissed` | |
-| `resolution_note` | text null | admin only |
+| `resolution_note` | text null | admin only; set to the takedown's note when `admin/takedown` resolves the Report |
 | `created_at`, `resolved_at` | timestamptz | |
+
+Written only by `submit_report(...)` (service role only, called by the `report` function), which also checks the per-install rate limit (5 per hour) under an advisory lock per install id. `take_down(...)` resolves every `open` Report of the Harness it takes down.
+
+### `admin_actions` (append-only audit log; P0-07.6)
+
+| column | type | notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `admin_id` | uuid FK profiles null | the administrator; `on delete set null`, so the log outlives the account |
+| `action` | enum `takedown_harness` \| `takedown_version` | Featured changes are made in Supabase Studio and not logged in P0 |
+| `target_harness_id` | uuid FK harnesses | `on delete cascade` (no function deletes a Harness) |
+| `target_version_id` | uuid FK harness_versions null | set for `takedown_version` only (check constraint) |
+| `note` | text | 1 to 2000 chars |
+| `created_at` | timestamptz | |
+
+One row per `admin/takedown` call, written by `take_down(...)` (service role only) in the same transaction as the status changes, also when what it names was already taken down.
 
 ### `download_events` (append-only, for later analytics; P0 just inserts)
 
@@ -91,18 +108,18 @@ Immutable: an UPDATE trigger allows only `status`, `download_count` and `unpubli
 No IP or user identity stored: no column could hold one, and its only reference is to the Harness Version. `record_download(version_id, platform, app_version)` (service role only, called by the `download` function) inserts the row and adds one to `harness_versions.download_count` and `harnesses.download_count` in one transaction, after checking under the row locks that the version is still published and its Harness still visible (version row locked first, Harness row second, as every writer does).
 
 ### Added by P0 specs after this baseline
-- `admin_actions` (audit log of takedowns and Featured changes) and `harness_versions.takedown_note` — P0-12.
-- RLS: a Publisher can read their own `unpublished` versions — P0-08.
+- `admin_actions` (audit log of takedowns), `harness_versions.takedown_note` and the owner read policy on `harness_versions` (a Publisher reads their own versions in any status, with the note) — P0-07.6. P0-08 ("My Harnesses") and P0-12 (Report and takedown) use them and add no schema of their own.
 
 ### Reserved for later phases (create in the phase that needs them)
 `purchases`, `entitlements`, `payouts` (P1-01); `reviews` (P1-04); `telemetry_events` (P1-06); `channels` are a column on versions already; `organizations`, `org_members`, `harness_visibility` (P2-04); `subscriptions`, `credit_ledger` (P2-01/02).
 
 ### RLS summary
-Every catalogue write uses the service role inside an Edge Function. anon and authenticated have no INSERT, UPDATE or DELETE privilege on any catalogue table and there is no write policy for them either, so an attempt fails with `42501 permission denied`. Internal SQL functions (`semver_key`, `refresh_harness`, the trigger functions, `publishes_remaining` and `publish_version`, which only the `publish` function calls, and `record_download`, which only `download` calls) have EXECUTE revoked from `public`, `anon` and `authenticated`, so PostgREST does not expose them as RPCs. The public RPCs are granted to `anon` and `authenticated` explicitly: `latest_versions(harness_ids text[])` (P0-07.4) is `SECURITY DEFINER` with a fixed `search_path`, because it reports taken-down and Unpublished-only Harnesses that RLS hides; it returns only their status, and only the latest published version's `version` and `manifest` of an available one (api.md). `search_harnesses(q, tags, platform, limit, offset)` (P0-07.5) is `SECURITY INVOKER` (with a fixed `search_path`), so row-level security alone decides which Harnesses it returns; it returns the composite type `harness_search_result` (a list card's columns, api.md).
+Every catalogue write uses the service role inside an Edge Function. anon and authenticated have no INSERT, UPDATE or DELETE privilege on any catalogue table and there is no write policy for them either, so an attempt fails with `42501 permission denied`. Internal SQL functions (`semver_key`, `refresh_harness`, the trigger functions, `publishes_remaining` and `publish_version`, which only the `publish` function calls, `record_download`, which only `download` calls, and `unpublish_version`, `submit_report` and `take_down`, which only `unpublish`, `report` and `admin` call) have EXECUTE revoked from `public`, `anon` and `authenticated`, so PostgREST does not expose them as RPCs. The public RPCs are granted to `anon` and `authenticated` explicitly: `latest_versions(harness_ids text[])` (P0-07.4) is `SECURITY DEFINER` with a fixed `search_path`, because it reports taken-down and Unpublished-only Harnesses that RLS hides; it returns only their status, and only the latest published version's `version` and `manifest` of an available one (api.md). `search_harnesses(q, tags, platform, limit, offset)` (P0-07.5) is `SECURITY INVOKER` (with a fixed `search_path`), so row-level security alone decides which Harnesses it returns; it returns the composite type `harness_search_result` (a list card's columns, api.md).
 - `profiles`: anon and authenticated may SELECT only `id`, `github_login`, `display_name`, `avatar_url`, `bio`, `created_at` (column privileges; `is_admin` stays private, so a `select=*` is refused). The owner may UPDATE `display_name`, `bio` and `avatar_url` only (column privileges plus a row policy `auth.uid() = id`).
 - `harnesses`: public read where `status = active and latest_version is not null`. This one rule hides taken-down and Unpublished-only Harnesses from Featured, home, search, detail and Publisher pages, with no query repeating the filter.
-- `harness_versions`: public read where `status = published` and the parent is active.
+- `harness_versions`: public read where `status = published` and the parent is active. Owner read (authenticated, P0-07.6): a Publisher reads every version of their own Harnesses, any status, `takedown_note` included. Which Harnesses are theirs comes from `private.own_harness_ids()`, a `SECURITY DEFINER` function in the `private` schema (not exposed by PostgREST; EXECUTE for `authenticated` only): a subquery on `harnesses` in the policy would run under that table's RLS, which hides exactly the Unpublished-only and taken-down Harnesses. There is deliberately no owner policy on `harnesses`: it would put a Publisher's own hidden Harnesses into the home rows, search and Publisher page read with their session, which repeat no visibility filter.
 - `reports`: no access for anon or authenticated; the `report` function inserts with the service role, administrators read in Studio.
+- `admin_actions`: no access for anon or authenticated (RLS on, no policy); the `admin` function inserts with the service role, administrators read in Studio.
 - `download_events`: no access for anon or authenticated; the `download` function inserts with the service role.
 
 ### Storage buckets
