@@ -52,13 +52,17 @@ async function main(): Promise<number> {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
   // Ctrl-C or end of input may close the interface while an answer streams in; no prompt after.
-  const session = { closed: false };
+  // They differ in what happens to lines already read: end of input (the end of piped stdin, or
+  // Ctrl-D after typing ahead) still answers them in order, since the loop below drains them before
+  // it ends by itself; Ctrl-C drops them and ends the session at once.
+  const session = { closed: false, interrupted: false };
   let inFlight: AbortController | undefined;
   rl.on('close', () => {
     session.closed = true;
   });
   // Ctrl-C ends the session like /quit, also while an answer streams in.
   const interrupt = () => {
+    session.interrupted = true;
     inFlight?.abort();
     rl.close();
   };
@@ -110,8 +114,9 @@ async function main(): Promise<number> {
     if (input === '/quit') break;
     if (input === '/model') await showModels();
     else if (input !== '') await chat(input);
-    if (session.closed) break;
-    rl.prompt();
+    if (session.interrupted) break;
+    // prompt() on a closed interface throws: past end of input, answer the lines left silently.
+    if (!session.closed) rl.prompt();
   }
   rl.close();
   write(`${strings.bye}\n`);
