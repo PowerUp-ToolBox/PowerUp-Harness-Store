@@ -17,6 +17,7 @@ import { startFakeProvider } from '../src/testing/fake-provider.js';
 import type { FakeProvider } from '../src/testing/fake-provider.js';
 import type { ConnectionSecret, Gateway } from '../src/index.js';
 import { claims, startGateway } from './support/gateway.js';
+import { deltas, readSse, textOf } from './support/sse.js';
 
 const API_KEY = 'sk-test-connection-key-0123456789';
 
@@ -446,5 +447,196 @@ describe.each([
     expect(await response.json()).toMatchObject({
       error: { code: 'provider_error', type: 'provider', provider_status: 401 },
     });
+  });
+});
+
+/** Anthropic's server-sent events, `event:` line and all, as the Messages API streams them. */
+function anthropicSse(events: Record<string, unknown>[]): string {
+  return events
+    .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join('');
+}
+
+/** A Messages API stream: `message_start` with input usage, `blocks`, then the final usage. */
+function anthropicStream(blocks: Record<string, unknown>[], stopReason: string) {
+  return anthropicSse([
+    {
+      type: 'message_start',
+      message: {
+        id: 'msg_1',
+        type: 'message',
+        role: 'assistant',
+        model: 'claude-haiku-4-5',
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: 25,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 10,
+          output_tokens: 1,
+        },
+      },
+    },
+    { type: 'ping' },
+    ...blocks,
+    {
+      type: 'message_delta',
+      delta: { stop_reason: stopReason, stop_sequence: null },
+      usage: { output_tokens: 15 },
+    },
+    { type: 'message_stop' },
+  ]);
+}
+
+/**
+ * The Anthropic adapter's streams through the Gateway, against a local upstream answering with
+ * Anthropic's own event stream: usage split over `message_start` and `message_delta` (with cached
+ * input tokens), text deltas, and a tool call whose input arrives as JSON fragments. The live run
+ * against the real API is in `conformance-live.test.ts`.
+ */
+describe('the anthropic adapter streaming through the Gateway', () => {
+  const requests: Record<string, unknown>[] = [];
+  let upstream: { origin: string; close(): Promise<void> };
+  let gateway: Gateway;
+  let url: string;
+  let token: string;
+
+  beforeAll(async () => {
+    upstream = await serveLoopback(
+      async (request) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        requests.push(body);
+        const stream =
+          body.tools === undefined
+            ? anthropicStream(
+                [
+                  {
+                    type: 'content_block_start',
+                    index: 0,
+                    content_block: { type: 'text', text: '' },
+                  },
+                  ...['Hello', ' from', ' Anthropic.'].map((text) => ({
+                    type: 'content_block_delta',
+                    index: 0,
+                    delta: { type: 'text_delta', text },
+                  })),
+                  { type: 'content_block_stop', index: 0 },
+                ],
+                'end_turn',
+              )
+            : anthropicStream(
+                [
+                  {
+                    type: 'content_block_start',
+                    index: 0,
+                    content_block: {
+                      type: 'tool_use',
+                      id: 'toolu_01',
+                      name: 'get_weather',
+                      input: {},
+                    },
+                  },
+                  ...['{"city": ', '"Par', 'is"}'].map((partial_json) => ({
+                    type: 'content_block_delta',
+                    index: 0,
+                    delta: { type: 'input_json_delta', partial_json },
+                  })),
+                  { type: 'content_block_stop', index: 0 },
+                ],
+                'tool_use',
+              );
+        return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
+      },
+      { host: '127.0.0.1', port: 0 },
+    );
+    const started = await startGateway({
+      getConnection: (id) =>
+        Promise.resolve(
+          id === 'anthropic' ? { apiKey: API_KEY, baseUrl: `${upstream.origin}/v1` } : null,
+        ),
+    });
+    gateway = started.gateway;
+    url = started.url;
+    token = gateway.issueToken(claims());
+  });
+
+  afterAll(async () => {
+    await gateway.close();
+    await upstream.close();
+  });
+
+  afterEach(() => {
+    requests.length = 0;
+  });
+
+  const stream = (body: Record<string, unknown>) =>
+    fetch(`${url}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        model: 'anthropic/claude-haiku-4-5',
+        stream: true,
+        stream_options: { include_usage: true },
+        ...body,
+      }),
+    });
+
+  it('streams text, then the finish chunk, then usage with cached tokens', async () => {
+    const response = await stream({ messages: [{ role: 'user', content: 'hi' }], stop: 'END' });
+    expect(response.status).toBe(200);
+    const body = await readSse(response);
+    expect(body.done).toBe(true);
+    expect(deltas(body)[0]).toEqual({ role: 'assistant' });
+    expect(textOf(body)).toBe('Hello from Anthropic.');
+    const finish = body.chunks.at(-2) as { choices: { delta: unknown; finish_reason: unknown }[] };
+    expect(finish.choices[0]).toMatchObject({ delta: {}, finish_reason: 'stop' });
+    const usage = body.chunks.at(-1) as { choices: unknown[]; usage: unknown };
+    expect(usage.choices).toEqual([]);
+    expect(usage.usage).toEqual({
+      prompt_tokens: 35,
+      completion_tokens: 15,
+      total_tokens: 50,
+      prompt_tokens_details: { cached_tokens: 10 },
+    });
+    expect(requests[0]).toMatchObject({ stream: true, stop_sequences: ['END'] });
+  });
+
+  it('streams a tool call assembled from input fragments', async () => {
+    const response = await stream({
+      messages: [{ role: 'user', content: 'What is the weather in Paris?' }],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'get_weather',
+            parameters: { type: 'object', properties: { city: { type: 'string' } } },
+          },
+        },
+      ],
+    });
+    expect(response.status).toBe(200);
+    const body = await readSse(response);
+    const fragments = deltas(body).flatMap(
+      (delta) =>
+        (delta.tool_calls as
+          | { index: number; id?: string; function: { name?: string; arguments?: string } }[]
+          | undefined) ?? [],
+    );
+    expect(fragments[0]).toMatchObject({
+      index: 0,
+      id: 'toolu_01',
+      function: { name: 'get_weather' },
+    });
+    const args = fragments.map((fragment) => fragment.function.arguments ?? '').join('');
+    expect(JSON.parse(args)).toEqual({ city: 'Paris' });
+    const finishes = body.chunks.flatMap(
+      (chunk) => (chunk.choices as { finish_reason: string | null }[] | undefined) ?? [],
+    );
+    expect(finishes.at(-1)?.finish_reason).toBe('tool_calls');
+    expect((body.chunks.at(-1) as { usage?: unknown }).usage).toMatchObject({
+      completion_tokens: 15,
+    });
+    expect(body.done).toBe(true);
   });
 });

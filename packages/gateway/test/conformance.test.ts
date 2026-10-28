@@ -180,6 +180,32 @@ describe.each(PROVIDER_IDS_ON_FAKE)('conformance: %s', (providerId) => {
     }
   });
 
+  it('sends stop sequences upstream, given as a string or a list, streamed or not', async () => {
+    const { url, token } = await start(providerId);
+    for (const [stop, upstream] of [
+      ['END', ['END']],
+      [
+        ['END', '\n\n'],
+        ['END', '\n\n'],
+      ],
+    ] as const) {
+      for (const stream of [false, true]) {
+        fake.reset();
+        const response = await complete(url, token, {
+          model: model('fake/echo'),
+          messages: hello,
+          stop,
+          stream,
+        });
+        expect(response.status).toBe(200);
+        await response.text();
+        expect(fake.requests[0]?.body, JSON.stringify({ stop, stream })).toMatchObject({
+          stop: upstream,
+        });
+      }
+    }
+  });
+
   it('returns a tool call', async () => {
     const { url, token } = await start(providerId);
     const response = await complete(url, token, {
