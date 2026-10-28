@@ -62,6 +62,8 @@ describe('buildApi (window.api)', () => {
       'stopWatching',
       'publish',
       'cancel',
+      'myHarnesses',
+      'unpublish',
     ]);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
     expect(Object.isFrozen(api)).toBe(true);

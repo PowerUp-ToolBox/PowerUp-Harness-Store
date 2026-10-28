@@ -88,6 +88,9 @@ const fakeServices: Services = {
         ok({ harnessId: 'octo-cat/hello', version: `${archiveId}-${jobId}`, url: '/store/h/x' }),
       ),
     cancel,
+    myHarnesses: () => Promise.resolve(fail('unauthenticated')),
+    unpublish: ({ harnessId, version }) =>
+      Promise.resolve(ok({ harnessId, version, latestVersion: null })),
   },
 };
 const en = translatorFor('en');
@@ -288,6 +291,14 @@ describe('IPC handlers against a fake service container', () => {
     ['publish.cancel', undefined],
     ['publish.cancel', { jobId: 'job-1' }],
     ['publish.cancel', 'job 1'],
+    ['publish.myHarnesses', 'octo-cat'],
+    ['publish.unpublish', undefined],
+    ['publish.unpublish', 'octo-cat/hello@1.0.0'],
+    ['publish.unpublish', { harnessId: 'octo-cat/hello' }],
+    ['publish.unpublish', { harnessId: 'hello', version: '1.0.0' }],
+    ['publish.unpublish', { harnessId: 'octo-cat/hello', version: '' }],
+    ['publish.unpublish', { harnessId: 'octo-cat/hello', version: 1 }],
+    ['publish.unpublish', { harnessId: 'octo-cat/hello', version: '1.0.0', force: true }],
   ])('%s rejects %j as invalid_input', async (method, input) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
@@ -326,6 +337,23 @@ describe('IPC handlers against a fake service container', () => {
       dispatch(MAIN_WINDOW, { method: 'publish.cancel', input: 'job-1' }),
     ).resolves.toEqual({ ok: true, data: null });
     expect(cancel).toHaveBeenCalledExactlyOnceWith('job-1');
+  });
+
+  it('publish.myHarnesses and publish.unpublish pass their call on', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'publish.myHarnesses' })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'unauthenticated' },
+    });
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'publish.unpublish',
+        input: { harnessId: 'octo-cat/hello', version: '1.0.0' },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { harnessId: 'octo-cat/hello', version: '1.0.0', latestVersion: null },
+    });
   });
 
   it('launch.start starts the Harness named and answers the launch', async () => {

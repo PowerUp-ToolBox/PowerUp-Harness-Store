@@ -339,6 +339,21 @@ export interface IpcMethods {
    * Store may already be saving it), and neither does an unknown or finished job.
    */
   'publish.cancel': { input: string; output: null };
+  /**
+   * The signed-in Publisher's Harnesses and every Harness Version of them the Store has, in any
+   * status (published, Unpublished, taken down with the administrator's note), read with their
+   * session (api.md, "Own versions"), with each Harness's own status from `latest_versions`.
+   * `unauthenticated` when nobody is signed in or the Store refused the session (which is then
+   * ended, `session_expired`); `store_unreachable`.
+   */
+  'publish.myHarnesses': { input: undefined; output: readonly OwnHarness[] };
+  /**
+   * Unpublishes one of the Publisher's Harness Versions through the Store's `unpublish`
+   * function: it can no longer be downloaded, and existing installs keep working. One already
+   * Unpublished is a success too. `unauthenticated` (the session is ended); `forbidden`,
+   * `not_found`, `harness_taken_down` (a taken-down Harness or version); `store_unreachable`.
+   */
+  'publish.unpublish': { input: UnpublishRequest; output: UnpublishedVersion };
 }
 
 /** Which Harness Package to upload, and the job its progress events are named after. */
@@ -361,6 +376,56 @@ export interface PublishedVersion {
 export interface UploadProgress {
   readonly sent: number;
   readonly total: number;
+}
+
+/** A Harness Version's status in the Store. */
+export type HarnessVersionStatus = 'published' | 'unpublished' | 'taken_down';
+
+/**
+ * A Harness's own status in the Store (`latest_versions`): `available` with a published version,
+ * `unpublished` with none left, `taken_down` by an administrator, or `not_found`.
+ */
+export type HarnessStoreStatus = 'available' | 'unpublished' | 'taken_down' | 'not_found';
+
+/** One of the signed-in Publisher's Harnesses, as My Harnesses lists it. */
+export interface OwnHarness {
+  readonly harnessId: string;
+  /** The Manifest name of its newest Harness Version. */
+  readonly name: string;
+  readonly storeStatus: HarnessStoreStatus;
+  /** The version the Store offers (its latest published one); null when not `available`. */
+  readonly latestVersion: string | null;
+  /** The downloads of all its versions. */
+  readonly downloadCount: number;
+  /** Every Harness Version, newest published first. */
+  readonly versions: readonly OwnVersion[];
+}
+
+/** One of the Publisher's Harness Versions, in any status. */
+export interface OwnVersion {
+  readonly version: string;
+  readonly status: HarnessVersionStatus;
+  /** ISO-8601. */
+  readonly publishedAt: string;
+  /** ISO-8601; null unless Unpublished. */
+  readonly unpublishedAt: string | null;
+  /** The administrator's note on a taken-down version; null otherwise. */
+  readonly takedownNote: string | null;
+  readonly downloadCount: number;
+}
+
+/** Which Harness Version to Unpublish. */
+export interface UnpublishRequest {
+  readonly harnessId: string;
+  readonly version: string;
+}
+
+/** The Harness Version Unpublished, and the Harness's latest published version since. */
+export interface UnpublishedVersion {
+  readonly harnessId: string;
+  readonly version: string;
+  /** Null when no published version is left. */
+  readonly latestVersion: string | null;
 }
 
 /** Which installed Harness to launch, and with which Workspace. */
@@ -893,6 +958,8 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'publish.stopWatching': true,
   'publish.publish': true,
   'publish.cancel': true,
+  'publish.myHarnesses': true,
+  'publish.unpublish': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */

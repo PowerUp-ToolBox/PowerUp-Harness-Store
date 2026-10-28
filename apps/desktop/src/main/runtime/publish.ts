@@ -15,12 +15,16 @@ import type {
   IpcError,
   IpcErrorCode,
   IpcResult,
+  OwnHarness,
   PublishedVersion,
   PublishRequest,
+  UnpublishedVersion,
+  UnpublishRequest,
   UploadProgress,
   VersionCheck,
 } from '../../shared/ipc.js';
 import { fail, ok } from './ipc-result.js';
+import { readMyHarnesses, unpublishVersion } from './my-harnesses.js';
 import {
   buildPackage,
   BuildSupersededError,
@@ -58,7 +62,10 @@ export interface PublishServiceOptions {
   readonly onFolderChanged?: (path: string) => void;
   /** Told how far an upload is (`progress:<jobId>`). */
   readonly onProgress?: (jobId: string, progress: UploadProgress) => void;
-  /** Told when an upload got no answer from the Store, so connectivity is checked again. */
+  /**
+   * Told when an upload, a read of My Harnesses or an Unpublish got no answer from the Store, so
+   * connectivity is checked again.
+   */
   readonly onStoreUnreachable?: () => void;
   /** Sends a Harness Package to the `publish` function; default {@link uploadPackage}. */
   readonly upload?: typeof uploadPackage;
@@ -91,12 +98,17 @@ export interface PublishService {
   publish(request: PublishRequest): Promise<IpcResult<PublishedVersion>>;
   /** `publish.cancel`. */
   cancel(jobId: string): void;
+  /** `publish.myHarnesses`. */
+  myHarnesses(): Promise<IpcResult<readonly OwnHarness[]>>;
+  /** `publish.unpublish`. */
+  unpublish(request: UnpublishRequest): Promise<IpcResult<UnpublishedVersion>>;
   /** Stops watching, on shutdown. */
   close(): void;
 }
 
 /**
- * The Publish flow's folder validation (P0-08.1) and upload (P0-08.2), Electron-free. Every run
+ * The Publish flow's folder validation (P0-08.1), upload (P0-08.2) and My Harnesses with
+ * Unpublish (P0-08.3, ./my-harnesses.ts), Electron-free. Every run
  * builds the Harness Package the upload would send (./package-archive.ts) and validates that zip,
  * so what the Publisher sees is what the Store will check: `validatePackage` from
  * `@harness-store/manifest` over `ArchiveSource`, with the signed-in Publisher's login
@@ -392,6 +404,14 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
 
     cancel(jobId) {
       jobs.get(jobId)?.abort();
+    },
+
+    myHarnesses() {
+      return readMyHarnesses(options);
+    },
+
+    unpublish(request) {
+      return unpublishVersion(options, request);
     },
 
     close() {

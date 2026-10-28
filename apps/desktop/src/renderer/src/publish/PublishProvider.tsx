@@ -59,6 +59,9 @@ export interface PublishFlow {
   readonly upload: UploadState | null;
 }
 
+/** The signed-in Publish screen's tabs (docs/ux/screens.md, Publish). */
+export type PublishTab = 'new' | 'mine';
+
 export interface PublishContextValue {
   /** Who is signed in to the Store; null until the Runtime answered. */
   readonly auth: AuthState | null;
@@ -74,6 +77,9 @@ export interface PublishContextValue {
   /** Cancels the sign-in waiting for the browser (`auth.signOut` cancels it). */
   readonly cancelSignIn: () => Promise<void>;
   readonly signOut: () => Promise<void>;
+  /** The tab shown to a signed-in Publisher; kept when the screen is left. */
+  readonly tab: PublishTab;
+  readonly setTab: (tab: PublishTab) => void;
   readonly flow: PublishFlow;
   /** The OS folder picker, then validation of the chosen folder at once. */
   readonly chooseFolder: () => Promise<void>;
@@ -115,7 +121,7 @@ const FOLDER_GONE: IpcError = {
 
 /**
  * The Publish screen's state (flow F5), held above the screens so leaving Publish and coming back
- * keeps the chosen folder, its validation and the review step; the Runtime keeps watching the
+ * keeps the tab shown, the chosen folder, its validation and the review step; the Runtime keeps watching the
  * folder meanwhile. It follows the Store sign-in (`auth.*`, `auth.changed`; `auth.whoami` only
  * once the Publish screen opens, so a User who never publishes costs the Store nothing), and
  * validates the folder with `publish.validateFolder`: when it is chosen (picker or drop), on
@@ -135,6 +141,7 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<IpcError | null>(null);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [tab, setTab] = useState<PublishTab>('new');
   const [flow, setFlowState] = useState<PublishFlow>(NO_FOLDER);
   const flowRef = useRef(flow);
   const runs = useRef(0);
@@ -377,6 +384,8 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
       signIn,
       cancelSignIn,
       signOut,
+      tab,
+      setTab,
       flow,
       chooseFolder,
       dropFolder,
@@ -396,6 +405,8 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
       signIn,
       cancelSignIn,
       signOut,
+      tab,
+      setTab,
       flow,
       chooseFolder,
       dropFolder,

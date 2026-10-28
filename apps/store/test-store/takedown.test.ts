@@ -443,7 +443,7 @@ describe('the takedown note and the Publisher-only read policy', () => {
     const reply = await rest<{ harness_id: string; version: string; status: string }[]>(
       { token: owner.token },
       'GET',
-      `harness_versions?select=harness_id:manifest->>id,version,status,takedown_note,download_count,published_at,unpublished_at&manifest->>id=like.${login}/*&order=published_at.desc`,
+      `harness_versions?select=harness_id:manifest->>id,name:manifest->>name,version,status,takedown_note,download_count,published_at,unpublished_at&manifest->>id=like.${login}/*&order=published_at.desc`,
     );
     expect(reply.status).toBe(200);
     expect(reply.body.length).toBeGreaterThan(0);

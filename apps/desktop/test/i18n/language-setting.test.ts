@@ -73,6 +73,8 @@ function launch(osLocale: string) {
       stopWatching: () => undefined,
       publish: () => Promise.resolve(fail('not_implemented')),
       cancel: () => undefined,
+      myHarnesses: () => Promise.resolve(fail('not_implemented')),
+      unpublish: () => Promise.resolve(fail('not_implemented')),
     },
   };
   const dispatch = createDispatcher({

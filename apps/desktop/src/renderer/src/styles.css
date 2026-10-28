@@ -467,6 +467,131 @@ code {
   font-weight: 600;
 }
 
+/* The signed-in Publish screen's tabs: "New version" and "My Harnesses". */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tab {
+  min-height: 40px;
+  margin-bottom: -1px;
+  padding: 8px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab[aria-selected='true'] {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+/* My Harnesses (P0-08.3): one card per Harness, with a table of its versions. */
+.publish-mine {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.publish-mine-done {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--color-success-bg);
+  color: var(--color-text);
+}
+
+.publish-mine-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.publish-mine-name {
+  margin: 0;
+  font-size: 15px;
+}
+
+.publish-mine-id {
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.publish-mine-harness > p {
+  margin: 0;
+}
+
+.publish-mine-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.publish-mine-table th {
+  padding: 6px 8px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.publish-mine-table td {
+  padding: 8px;
+  border-top: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+.publish-mine-table .publish-mine-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.publish-mine-action {
+  text-align: right;
+}
+
+.publish-mine-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.publish-mine-note {
+  overflow-wrap: anywhere;
+}
+
+.status-chip[data-status='published'] {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.status-chip[data-status='unpublished'] {
+  color: var(--color-text-muted);
+}
+
+.status-chip[data-status='taken_down'] {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+/* Read by screen readers, not shown. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* README and changelogs, as plain text until P0-09 renders them as Markdown. */
 .listing-text {
   margin: 0;

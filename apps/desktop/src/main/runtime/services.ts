@@ -46,7 +46,10 @@ export interface Services {
   >;
   /**
    * The Publish flow: building and validating a folder's Harness Package, watching it, and
-   * uploading it.
+   * uploading it; the Publisher's Harnesses, and Unpublishing a version.
    */
-  readonly publish: Pick<PublishService, 'validateFolder' | 'stopWatching' | 'publish' | 'cancel'>;
+  readonly publish: Pick<
+    PublishService,
+    'validateFolder' | 'stopWatching' | 'publish' | 'cancel' | 'myHarnesses' | 'unpublish'
+  >;
 }

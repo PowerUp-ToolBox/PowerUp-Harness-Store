@@ -6,6 +6,7 @@ import type {
   IpcResult,
   LaunchRequest,
   PublishRequest,
+  UnpublishRequest,
 } from '../../shared/ipc.js';
 import {
   isHarnessIdInput,
@@ -223,7 +224,26 @@ export function createHandlers(services: Services): IpcHandlers {
       services.publish.cancel(input);
       return ok(null);
     },
+    'publish.myHarnesses': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'publish.myHarnesses' });
+      return services.publish.myHarnesses();
+    },
+    'publish.unpublish': (input) => {
+      const request = parseUnpublishRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'publish.unpublish' });
+      return services.publish.unpublish(request);
+    },
   };
+}
+
+/** `{ harnessId, version }`, a `<publisher>/<slug>` ID and a version string, nothing else. */
+function parseUnpublishRequest(input: unknown): UnpublishRequest | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { harnessId, version, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0 || !isHarnessIdInput(harnessId)) return null;
+  if (!harnessId.includes('/')) return null;
+  if (typeof version !== 'string' || version === '' || version.length > 256) return null;
+  return { harnessId, version };
 }
 
 /** `{ archiveId, jobId }`, both IDs, nothing else. */

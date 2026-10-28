@@ -31,6 +31,7 @@ import type {
   ModelOverride,
   ModelOverrideChange,
   ModelOverrideClear,
+  OwnHarness,
   ProviderPreset,
   PublishedVersion,
   PublishRequest,
@@ -38,6 +39,8 @@ import type {
   Settings,
   SettingsPatch,
   StartupStatus,
+  UnpublishedVersion,
+  UnpublishRequest,
 } from '../../src/shared/ipc.js';
 
 /** What `connectivity.get` and `connectivity.check` answer when the Store is in `state`. */
@@ -172,9 +175,9 @@ export interface FakeApiOptions {
  * cancelled, and inspecting or installing a folder answers `not_implemented`; nothing was
  * launched, launching answers `not_implemented`, no Harness has a last Workspace and the
  * Workspace picker is cancelled; validating a folder to publish and publishing answer
- * `not_implemented`, cancelling an upload does nothing, and a dropped file's path is
- * `/dropped/<name>`; a test changes
- * `app.status`, `diagnostics.get`, the `connectivity`, `connections`, `bindings` or `installs`
+ * `not_implemented`, cancelling an upload does nothing, the Publisher has no Harnesses and
+ * Unpublishing answers `not_implemented`, and a dropped file's path is `/dropped/<name>`; a test
+ * changes `app.status`, `diagnostics.get`, the `connectivity`, `connections`, `bindings` or `installs`
  * methods before rendering to say otherwise, and pushes events with `emit`.
  */
 export function installFakeApi(
@@ -351,6 +354,12 @@ export function installFakeApi(
       ),
       cancel: vi.fn<(jobId: string) => Promise<IpcResult<null>>>(() =>
         Promise.resolve({ ok: true, data: null }),
+      ),
+      myHarnesses: vi.fn((): Promise<IpcResult<readonly OwnHarness[]>> =>
+        Promise.resolve({ ok: true, data: [] }),
+      ),
+      unpublish: vi.fn((request: UnpublishRequest): Promise<IpcResult<UnpublishedVersion>> =>
+        notImplemented('publish.unpublish', request.harnessId),
       ),
     },
     pathForFile: vi.fn((file: File) => `/dropped/${file.name}`),
