@@ -19,8 +19,9 @@ export type OpenAIClientOptions = Omit<ClientOptions, 'baseURL' | 'apiKey'>;
 export function createOpenAIClient(opts: OpenAIClientOptions = {}): OpenAI {
   const env = gatewayEnv();
   return new OpenAI({
-    maxRetries: 0,
     ...opts,
+    // After the spread, so `{ maxRetries: undefined }` still means none (openai would read it as 2).
+    maxRetries: opts.maxRetries ?? 0,
     baseURL: env.HARNESS_GATEWAY_URL,
     apiKey: env.HARNESS_GATEWAY_TOKEN,
   });

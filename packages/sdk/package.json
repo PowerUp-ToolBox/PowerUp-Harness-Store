@@ -2,7 +2,7 @@
   "name": "@harness-store/sdk",
   "version": "0.1.0",
   "private": true,
-  "description": "SDK for Node Harness authors: launch environment, Model Gateway client and Model Slot helpers.",
+  "description": "SDK for Node Harnesses: launch environment, Model Gateway client and Model Slot helpers.",
   "type": "module",
   "engines": {
     "node": "^22.13.0 || ^24.0.0 || >=26.0.0"

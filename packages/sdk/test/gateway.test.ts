@@ -184,6 +184,11 @@ describe('createOpenAIClient', () => {
     expect(createOpenAIClient().maxRetries).toBe(0);
   });
 
+  it('keeps retries off when maxRetries is given as undefined', () => {
+    const retries: number | undefined = undefined;
+    expect(createOpenAIClient({ maxRetries: retries }).maxRetries).toBe(0);
+  });
+
   it('is not fooled by a network error', async () => {
     // A port nothing listens on any more.
     const closed = createServer();
