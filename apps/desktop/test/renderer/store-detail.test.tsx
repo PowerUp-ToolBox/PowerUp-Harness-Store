@@ -334,11 +334,12 @@ describe('Harness detail page', () => {
   it('lists the published versions newest first, each with its date and changelog', async () => {
     await openDetail();
     const entries = within(region('Version history')).getAllByRole('listitem');
-    expect(entries.map((entry) => entry.textContent.trim())).toEqual([
-      '1.2.0Oct 20, 2026Permissions changedAdds outlines.',
-      '1.1.0Oct 10, 2026Fixes typos.',
-      '1.0.0Oct 1, 2026First release.',
-    ]);
+    // The dates are local time: 09:00 UTC is the day before west of UTC-9.
+    const texts = entries.map((entry) => entry.textContent.trim());
+    expect(texts[0]).toMatch(/^1\.2\.0Oct (19|20), 2026Permissions changedAdds outlines\.$/);
+    expect(texts[1]).toMatch(/^1\.1\.0Oct (9|10), 2026Fixes typos\.$/);
+    expect(texts[2]).toMatch(/^1\.0\.0(Sep 30|Oct 1), 2026First release\.$/);
+    expect(texts).toHaveLength(3);
     expect(entries[0]?.querySelector('strong')?.textContent).toBe('outlines');
   });
 
@@ -415,6 +416,60 @@ describe('the primary button', () => {
       false,
     ]);
   });
+
+  it('Update with "Set up a model first" when nothing can fill the default Slot, as in the Library', async () => {
+    const api = setup({
+      install: installed('1.1.0', {
+        manifest: { ...MANIFEST, version: '1.1.0', workspace: 'none' },
+      }),
+    });
+    api.launch.start.mockResolvedValue({
+      ok: false,
+      error: { code: 'slot_unbound', messageKey: 'error.slot_unbound', message: 'Unbound.' },
+    });
+    await renderApp('#/store/h/alice/writer');
+    await settle();
+    expect(buttons()).toEqual(['Update', 'Launch']);
+    await act(async () => {
+      fireEvent.click(within(actions()).getByRole('button', { name: 'Launch' }));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(api.launch.start).toHaveBeenCalledWith({ harnessId: 'alice/writer' });
+    expect(buttons()).toEqual(['Update', 'Set up a model first']);
+    // The Models page scrolls to the Harness a deep link names; jsdom does not scroll.
+    Element.prototype.scrollIntoView = vi.fn();
+    await act(async () => {
+      fireEvent.click(within(actions()).getByRole('button', { name: 'Set up a model first' }));
+      await Promise.resolve();
+    });
+    expect(window.location.hash).toBe('#/models?harness=alice%2Fwriter');
+  });
+
+  it.each([
+    ['starting', 'spawning', ['Starting… (disabled)']],
+    ['running', 'ready', ['Running…', 'Show window']],
+    ['stopping', 'stopping', ['Stopping… (disabled)']],
+  ] as const)(
+    'Update gives way to the Library’s launch state while the Harness is %s',
+    async (_, state, expected) => {
+      const api = setup({ install: installed('1.1.0') });
+      api.launch.status.mockResolvedValue({
+        ok: true,
+        data: [
+          {
+            harnessId: 'alice/writer',
+            launchId: 'launch-1',
+            state,
+            startedAt: '2026-10-28T09:00:00.000Z',
+          },
+        ],
+      });
+      await renderApp('#/store/h/alice/writer');
+      await settle();
+      expect(buttons()).toEqual(expected);
+    },
+  );
 
   it('Running…, as in the Library, while the installed Harness runs', async () => {
     const api = setup({
@@ -493,6 +548,11 @@ describe('opening the page', () => {
     });
     expect(within(page()).getByText('Version 1.1.0')).toBeDefined();
     expect(buttons()).toEqual(['Launch', 'Uninstall (disabled)']);
+    // Its installed Manifest's changelog is its only version history.
+    const entries = within(region('Version history')).getAllByRole('listitem');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.textContent).toContain('1.1.0');
+    expect(entries[0]?.querySelector('strong')?.textContent).toBe('outlines');
     expect(within(actions()).getByText('No longer available in the Store')).toBeDefined();
   });
 

@@ -108,6 +108,32 @@ describe('renderMarkdown', () => {
     expect(click?.hasAttribute('href')).toBe(false);
   });
 
+  it('removes an inline script or style with its content, the rest of the line intact', () => {
+    const page = rendered(
+      [
+        'Intro <script>alert(1)</script> more <img src=x onerror=alert(2)> text.',
+        'Plain <style>body{display:none}</style> **bold** end.',
+        '*Emphasis <script>alert(3)</script> kept*',
+        '| Key | Value |\n| --- | --- |\n| a <script>alert(4)</script> | b |',
+        'Never closed <script> stays text.',
+        '`<script>alert(5)</script>` is code.',
+      ].join('\n\n'),
+    );
+    expect(page.innerHTML).not.toMatch(/alert\([1-4]\)|display:none|<script|<style/);
+    expect([...page.querySelectorAll('p')].map((paragraph) => paragraph.textContent)).toEqual([
+      'Intro  more  text.',
+      'Plain  bold end.',
+      'Emphasis  kept',
+      'Never closed  stays text.',
+      '<script>alert(5)</script> is code.',
+    ]);
+    expect(page.querySelector('p strong')?.textContent).toBe('bold');
+    expect([...page.querySelectorAll('td')].map((cell) => cell.textContent.trim())).toEqual([
+      'a',
+      'b',
+    ]);
+  });
+
   it('allows no attribute but the few Markdown makes', () => {
     const page = rendered(HOSTILE_README);
     const attributes = new Set(

@@ -91,7 +91,12 @@ export function DetailAction({
   );
 }
 
-/** Launch (secondary: Uninstall), or Update (secondary: Launch), of an installed Harness. */
+/**
+ * Launch (secondary: Uninstall), or Update (secondary: Launch), of an installed Harness. Both are
+ * the Library's {@link LaunchAction}: with Update, its Launch (or "Set up a model first") becomes
+ * the secondary link, and while the Harness starts, runs or stops it shows the Library's Starting…,
+ * Running… or Stopping… in place of Update.
+ */
 function InstalledAction({
   update,
   install,
@@ -107,33 +112,25 @@ function InstalledAction({
 }) {
   const { t } = useI18n();
   const launcher = useLauncher(install, onError);
-  if (update) {
-    return (
-      <>
-        <button type="button" className="button-primary" onClick={onInstall}>
-          {t('store.detail.update')}
-        </button>
-        <button
-          type="button"
-          className="button-link"
-          onClick={launch?.state === 'ready' ? launcher.focus : launcher.launch}
-        >
-          {t('library.launch')}
-        </button>
-        {launcher.sheet}
-      </>
-    );
-  }
   return (
     <>
       <LaunchAction
         install={install}
         state={launch?.state}
         launcher={launcher}
+        lead={
+          update ? (
+            <button type="button" className="button-primary" onClick={onInstall}>
+              {t('store.detail.update')}
+            </button>
+          ) : undefined
+        }
         secondary={
-          <button type="button" className="button-link" disabled>
-            {t('store.detail.uninstall')}
-          </button>
+          update ? undefined : (
+            <button type="button" className="button-link" disabled>
+              {t('store.detail.uninstall')}
+            </button>
+          )
         }
       />
       {launcher.sheet}

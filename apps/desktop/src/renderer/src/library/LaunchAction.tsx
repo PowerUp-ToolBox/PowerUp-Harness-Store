@@ -92,18 +92,21 @@ export function useLauncher(
  * first", which opens the Models page at this Harness, when nothing can fill its `default` Model
  * Slot; "Not available for your platform", disabled. There is no Stop: closing the Harness's
  * window stops it with the shutdown sequence (flows.md F3 step 7). `secondary` follows Launch
- * (the detail page's Uninstall).
+ * (the detail page's Uninstall). `lead` takes the primary place while the Harness is not running
+ * (the detail page's Update); Launch, or "Set up a model first", then follows it as a link.
  */
 export function LaunchAction({
   install,
   state,
   launcher,
   secondary,
+  lead,
 }: {
   readonly install: InstalledHarness;
   readonly state: LaunchStatus['state'] | undefined;
   readonly launcher: Launcher;
   readonly secondary?: ReactNode;
+  readonly lead?: ReactNode;
 }) {
   const { t } = useI18n();
   if (!install.platformSupported) {
@@ -139,19 +142,25 @@ export function LaunchAction({
           {t('library.stopping')}
         </button>
       );
-    default:
+    default: {
+      const className = lead === undefined ? 'button-primary' : 'button-link';
       return launcher.needsModel ? (
-        <button type="button" className="button-primary" onClick={launcher.openModels}>
-          {t('library.needsModel')}
-        </button>
+        <>
+          {lead}
+          <button type="button" className={className} onClick={launcher.openModels}>
+            {t('library.needsModel')}
+          </button>
+        </>
       ) : (
         <>
-          <button type="button" className="button-primary" onClick={launcher.launch}>
+          {lead}
+          <button type="button" className={className} onClick={launcher.launch}>
             {t('library.launch')}
           </button>
           {secondary}
         </>
       );
+    }
   }
 }
 

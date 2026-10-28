@@ -1,7 +1,8 @@
 /**
  * A Publisher's Markdown (README.md, changelogs) as HTML the Store detail page can show without
  * trusting it (P0-09.3): `marked` turns the Markdown into HTML with raw HTML dropped (no
- * passthrough), then DOMPurify keeps only an allow-list of what Markdown makes: headings,
+ * passthrough; an inline `<script>` or `<style>` goes together with its content, which would
+ * otherwise be left as text), then DOMPurify keeps only an allow-list of what Markdown makes: headings,
  * paragraphs, lists, quotes, code, emphasis, links, images and tables, without any style, class,
  * event handler or other attribute but the few listed. So no script, iframe, form, style sheet or
  * remote-loading trick survives, whether written as HTML or smuggled through a link or image.
@@ -13,7 +14,7 @@
  * raster `data:` image; any other image is removed.
  */
 import DOMPurify from 'dompurify';
-import { Marked } from 'marked';
+import { Marked, type Token, type Tokens } from 'marked';
 import { storeAssetUrlOf } from '../../../shared/store-assets.js';
 
 const ALLOWED_TAGS = [
@@ -57,12 +58,52 @@ const ALLOWED_URI = /^(?:(?:https?|mailto|store-asset):|[^a-z]|[a-z+.-]+(?:[^a-z
 /** A raster image inlined as base64: never SVG, which can carry script and remote loads. */
 const RASTER_DATA_URI = /^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]*$/i;
 
+/**
+ * The elements whose content is not text to show. Inline raw HTML comes as one token per tag, so
+ * dropping the tags alone would leave a `<script>`'s code or a `<style>`'s rules as text.
+ */
+const HIDDEN_CONTENT =
+  /^<(script|style|iframe|noscript|noembed|noframes|object|template|textarea|title|xmp|svg|math)\b/i;
+
+/**
+ * Inline `tokens` without each element of {@link HIDDEN_CONTENT} and everything up to its closing
+ * tag; one never closed loses its opening tag only.
+ */
+function withoutHiddenContent(tokens: Token[]): Token[] {
+  const kept: Token[] = [];
+  let skipTo = -1;
+  tokens.forEach((token, index) => {
+    if (index <= skipTo) return;
+    const opened = token.type === 'html' ? HIDDEN_CONTENT.exec(token.raw) : null;
+    if (opened === null) {
+      kept.push(token);
+      return;
+    }
+    const closing = new RegExp(`^</${opened[1] ?? ''}\\s*>`, 'i');
+    skipTo = tokens.findIndex(
+      (each, at) => at > index && each.type === 'html' && closing.test(each.raw),
+    );
+  });
+  return kept;
+}
+
 /** GitHub-flavoured Markdown, with raw HTML (blocks and inline tags alike) dropped. */
 const markdown = new Marked({
   gfm: true,
   async: false,
   renderer: {
     html: () => '',
+  },
+  // Called on each token before its children, so the children it walks are the kept ones.
+  walkTokens: (token) => {
+    if (token.type === 'table') {
+      const table = token as Tokens.Table;
+      for (const cell of [...table.header, ...table.rows.flat()]) {
+        cell.tokens = withoutHiddenContent(cell.tokens);
+      }
+    } else if ('tokens' in token && token.tokens !== undefined) {
+      token.tokens = withoutHiddenContent(token.tokens);
+    }
   },
 });
 

@@ -178,7 +178,14 @@ export function HarnessDetailPage() {
           iconUrl={install.iconDataUrl}
           downloads={null}
           readme={null}
-          versions={[{ version: install.version }]}
+          versions={[
+            {
+              version: install.version,
+              ...(install.manifest.changelog === undefined
+                ? {}
+                : { changelog: install.manifest.changelog }),
+            },
+          ]}
           currentPlatform={loaded.platform}
           installedVersion={install.version}
           {...(slotUses === null ? {} : { slotUses })}
