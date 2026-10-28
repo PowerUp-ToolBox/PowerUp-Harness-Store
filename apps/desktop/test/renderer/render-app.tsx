@@ -123,6 +123,7 @@ export function connectionSummary(
     lastTestOk: null,
     lastTestError: null,
     lastTestFailure: null,
+    testModel: null,
     models: [],
     ...overrides,
   };

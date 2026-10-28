@@ -328,6 +328,76 @@ describe('Test connection on a row', () => {
     expect(rowFor('Zhipu AI (GLM)').querySelector('.status-chip')?.textContent).toBe('Connected');
   });
 
+  it('starts from the model the last passed test used, where the Provider lists none', async () => {
+    const api = installConnections([
+      connectionSummary({
+        id: 'zhipu',
+        displayName: 'Zhipu AI (GLM)',
+        keyHint: '6789',
+        testModel: 'glm-4.5',
+      }),
+    ]);
+    api.providers.list.mockResolvedValue({ ok: true, data: [...FAKE_PRESETS, ZHIPU_PRESET] });
+    await openModels();
+    await click(screen.getByRole('button', { name: 'Test Zhipu AI (GLM)' }));
+    const row = rowFor('Zhipu AI (GLM)');
+    expect(
+      within(row).getByLabelText<HTMLInputElement>('Model to test Zhipu AI (GLM) with').value,
+    ).toBe('glm-4.5');
+    await click(within(row).getByRole('button', { name: 'Test connection' }));
+    expect(api.connections.test).toHaveBeenCalledWith({ id: 'zhipu', model: 'glm-4.5' });
+  });
+
+  it('offers no Test on a disabled Connection, whose row would not show the result', async () => {
+    const api = installConnections([
+      connectionSummary({ id: 'openai', keyHint: 'wxyz', enabled: false }),
+    ]);
+    await openModels();
+    const test = screen.getByRole('button', { name: 'Test OpenAI' });
+    expect(test.hasAttribute('disabled')).toBe(true);
+    await click(test);
+    expect(api.connections.test).not.toHaveBeenCalled();
+
+    await click(screen.getByRole('button', { name: 'Enable OpenAI' }));
+    expect(screen.getByRole('button', { name: 'Test OpenAI' }).hasAttribute('disabled')).toBe(
+      false,
+    );
+  });
+
+  it('keeps a row from being edited, disabled or removed while its own test runs', async () => {
+    const api = installConnections([ANTHROPIC, OLLAMA]);
+    let answer: (() => void) | undefined;
+    const recorded = api.connections.test.getMockImplementation();
+    api.connections.test.mockImplementation(
+      (request: ConnectionTestRequest) =>
+        new Promise((resolve) => {
+          answer = () => {
+            if (recorded !== undefined) void recorded(request).then(resolve);
+          };
+        }),
+    );
+    await openModels();
+    await click(screen.getByRole('button', { name: 'Test Anthropic' }));
+    const actions = (name: string) =>
+      ['Edit', 'Disable', 'Remove'].map((verb) =>
+        screen.getByRole('button', { name: `${verb} ${name}` }),
+      );
+    for (const button of actions('Anthropic')) expect(button.hasAttribute('disabled')).toBe(true);
+    // Another row is not held up.
+    for (const button of actions('Ollama')) expect(button.hasAttribute('disabled')).toBe(false);
+    await click(screen.getByRole('button', { name: 'Remove Anthropic' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    await act(async () => {
+      answer?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    for (const button of actions('Anthropic')) expect(button.hasAttribute('disabled')).toBe(false);
+    expect(document.querySelector('.error-message')).toBeNull();
+  });
+
   it('says how many models a Connection lists', async () => {
     installConnections([connectionSummary({ id: 'ollama', models: ['qwen3:8b', 'gemma-3'] })]);
     await openModels();
@@ -642,6 +712,36 @@ describe('Edit', () => {
     expect(
       within(rowFor('Anthropic')).getByText('Key stored encrypted on this machine, ending in wxyz'),
     ).toBeDefined();
+  });
+
+  it('tests a new key with the model the last passed test used, shown in its field', async () => {
+    const api = installConnections([
+      connectionSummary({ id: 'anthropic', keyHint: '6789', testModel: 'claude-sonnet-5-5' }),
+    ]);
+    api.connections.testDraft.mockResolvedValue({
+      ok: true,
+      data: { models: [] } satisfies ConnectionTestPassed,
+    });
+    await openModels();
+    await click(screen.getByRole('button', { name: 'Edit Anthropic' }));
+    expect(
+      within(dialog()).getByLabelText<HTMLInputElement>('Model to test with (optional)').value,
+    ).toBe('claude-sonnet-5-5');
+    fireEvent.change(within(dialog()).getByLabelText('API key'), {
+      target: { value: 'sk-ant-api03-replaced-wxyz' },
+    });
+    await testThenSave();
+    expect(api.connections.testDraft).toHaveBeenCalledWith({
+      id: 'anthropic',
+      providerId: 'anthropic',
+      apiKey: 'sk-ant-api03-replaced-wxyz',
+      testModel: 'claude-sonnet-5-5',
+    });
+    expect(api.connections.update).toHaveBeenCalledWith({
+      id: 'anthropic',
+      apiKey: 'sk-ant-api03-replaced-wxyz',
+      testModel: 'claude-sonnet-5-5',
+    });
   });
 
   it('renames a custom endpoint', async () => {

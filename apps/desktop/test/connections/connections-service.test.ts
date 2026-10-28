@@ -91,6 +91,10 @@ function bind(scope: string, slot: string, connectionId: string, model: string) 
   );
 }
 
+function summaryOf(id: string) {
+  return service.list().find((connection) => connection.id === id);
+}
+
 const invalid = (method: string) => ({
   ok: false,
   error: { code: 'invalid_input', params: { method } },
@@ -125,6 +129,7 @@ describe('adding a Connection for a key-based Provider', () => {
       lastTestOk: true,
       lastTestError: null,
       lastTestFailure: null,
+      testModel: null,
       // The app's catalogue, known without a network call.
       models: ANTHROPIC_MODELS,
     });
@@ -149,6 +154,7 @@ describe('adding a Connection for a key-based Provider', () => {
         last_test_ok: 1,
         last_test_error: null,
         last_test_failure: null,
+        test_model: null,
       },
     ]);
     // Nothing the renderer is given holds the key.
@@ -625,7 +631,10 @@ describe('testing a saved Connection', () => {
       }),
     );
     expect(tester).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'glm-4.5' }));
-    await expect(service.test({ id: 'zhipu' })).resolves.toMatchObject(invalid('connections.test'));
+    expect(summaryOf('zhipu')?.testModel).toBe('glm-4.5');
+    // A later test that names none uses the one the last passed test used.
+    data(await service.test({ id: 'zhipu' }));
+    expect(tester).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'glm-4.5' }));
     data(await service.test({ id: 'zhipu', model: ' glm-4.5-air ' }));
     expect(tester).toHaveBeenLastCalledWith({
       providerId: 'zhipu',
@@ -633,13 +642,12 @@ describe('testing a saved Connection', () => {
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
       model: 'glm-4.5-air',
     });
-    // Adding it, or a new key, needs one too.
+    data(await service.update({ id: 'zhipu', apiKey: 'zhipu-key-replaced-wxyz' }));
+    expect(tester).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'glm-4.5-air' }));
+    // Adding a Connection without one is refused: there is none to fall back on.
     await expect(
       service.add({ providerId: 'minimax', apiKey: 'minimax-key-0123456789' }),
     ).resolves.toMatchObject(invalid('connections.add'));
-    await expect(
-      service.update({ id: 'zhipu', apiKey: 'zhipu-key-replaced-wxyz' }),
-    ).resolves.toMatchObject(invalid('connections.update'));
     // Renaming or disabling runs no test, so needs none.
     expect(data(await service.update({ id: 'zhipu', enabled: false })).enabled).toBe(false);
   });
@@ -651,6 +659,7 @@ describe('testing a saved Connection', () => {
       apiKey: 'AIza-google-key-0123456789',
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     });
+    expect(summaryOf('google')?.testModel).toBeNull();
     // A key that cannot use the catalogue's test model is tested with another one.
     data(await service.test({ id: 'google', model: 'gemini-3.6-flash' }));
     expect(tester).toHaveBeenLastCalledWith(
@@ -664,6 +673,56 @@ describe('testing a saved Connection', () => {
       }),
     );
     expect(tester).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'gemini-3.8-flash' }));
+  });
+
+  it("tests again with the model a Connection was added with, not the catalogue's", async () => {
+    // The key cannot use the catalogue's test model, so the User named another when adding it.
+    data(
+      await service.add({
+        providerId: 'google',
+        apiKey: 'AIza-google-key-0123456789',
+        testModel: ' gemini-3.6-flash ',
+      }),
+    );
+    expect(summaryOf('google')?.testModel).toBe('gemini-3.6-flash');
+    expect(connectionRows().find((row) => row.id === 'google')).toMatchObject({
+      test_model: 'gemini-3.6-flash',
+    });
+
+    // The row's Test names none: it uses that model, so a working Connection passes.
+    expect(data(await service.test({ id: 'google' })).lastTestOk).toBe(true);
+    expect(tester).toHaveBeenLastCalledWith({
+      providerId: 'google',
+      apiKey: 'AIza-google-key-0123456789',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      model: 'gemini-3.6-flash',
+    });
+    // So does a new key or base URL saved without one, and a test of the edit form.
+    data(await service.update({ id: 'google', apiKey: 'AIza-google-key-replaced-wxyz' }));
+    expect(tester).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'gemini-3.6-flash' }));
+    data(await service.testDraft({ id: 'google', providerId: 'google' }));
+    expect(tester).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'gemini-3.6-flash' }));
+    // Adding Google again keeps it, as it keeps what else the draft leaves out.
+    data(await service.add({ providerId: 'google', apiKey: 'AIza-google-key-third-0000' }));
+    expect(tester).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'gemini-3.6-flash' }));
+
+    // A model that fails is not kept: the next test uses the one that passed.
+    tester.mockResolvedValueOnce({ ok: false, reason: 'provider_error', detail: 'not found' });
+    expect(data(await service.test({ id: 'google', model: 'gemini-9' })).testModel).toBe(
+      'gemini-3.6-flash',
+    );
+    data(await service.test({ id: 'google' }));
+    expect(tester).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'gemini-3.6-flash' }));
+  });
+
+  it('keeps no test model for a Provider whose test lists its models instead', async () => {
+    data(await service.add({ providerId: 'openai', apiKey: OPENAI_KEY, testModel: 'gpt-5' }));
+    expect(tester).toHaveBeenLastCalledWith({
+      providerId: 'openai',
+      apiKey: OPENAI_KEY,
+      baseUrl: 'https://api.openai.com/v1',
+    });
+    expect(summaryOf('openai')?.testModel).toBeNull();
   });
 
   it.each([
@@ -789,6 +848,27 @@ describe('model listing', () => {
     tester.mockResolvedValueOnce({ ok: true, models: [{ id: 'llama-third-key' }] });
     data(await service.update({ id: 'groq', apiKey: 'gsk_third_key_0000' }));
     expect(data(await service.models('groq'))).toEqual([{ id: 'llama-third-key' }]);
+    expect(lister).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not keep a listing made with a key replaced while it was listed', async () => {
+    data(await service.add({ providerId: 'groq', apiKey: 'gsk_0123456789abcdef' }));
+    lister.mockImplementationOnce(async () => {
+      // The User saves a new key (whose test lists no models) before this listing answers.
+      data(await service.update({ id: 'groq', apiKey: 'gsk_replaced_key_wxyz' }));
+      return { ok: true, models: [{ id: 'llama-old-key' }] };
+    });
+    expect(data(await service.models('groq'))).toEqual([{ id: 'llama-old-key' }]);
+    expect(service.list()[0]?.models).toEqual([]);
+
+    lister.mockResolvedValueOnce({ ok: true, models: [{ id: 'llama-new-key' }] });
+    expect(data(await service.models('groq'))).toEqual([{ id: 'llama-new-key' }]);
+    expect(lister).toHaveBeenCalledTimes(2);
+    expect(lister).toHaveBeenLastCalledWith(
+      expect.objectContaining({ apiKey: 'gsk_replaced_key_wxyz' }),
+    );
+    // The new key's listing is the one kept.
+    expect(data(await service.models('groq'))).toEqual([{ id: 'llama-new-key' }]);
     expect(lister).toHaveBeenCalledTimes(2);
   });
 

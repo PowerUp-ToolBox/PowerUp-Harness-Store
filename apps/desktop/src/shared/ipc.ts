@@ -103,7 +103,8 @@ export interface IpcMethods {
    * (`lastTestedAt`, `lastTestOk`, `lastTestError`, `lastTestFailure`). A failed test is not an IPC
    * failure: the Connection comes back with `lastTestOk: false` and the Provider's text in
    * `lastTestError`, or the reason without one in `lastTestFailure`.
-   * `model` names the model to test with, required where the Provider `needsTestModel`.
+   * `model` names the model to test with; without one the test uses the Connection's
+   * `testModel`, else the catalogue's.
    */
   'connections.test': { input: ConnectionTestRequest; output: ConnectionSummary };
   /**
@@ -228,7 +229,9 @@ export interface ConnectionDraft {
   readonly baseUrl?: string;
   /**
    * The model the test sends a 1-token completion to: required where `needsTestModel`, and
-   * replacing the preset's `testModel` where it has one; ignored by the other Providers.
+   * replacing the preset's `testModel` where it has one; ignored by the other Providers. Once a
+   * test with it passes, it is the Connection's `testModel`. Absent when re-adding a Provider
+   * already added: that Connection's `testModel`.
    */
   readonly testModel?: string;
 }
@@ -243,14 +246,19 @@ export interface ConnectionUpdate {
   /** A new base URL; empty means the Provider's default (the custom endpoint has none). */
   readonly baseUrl?: string;
   readonly enabled?: boolean;
-  /** The model to test a new key or base URL with; required there where `needsTestModel`. */
+  /**
+   * The model to test a new key or base URL with; absent or empty, the Connection's `testModel`.
+   */
   readonly testModel?: string;
 }
 
 /** Which saved Connection to test, and with which model. */
 export interface ConnectionTestRequest {
   readonly id: string;
-  /** Required where the Provider `needsTestModel`; else the test needs none. */
+  /**
+   * The model to test with; absent, the Connection's `testModel`, else the catalogue's (required
+   * where the Provider `needsTestModel` and the Connection has none).
+   */
   readonly model?: string;
 }
 
@@ -311,6 +319,11 @@ export interface ConnectionSummary {
    * `error.<lastTestFailure>` catalog entry. Null otherwise.
    */
   readonly lastTestFailure: ConnectionTestFailure | null;
+  /**
+   * The model the User named for the last passed test, which tests that name none use again;
+   * null when it used the catalogue's.
+   */
+  readonly testModel: string | null;
   /**
    * The model names known without a network call: the catalogue's, or a live listing from the
    * last 10 minutes; empty otherwise. `connections.models` lists them with what is known of each.

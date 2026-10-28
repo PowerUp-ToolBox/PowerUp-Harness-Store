@@ -27,9 +27,11 @@ export function ModelsPage() {
  * API's, Local, Connected, Not tested), where it points or that its key is
  * stored encrypted, how many models it lists, and Test connection, Edit, Enable or Disable, and
  * Remove. Test runs `connections.test`, which records the result on the Connection; where the
- * Provider lists no models, it first asks for the model to test with. Tests and Enable or Disable
- * of different Connections may run at once; each row's button waits for its own. The list is read
- * from the Runtime when the page opens and again after every change made here.
+ * Provider lists no models, it first asks for the model to test with, starting from the one the
+ * last passed test used. A disabled Connection is not tested: its row shows only Disabled, so a
+ * result would not show. Tests and Enable or Disable of different Connections may run at once;
+ * while a row's own runs, its buttons wait, so it is not edited or removed under them. The list is
+ * read from the Runtime when the page opens and again after every change made here.
  */
 function ConnectionsSection() {
   const { t } = useI18n();
@@ -187,9 +189,11 @@ function ConnectionRow({
   const ids = useId();
   const name = connectionName(t, connection);
   const status = testing ? 'testing' : connectionStatus(connection);
+  /** Its own test or Enable or Disable is running. */
+  const busy = testing || toggling;
   /** The inline "Model to test with", open while the User names one. */
   const [askModel, setAskModel] = useState(false);
-  const [testModel, setTestModel] = useState('');
+  const [testModel, setTestModel] = useState(connection.testModel ?? '');
   const [modelProblem, setModelProblem] = useState<'required' | 'invalid' | null>(null);
 
   const submitTestModel = () => {
@@ -245,7 +249,7 @@ function ConnectionRow({
           className="button-secondary"
           aria-label={t('models.test_named', { name })}
           aria-expanded={needsTestModel ? askModel : undefined}
-          disabled={testing}
+          disabled={busy || !connection.enabled}
           aria-busy={testing}
           onClick={() => {
             if (needsTestModel) setAskModel((open) => !open);
@@ -258,6 +262,7 @@ function ConnectionRow({
           type="button"
           className="button-secondary"
           aria-label={t('models.edit_named', { name })}
+          disabled={busy}
           onClick={onEdit}
         >
           {t('models.edit')}
@@ -270,7 +275,7 @@ function ConnectionRow({
               ? t('models.disable_named', { name })
               : t('models.enable_named', { name })
           }
-          disabled={toggling}
+          disabled={busy}
           aria-busy={toggling}
           onClick={onToggle}
         >
@@ -280,12 +285,13 @@ function ConnectionRow({
           type="button"
           className="button-secondary button-secondary-danger"
           aria-label={t('models.remove_named', { name })}
+          disabled={busy}
           onClick={onRemove}
         >
           {t('models.remove')}
         </button>
       </div>
-      {askModel ? (
+      {askModel && connection.enabled ? (
         <form
           className="connection-row-test"
           noValidate

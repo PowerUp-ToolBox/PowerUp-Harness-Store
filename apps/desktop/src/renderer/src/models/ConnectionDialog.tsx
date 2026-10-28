@@ -237,7 +237,8 @@ function ConnectionForm({
   const [name, setName] = useState(editing?.displayName ?? '');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState(initialBaseUrl);
-  const [testModel, setTestModel] = useState('');
+  /** Starts from the model the saved Connection last passed a test with. */
+  const [testModel, setTestModel] = useState(editing?.testModel ?? '');
   const [problems, setProblems] = useState<Problems>({});
   const [test, setTest] = useState<Test>({ state: 'idle' });
   const [saving, setSaving] = useState(false);

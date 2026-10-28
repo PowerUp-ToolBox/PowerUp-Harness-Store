@@ -151,9 +151,12 @@ export interface ConnectionsServiceOptions {
  * from the name it was added with.
  *
  * Every test that runs is recorded on the Connection (`lastTestedAt`, `lastTestOk`,
- * `lastTestError`, `lastTestFailure`): the one `add` and a credential change in `update` pass before saving, and
- * each `test`. Live model listings are kept for 10 minutes per Connection; the models of a passed
- * test fill that cache too, and a new key or base URL, or removing the Connection, empties it.
+ * `lastTestError`, `lastTestFailure`): the one `add` and a credential change in `update` pass
+ * before saving, and each `test`. A passed test also keeps the model it was named (`testModel`),
+ * and every later test without one uses it: a key that cannot use the catalogue's test model, or
+ * a Provider that needs one named, is not asked for it again. Live model listings are kept for 10
+ * minutes per Connection; the models of a passed test fill that cache too, and a new key or base
+ * URL, or removing the Connection, empties it.
  */
 export function createConnectionsService(options: ConnectionsServiceOptions): ConnectionsService {
   const { store, cipher, test, providers = PROVIDERS } = options;
@@ -174,11 +177,13 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
     if (models !== undefined && provider.supportsModelList) cache.set(id, models);
   };
 
-  const passed = () => ({
+  /** A passed test's record; `model` is the one it was named, which later tests reuse. */
+  const passed = (model: string | undefined) => ({
     lastTestedAt: now().toISOString(),
     lastTestOk: true,
     lastTestError: null,
     lastTestFailure: null,
+    testModel: model ?? null,
   });
 
   const summarize = (row: ConnectionRow): ConnectionSummary => ({
@@ -193,6 +198,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
     lastTestOk: row.lastTestOk,
     lastTestError: row.lastTestError,
     lastTestFailure: row.lastTestFailure,
+    testModel: row.testModel,
     models: knownModels(row).map((model) => model.id),
   });
 
@@ -222,18 +228,22 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
   };
 
   /**
-   * The model to test with, trimmed: required where the Provider needs one named, else optional.
-   * Null when it is missing there, or not a model name the Gateway would send.
+   * The model to test with, trimmed: the one named, else `saved` (the one the Connection last
+   * passed a test with), else none, so the test uses the catalogue's. A Provider whose test lists
+   * its models calls none, so gets none. Null when there is none where the Provider needs one
+   * named, or the name is not one the Gateway would send.
    */
   const checkTestModel = (
     raw: string | undefined,
     provider: ProviderInfo,
+    saved: string | null = null,
   ): { readonly model: string | undefined } | null => {
-    const model = raw?.trim();
-    if (model === undefined || model === '') {
-      return needsTestModel(provider.id) ? null : { model: undefined };
-    }
-    return isModelName(provider.id, model) ? { model } : null;
+    const named = raw?.trim();
+    const model = named === undefined || named === '' ? (saved ?? undefined) : named;
+    if (model === undefined) return needsTestModel(provider.id) ? null : { model: undefined };
+    if (!isModelName(provider.id, model)) return null;
+    const callsModel = needsTestModel(provider.id) || catalogueTestModel(provider.id) !== undefined;
+    return { model: callsModel ? model : undefined };
   };
 
   /** Runs the test of `provider` against these credentials. */
@@ -289,7 +299,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
           ? existing.baseUrl
           : storedBaseUrl(draft.baseUrl ?? '', provider);
       if (baseUrl === undefined) return invalid();
-      const testModel = checkTestModel(draft.testModel, provider);
+      const testModel = checkTestModel(draft.testModel, provider, existing?.testModel);
       if (testModel === null) return invalid();
       if (key.key !== undefined && !(await cipher.isAvailable())) {
         return fail('encryption_unavailable');
@@ -316,7 +326,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
         secretRef: key.key === undefined ? (keptKey?.secretRef ?? null) : id,
         keyHint: key.key === undefined ? (keptKey?.keyHint ?? null) : keyHintFor(key.key),
         enabled: true,
-        ...passed(),
+        ...passed(testModel.model),
       };
       store.save(row, ciphertext);
       cache.delete(id);
@@ -349,7 +359,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
       const newBaseUrl = 'baseUrl' in changes;
       const newCredentials = key.key !== undefined || newBaseUrl;
       // A missing test model matters only when a test runs.
-      const testModel = checkTestModel(update.testModel, provider);
+      const testModel = checkTestModel(update.testModel, provider, row.testModel);
       if (testModel === null && (newCredentials || (update.testModel?.trim() ?? '') !== '')) {
         return invalid();
       }
@@ -370,7 +380,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
         );
         if (!tested.ok) return failedCheck(tested);
         listed = tested.models;
-        Object.assign(changes, passed());
+        Object.assign(changes, passed(testModel?.model));
         if (key.key !== undefined) {
           Object.assign(changes, { secretRef: row.id, keyHint: keyHintFor(key.key) });
         }
@@ -398,7 +408,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
       const row = store.get(request.id);
       const provider = row === undefined ? undefined : findProvider(row.providerId, providers);
       if (row === undefined || provider === undefined) return invalid();
-      const testModel = checkTestModel(request.model, provider);
+      const testModel = checkTestModel(request.model, provider, row.testModel);
       if (testModel === null) return invalid();
 
       const credentials = credentialsOf(row);
@@ -409,7 +419,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
       if (current === undefined) return invalid();
       if (credentialsOf(current) !== credentials) return ok(summarize(current));
       const next: ConnectionRow = tested.ok
-        ? { ...current, ...passed() }
+        ? { ...current, ...passed(testModel.model) }
         : {
             ...current,
             lastTestedAt: now().toISOString(),
@@ -438,7 +448,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
           ? saved.baseUrl
           : storedBaseUrl(draft.baseUrl ?? '', provider);
       if (baseUrl === undefined) return invalid();
-      const testModel = checkTestModel(draft.testModel, provider);
+      const testModel = checkTestModel(draft.testModel, provider, saved?.testModel);
       if (testModel === null) return invalid();
 
       const apiKey = key.key ?? (saved === undefined ? undefined : await storedKey(saved));
