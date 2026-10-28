@@ -147,7 +147,7 @@ Install layout on disk (app data root: Electron's `userData` folder, which `HARN
 ```
 harnesses/<publisher>/<slug>/<version>/   unpacked package (read-only intent)
 data/<publisher>/<slug>/                  Data Directory (survives updates, deleted on uninstall)
-logs/<publisher>/<slug>/<launchId>.log    launch logs, at most 10 MB each, the 20 newest per Harness (kept on uninstall; at each start, those of a Harness no longer installed are deleted once 30 days old)
+logs/<publisher>/<slug>/<launchId>.log    launch logs, at most 10 MB each, the 20 newest per Harness (kept on uninstall, which writes its time to `uninstalled-at` beside them; at each start, those of a Harness no longer installed are deleted once both they and its uninstall are 30 days old)
 downloads/                                temp: Store downloads (download-<jobId>.zip), install copies (install-*) before they are renamed into harnesses/, and a reinstalled version moved aside (replaced-*); what an interrupted install left is cleaned up at startup
 harness-store.sqlite
 ```

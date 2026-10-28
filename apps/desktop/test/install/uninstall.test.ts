@@ -8,8 +8,8 @@
  * changed; an uninstall that stopped partway finishes when asked again.
  *
  * Then the installer on its own: it counts as installing while it deletes (so nothing launches
- * it), an update under way refuses it, and the launch logs of uninstalled Harnesses are deleted 30
- * days after they were written, at a later start.
+ * it), an update under way refuses it, and the launch logs of uninstalled Harnesses are deleted at
+ * a later start once 30 days have passed both since they were written and since the uninstall.
  */
 import {
   existsSync,
@@ -38,6 +38,7 @@ import { createInstallStore, type InstallStore } from '../../src/main/runtime/in
 import {
   createInstaller,
   pruneUninstalledLogs,
+  UNINSTALLED_AT_FILE,
   UNINSTALLED_LOG_RETENTION_MS,
 } from '../../src/main/runtime/installer.js';
 import type { StoreDownloader } from '../../src/main/runtime/store-download.js';
@@ -228,6 +229,9 @@ describe('uninstall over IPC', () => {
     expect(changed).toEqual([TERM]);
     // Kept: the log, the launch's row, and the User's file the link pointed to.
     expect(readFileSync(log, 'utf8')).toBe(logged);
+    // The uninstall's time beside the logs, from which they are kept 30 days.
+    const at = Date.parse(readFileSync(join(logsDir(), UNINSTALLED_AT_FILE), 'utf8'));
+    expect(Date.now() - at).toBeLessThan(60_000);
     expect(rows('launches')).toMatchObject([{ launch_id: launchId, harness_id: TERM }]);
     expect(readFileSync(own, 'utf8')).toHaveLength(100_000);
 
@@ -407,7 +411,7 @@ describe('the installer on its own', () => {
     await expect(service.uninstall(TERM)).resolves.toEqual({ ok: true, data: null });
   });
 
-  it('deletes, at startup, the logs of uninstalled Harnesses written over 30 days ago, and nothing of installed ones', async () => {
+  it('deletes, at startup, the logs of Harnesses uninstalled and written over 30 days ago, and nothing of installed ones', async () => {
     const NOW = new Date('2026-10-28T09:00:00.000Z');
     const logs = paths().logs;
     const old = new Date(NOW.getTime() - UNINSTALLED_LOG_RETENTION_MS - 60_000);
@@ -423,6 +427,18 @@ describe('the installer on its own', () => {
     writeLog('acme/gone-recent', 'old.log', old);
     writeLog('acme/gone-recent', 'recent.log', recent);
     writeLog('bob/gone-old', 'old.log', old);
+    // Uninstalled a minute within the 30 days: its old log is kept, 30 days from the uninstall.
+    writeLog('dave/uninstalled-recently', 'old.log', old);
+    writeFileSync(
+      join(logs, 'dave', 'uninstalled-recently', UNINSTALLED_AT_FILE),
+      recent.toISOString(),
+    );
+    // Uninstalled over 30 days ago: its old log goes, and so do its uninstall time and folder.
+    writeLog('erin/uninstalled-long-ago', 'old.log', old);
+    writeFileSync(
+      join(logs, 'erin', 'uninstalled-long-ago', UNINSTALLED_AT_FILE),
+      old.toISOString(),
+    );
     // Not a launch log: left alone, and so is its folder.
     writeLog('carol/gone-other', 'notes.txt', old);
 
@@ -446,8 +462,42 @@ describe('the installer on its own', () => {
         'carol',
         join('carol', 'gone-other'),
         join('carol', 'gone-other', 'notes.txt'),
+        'dave',
+        join('dave', 'uninstalled-recently'),
+        join('dave', 'uninstalled-recently', 'old.log'),
+        join('dave', 'uninstalled-recently', UNINSTALLED_AT_FILE),
       ].sort(),
     );
+  });
+
+  it('keeps the logs of an uninstalled Harness 30 days from the uninstall, however old they are', async () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const uninstalled = new Date('2026-10-28T09:00:00.000Z');
+    // Written on its only launch, 40 days before the uninstall.
+    const folder = paths().logsDir(TERM);
+    const log = join(folder, 'launch.log');
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(log, 'a line\n');
+    const written = new Date(uninstalled.getTime() - 40 * DAY);
+    utimesSync(log, written, written);
+    recordInstall();
+    const startAt = (at: Date) =>
+      createInstaller({
+        store,
+        root: join(root, 'userData'),
+        platform: null,
+        pickFolder: () => Promise.resolve(null),
+        now: () => at,
+      });
+    await expect(startAt(uninstalled).uninstall(TERM)).resolves.toEqual({ ok: true, data: null });
+
+    // A start the next day, and 29 days on, keeps it.
+    await startAt(new Date(uninstalled.getTime() + DAY)).list();
+    await startAt(new Date(uninstalled.getTime() + 29 * DAY)).list();
+    expect(existsSync(log)).toBe(true);
+    // A start over 30 days after the uninstall deletes it, with the uninstall's time and folder.
+    await startAt(new Date(uninstalled.getTime() + 31 * DAY)).list();
+    expect(existsSync(folder)).toBe(false);
   });
 
   it('never throws when the logs folder is missing', async () => {

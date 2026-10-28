@@ -11,6 +11,7 @@ import {
   rm,
   rmdir,
   stat,
+  writeFile,
   type FileHandle,
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -50,8 +51,17 @@ const STAGING_PREFIX = 'install-';
 const ASIDE_PREFIX = 'replaced-';
 const DOWNLOAD_PREFIX = 'download-';
 
-/** How long the launch logs of an uninstalled Harness are kept: 30 days from when each was written. */
+/**
+ * How long the launch logs of an uninstalled Harness are kept: 30 days from the uninstall, and
+ * from when each was written.
+ */
 export const UNINSTALLED_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * The file an uninstall writes in the Harness's logs folder, holding when it was uninstalled (an
+ * ISO 8601 time), so its logs are kept 30 days from then. Not a `.log`, so no launch log counts it.
+ */
+export const UNINSTALLED_AT_FILE = 'uninstalled-at';
 
 /** The installer as the IPC handlers use it. */
 export interface InstallsService {
@@ -188,13 +198,14 @@ export interface InstallerOptions {
  * Harness counts as installing, so nothing launches it. It deletes the install folder, then the
  * Data Directory (neither ever followed through a link), then the row and the Harness's Model
  * Overrides in one transaction: a failure partway leaves the row, and uninstalling again finishes
- * the job, as a folder already gone counts as deleted. The launch logs and Usage Records stay.
+ * the job, as a folder already gone counts as deleted. The launch logs and Usage Records stay,
+ * and the time of the uninstall is written beside the logs ({@link UNINSTALLED_AT_FILE}).
  *
  * An install the app quit or crashed in leaves its row in a transient state and its files in
  * `downloads/`. Before the first install or listing, the installer deletes those rows, puts back
  * a folder moved aside whose install is missing, then deletes what the interrupted installs left
- * there (see {@link recoverInterruptedInstalls}). It then deletes the launch logs of uninstalled
- * Harnesses older than 30 days ({@link pruneUninstalledLogs}).
+ * there (see {@link recoverInterruptedInstalls}). It then deletes the launch logs of Harnesses
+ * uninstalled over 30 days ago that are older than 30 days ({@link pruneUninstalledLogs}).
  */
 export function createInstaller(options: InstallerOptions): InstallsService {
   const { store, platform } = options;
@@ -645,6 +656,7 @@ export function createInstaller(options: InstallerOptions): InstallsService {
           installing.delete(harnessId);
         }
         icons.delete(row.installPath);
+        await markLogsUninstalled(paths.logsDir(harnessId), now(), logError);
         options.onChanged?.(harnessId);
         return ok(null);
       }),
@@ -1006,11 +1018,47 @@ async function rowOfAside(aside: string, store: InstallStore): Promise<InstallRo
 }
 
 /**
- * Deletes the launch logs (`*.log`) older than {@link UNINSTALLED_LOG_RETENTION_MS}, by when each
- * was last written, in the logs folder of every Harness that `isInstalled` says is not installed
- * (`logs/<publisher>/<slug>/`), then those folders, and the publishers' folders, left empty. The
- * logs of installed Harnesses are never touched. Only folders and regular files are looked at,
- * never through a link. It never throws: what cannot be read or deleted is left for the next start.
+ * Writes when the Harness was uninstalled into its logs folder ({@link UNINSTALLED_AT_FILE}),
+ * replacing an earlier uninstall's, so {@link pruneUninstalledLogs} keeps its logs 30 days from
+ * now. A Harness never launched has no logs folder and gets none. A failure is only logged: the
+ * uninstall is done, and its logs are then kept 30 days from when each was written.
+ */
+async function markLogsUninstalled(
+  folder: string,
+  at: Date,
+  logError: (message: string, error: unknown) => void,
+): Promise<void> {
+  try {
+    if (!(await lstat(folder)).isDirectory()) return;
+  } catch {
+    return;
+  }
+  await writeFile(join(folder, UNINSTALLED_AT_FILE), at.toISOString()).catch((error: unknown) => {
+    logError(`Could not record the uninstall beside the launch logs in ${folder}`, error);
+  });
+}
+
+/** When the Harness whose logs are in `folder` was uninstalled; undefined when not recorded. */
+async function uninstalledAt(folder: string): Promise<number | undefined> {
+  const path = join(folder, UNINSTALLED_AT_FILE);
+  try {
+    if (!(await lstat(path)).isFile()) return undefined;
+    const at = Date.parse((await readFile(path, 'utf8')).trim());
+    return Number.isNaN(at) ? undefined : at;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Deletes, in the logs folder of every Harness that `isInstalled` says is not installed
+ * (`logs/<publisher>/<slug>/`), the launch logs (`*.log`) older than
+ * {@link UNINSTALLED_LOG_RETENTION_MS} by when each was last written, once that long has passed
+ * since the uninstall ({@link UNINSTALLED_AT_FILE}; a folder without one, e.g. from before it was
+ * written, counts from the logs alone). A folder whose logs are all gone loses its uninstall time
+ * too, then those folders, and the publishers' folders, left empty are deleted. The logs of
+ * installed Harnesses are never touched. Only folders and regular files are looked at, never
+ * through a link. It never throws: what cannot be read or deleted is left for the next start.
  */
 export async function pruneUninstalledLogs(
   logs: string,
@@ -1024,15 +1072,21 @@ export async function pruneUninstalledLogs(
     for (const slug of await entriesOf(publisherFolder)) {
       if (!slug.isDirectory() || isInstalled(`${publisher.name}/${slug.name}`)) continue;
       const folder = join(publisherFolder, slug.name);
+      const uninstalled = await uninstalledAt(folder);
+      if (uninstalled !== undefined && uninstalled >= cutoff) continue; // Kept 30 days from it.
+      let logsLeft = false;
       for (const log of await entriesOf(folder)) {
         if (!log.isFile() || !log.name.endsWith('.log')) continue;
         const path = join(folder, log.name);
         try {
           if ((await lstat(path)).mtimeMs < cutoff) await rm(path, { force: true });
+          else logsLeft = true;
         } catch {
-          // Left for the next start.
+          logsLeft = true; // Left for the next start.
         }
       }
+      if (!logsLeft)
+        await rm(join(folder, UNINSTALLED_AT_FILE), { force: true }).catch(() => undefined);
       await rmdir(folder).catch(() => undefined); // Only when it is empty.
     }
     await rmdir(publisherFolder).catch(() => undefined);
