@@ -19,7 +19,14 @@ describe('buildApi (window.api)', () => {
     ]);
     expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit']);
     expect(Object.keys(api.auth)).toEqual(['signIn', 'signOut', 'whoami']);
-    expect(Object.keys(api.bindings)).toEqual(['getGlobal', 'setGlobal']);
+    expect(Object.keys(api.bindings)).toEqual([
+      'getGlobal',
+      'setGlobal',
+      'getForHarness',
+      'setOverride',
+      'clearOverride',
+      'resolveAll',
+    ]);
     expect(Object.keys(api.connections)).toEqual([
       'detectLocal',
       'list',

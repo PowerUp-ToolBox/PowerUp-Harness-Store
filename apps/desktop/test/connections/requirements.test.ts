@@ -66,6 +66,42 @@ describe('checkRequirements', () => {
       expected: { ok: false, unknown: true, failures: ['tools'] },
     },
     {
+      case: 'each failure type on its own: tools',
+      requirements: { tools: true },
+      model: SMALL_CATALOGUE,
+      expected: { ok: false, unknown: false, failures: ['tools'] },
+    },
+    {
+      case: 'each failure type on its own: vision',
+      requirements: { vision: true },
+      model: SMALL_CATALOGUE,
+      expected: { ok: false, unknown: false, failures: ['vision'] },
+    },
+    {
+      case: 'each failure type on its own: json, for a model known to lack JSON output',
+      requirements: { json: true },
+      model: { ...SMALL_CATALOGUE, json: false },
+      expected: { ok: false, unknown: false, failures: ['json'] },
+    },
+    {
+      case: 'each failure type on its own: minContext',
+      requirements: { minContext: 32_001 },
+      model: SMALL_CATALOGUE,
+      expected: { ok: false, unknown: false, failures: ['minContext'] },
+    },
+    {
+      case: 'every failure at once, in the order of the type',
+      requirements: { json: true, minContext: 64_000, vision: true, tools: true },
+      model: { ...SMALL_CATALOGUE, json: false },
+      expected: { ok: false, unknown: false, failures: ['tools', 'vision', 'json', 'minContext'] },
+    },
+    {
+      case: 'a model with only some capabilities known: unknown for the rest',
+      requirements: { tools: true, minContext: 8_000 },
+      model: { id: 'partly-known', tools: true },
+      expected: { ok: true, unknown: true, failures: [] },
+    },
+    {
       case: 'a context window exactly the minimum',
       requirements: { minContext: 32_000 },
       model: SMALL_CATALOGUE,

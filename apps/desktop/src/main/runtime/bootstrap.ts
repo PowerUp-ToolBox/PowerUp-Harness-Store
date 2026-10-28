@@ -186,13 +186,13 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   let gatewayPort: number | null = null;
   if (sqlite !== null) {
     const { usageRecords, installs } = sqlite;
-    // Connections, Slot Bindings and the installed Manifests are read from SQLite on every
-    // request.
+    // Connections, Slot Bindings (Default Models and Model Overrides) and the installed
+    // Manifests are read from SQLite on every request.
     gateway = (options.createGateway ?? createGateway)({
       ...createGatewayHost({
         store: sqlite.connections,
         cipher: options.secretCipher,
-        getManifest: (harnessId) => Promise.resolve(installs.get(harnessId)?.manifest ?? null),
+        installs,
       }),
       onUsage: (record) => {
         usageRecords.insert(record);
@@ -277,9 +277,9 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       providers: { list: () => providerPresets() },
       connections,
       bindings:
-        connectionStore === undefined
+        sqlite === null
           ? createBindingsStub()
-          : createBindingsService(connectionStore),
+          : createBindingsService(sqlite.connections, sqlite.installs),
       auth,
       installs,
     },

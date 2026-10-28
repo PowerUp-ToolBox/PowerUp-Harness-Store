@@ -38,6 +38,10 @@ const fakeServices: Services = {
     getGlobal: () => [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }],
     setGlobal: (change) =>
       ok(change.target === null ? [] : [{ slot: change.slot, ...change.target }]),
+    getForHarness: () => [],
+    setOverride: (change) => ok([{ slot: change.slot, ...change.target }]),
+    clearOverride: () => ok([]),
+    resolveAll: () => ok([{ slot: 'default', binding: null }]),
   },
   auth: {
     signIn: () =>
@@ -191,6 +195,34 @@ describe('IPC handlers against a fake service container', () => {
     ['bindings.setGlobal', undefined],
     ['bindings.setGlobal', { slot: 'default' }],
     ['bindings.setGlobal', { slot: 'default', target: 'ollama/qwen3:8b' }],
+    ['bindings.getForHarness', undefined],
+    ['bindings.getForHarness', ''],
+    ['bindings.getForHarness', { harnessId: 'acme/hello' }],
+    ['bindings.setOverride', undefined],
+    ['bindings.setOverride', { harnessId: 'acme/hello', slot: 'default' }],
+    ['bindings.setOverride', { harnessId: 'acme/hello', slot: 'default', target: null }],
+    [
+      'bindings.setOverride',
+      { harnessId: 7, slot: 'default', target: { connectionId: 'ollama', model: 'm' } },
+    ],
+    [
+      'bindings.setOverride',
+      { harnessId: 'acme/hello', slot: 'default', target: { connectionId: 'ollama' } },
+    ],
+    [
+      'bindings.setOverride',
+      {
+        harnessId: 'acme/hello',
+        slot: 'default',
+        target: { connectionId: 'ollama', model: 'm' },
+        scope: 'global',
+      },
+    ],
+    ['bindings.clearOverride', undefined],
+    ['bindings.clearOverride', { harnessId: 'acme/hello' }],
+    ['bindings.clearOverride', { harnessId: 'acme/hello', slot: 'default', target: null }],
+    ['bindings.resolveAll', undefined],
+    ['bindings.resolveAll', { harnessId: 'acme/hello' }],
     ['installs.inspectFolder', undefined],
     ['installs.inspectFolder', 'relative/folder'],
     ['installs.inspectFolder', '/folder\u0000'],
@@ -223,6 +255,32 @@ describe('IPC handlers against a fake service container', () => {
       ok: true,
       data: [{ slot: 'fast', connectionId: 'ollama', model: 'qwen3:8b' }],
     });
+  });
+
+  it('bindings.setOverride, clearOverride and resolveAll hand well-formed input to the service', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'bindings.setOverride',
+        input: {
+          harnessId: 'acme/hello',
+          slot: 'fast',
+          target: { connectionId: 'ollama', model: 'qwen3:8b' },
+        },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      data: [{ slot: 'fast', connectionId: 'ollama', model: 'qwen3:8b' }],
+    });
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'bindings.clearOverride',
+        input: { harnessId: 'acme/hello', slot: 'fast' },
+      }),
+    ).resolves.toEqual({ ok: true, data: [] });
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'bindings.resolveAll', input: 'acme/hello' }),
+    ).resolves.toEqual({ ok: true, data: [{ slot: 'default', binding: null }] });
   });
 
   it('installs.chooseFolder returns the folder the picker chose', async () => {

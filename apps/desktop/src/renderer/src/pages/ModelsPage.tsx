@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useId, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import type { ConnectionSummary, IpcError, ProviderPreset } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { ConnectionDialog } from '../models/ConnectionDialog.js';
 import { DefaultModelsSection } from '../models/DefaultModelsSection.js';
+import { HarnessOverridesSection } from '../models/HarnessOverridesSection.js';
 import { LocalProvidersPanel } from '../models/LocalProvidersPanel.js';
 import { connectionName, connectionStatus, CUSTOM_PROVIDER_ID, monogram } from '../models/names.js';
 import { RemoveConnectionDialog } from '../models/RemoveConnectionDialog.js';
@@ -15,19 +17,31 @@ type Dialog =
   | { readonly kind: 'remove'; readonly connection: ConnectionSummary };
 
 /**
- * The Models page: the Connections, then the Default Models. Model Overrides per installed Harness
- * arrive with P0-03.5. After every change to the Connections, the Default Models read them again,
- * since a disabled or removed Connection changes what their rows show.
+ * The Models page: the Connections, then the Default Models, then the Per-Harness Overrides.
+ * After every change to the Connections, both binding sections read them again, since a disabled
+ * or removed Connection changes what their rows show and resolve to; after a Default Model
+ * changes, the Harness cards resolve their Slots again. The deep link `models?harness=<id>` opens
+ * that Harness's card and scrolls to it.
  */
 export function ModelsPage() {
-  const [revision, setRevision] = useState(0);
+  const [searchParams] = useSearchParams();
+  const focusHarness = searchParams.get('harness');
+  const [connectionsRevision, setConnectionsRevision] = useState(0);
+  const [bindingsRevision, setBindingsRevision] = useState(0);
   const connectionsChanged = useCallback(() => {
-    setRevision((current) => current + 1);
+    setConnectionsRevision((current) => current + 1);
+  }, []);
+  const bindingsChanged = useCallback(() => {
+    setBindingsRevision((current) => current + 1);
   }, []);
   return (
     <div className="models">
       <ConnectionsSection onChanged={connectionsChanged} />
-      <DefaultModelsSection revision={revision} />
+      <DefaultModelsSection revision={connectionsRevision} onChanged={bindingsChanged} />
+      <HarnessOverridesSection
+        revision={connectionsRevision + bindingsRevision}
+        focusHarness={focusHarness === '' ? null : focusHarness}
+      />
     </div>
   );
 }

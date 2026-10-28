@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { formatBytes, formatDate, formatNumber } from '../../../shared/i18n/format.js';
+import { formatBytes, formatDate, formatList, formatNumber } from '../../../shared/i18n/format.js';
 import { translatorFor, type Translator } from '../../../shared/i18n/translate.js';
 import type { IpcResult, Settings, SettingsPatch } from '../../../shared/ipc.js';
 
@@ -9,6 +9,7 @@ export interface I18n extends Translator {
   readonly formatNumber: (value: number, options?: Intl.NumberFormatOptions) => string;
   readonly formatDate: (value: Date | number, options?: Intl.DateTimeFormatOptions) => string;
   readonly formatBytes: (bytes: number) => string;
+  readonly formatList: (items: readonly string[]) => string;
 }
 
 export interface SettingsState {
@@ -62,6 +63,7 @@ export function I18nProvider({ children }: { readonly children: ReactNode }) {
             formatNumber: (value, options) => formatNumber(locale, value, options),
             formatDate: (value, options) => formatDate(locale, value, options),
             formatBytes: (bytes) => formatBytes(locale, bytes),
+            formatList: (items) => formatList(locale, items),
           },
     [locale],
   );

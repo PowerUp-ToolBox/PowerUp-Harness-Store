@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import type { ConnectionSummary, GlobalBinding, IpcError } from '../../../shared/ipc.js';
+import type { ConnectionSummary, IpcError, IpcResult } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { Modal } from '../components/Modal.js';
 import { useI18n } from '../i18n/I18nProvider.js';
@@ -11,11 +11,20 @@ export interface RemoveConnectionDialogProps {
   readonly onRemoved: () => void;
 }
 
+/** A Slot Binding that uses the Connection: a Default Model, or a Harness's Model Override. */
+interface AffectedBinding {
+  readonly slot: string;
+  readonly model: string;
+  /** The Harness's display name, for a Model Override; null for a Default Model. */
+  readonly harness: string | null;
+}
+
 /**
- * Confirms removing a Connection, naming the Slot Bindings that use it (from
- * `bindings.getGlobal`) and that its key is deleted. Remove waits until they are known; if they
- * cannot be read, the error is shown and Remove still works. It calls `connections.remove`, which
- * deletes the Connection, its secret and those Slot Bindings at once.
+ * Confirms removing a Connection, naming the Slot Bindings that use it (the Default Models from
+ * `bindings.getGlobal`, then each installed Harness's Model Overrides from
+ * `bindings.getForHarness`) and that its key is deleted. Remove waits until they are known; if
+ * they cannot be read, the error is shown and Remove still works. It calls `connections.remove`,
+ * which deletes the Connection, its secret and those Slot Bindings at once.
  */
 export function RemoveConnectionDialog({
   connection,
@@ -25,21 +34,18 @@ export function RemoveConnectionDialog({
   const { t } = useI18n();
   const ids = useId();
   /** The Slot Bindings that use the Connection; null until known (or when they could not be read). */
-  const [affected, setAffected] = useState<readonly GlobalBinding[] | null>(null);
+  const [affected, setAffected] = useState<readonly AffectedBinding[] | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<IpcError | null>(null);
 
   useEffect(() => {
     let current = true;
-    void window.api.bindings.getGlobal().then((result) => {
+    void affectedBindings(connection.id).then((result) => {
       if (!current) return;
       setLoaded(true);
-      if (result.ok) {
-        setAffected(result.data.filter((binding) => binding.connectionId === connection.id));
-      } else {
-        setError(result.error);
-      }
+      if (result.ok) setAffected(result.data);
+      else setError(result.error);
     });
     return () => {
       current = false;
@@ -68,10 +74,11 @@ export function RemoveConnectionDialog({
           <p id={`${ids}-affected`}>{t('models.remove.body')}</p>
           <ul className="binding-list" aria-labelledby={`${ids}-affected`}>
             {affected.map((binding) => (
-              <li key={binding.slot}>
+              <li key={`${binding.harness ?? ''}\n${binding.slot}`}>
+                {binding.harness === null ? null : <span>{binding.harness}</span>}
                 <code>{binding.slot}</code>
                 <span className="binding-list-model">
-                  {binding.connectionId}/{binding.model}
+                  {connection.id}/{binding.model}
                 </span>
               </li>
             ))}
@@ -97,4 +104,26 @@ export function RemoveConnectionDialog({
       </div>
     </Modal>
   );
+}
+
+/** The Default Models, then each installed Harness's Model Overrides, that use a Connection. */
+async function affectedBindings(
+  connectionId: string,
+): Promise<IpcResult<readonly AffectedBinding[]>> {
+  const uses = (binding: { connectionId: string }) => binding.connectionId === connectionId;
+  const [global, installs] = await Promise.all([
+    window.api.bindings.getGlobal(),
+    window.api.installs.list(),
+  ]);
+  if (!global.ok) return global;
+  if (!installs.ok) return installs;
+  const found: AffectedBinding[] = global.data
+    .filter(uses)
+    .map((binding) => ({ ...binding, harness: null }));
+  for (const install of installs.data) {
+    const overrides = await window.api.bindings.getForHarness(install.harnessId);
+    if (!overrides.ok) return overrides;
+    found.push(...overrides.data.filter(uses).map((row) => ({ ...row, harness: install.name })));
+  }
+  return { ok: true, data: found };
 }

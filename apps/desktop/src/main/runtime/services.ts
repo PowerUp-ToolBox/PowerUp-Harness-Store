@@ -32,7 +32,7 @@ export interface Services {
   };
   /** The User's Connections, with their encrypted secrets, and local Provider detection. */
   readonly connections: ConnectionsService;
-  /** The User's Slot Bindings: the Default Models. */
+  /** The User's Slot Bindings: the Default Models and the Model Overrides. */
   readonly bindings: BindingsService;
   /** The Publisher's sign-in to the Store. */
   readonly auth: Pick<StoreAuth, 'signIn' | 'signOut' | 'whoami'>;

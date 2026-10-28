@@ -1,5 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { BindingTarget, ConnectionTestFailure, GlobalBinding } from '../../shared/ipc.js';
+import type {
+  BindingTarget,
+  ConnectionTestFailure,
+  GlobalBinding,
+  ModelOverride,
+} from '../../shared/ipc.js';
 import { transaction } from './database.js';
 
 /** One row of the `connections` table, camel-cased. */
@@ -46,7 +51,14 @@ export interface ConnectionStore {
   globalBindings(): GlobalBinding[];
   /** Sets the global Slot Binding of `slot` to `target`, or deletes it when `target` is null. */
   setGlobalBinding(slot: string, target: BindingTarget | null): void;
+  /** The Model Overrides of one Harness (scope `harness:<id>`), by Slot name. */
+  overrides(harnessId: string): ModelOverride[];
+  /** Sets the Model Override of `slot` for one Harness, or deletes it when `target` is null. */
+  setOverride(harnessId: string, slot: string, target: BindingTarget | null): void;
 }
+
+/** The `slot_bindings` scope of one Harness's Model Overrides. */
+const harnessScope = (harnessId: string) => `harness:${harnessId}`;
 
 interface SqlConnectionRow {
   id: string;
@@ -123,6 +135,15 @@ export function createConnectionStore(
   const deleteGlobalBinding = db.prepare(
     "DELETE FROM slot_bindings WHERE scope = 'global' AND slot = ?",
   );
+  const selectScope = db.prepare(
+    'SELECT slot, provider_id, model FROM slot_bindings WHERE scope = ? ORDER BY slot',
+  );
+  const upsertBinding = db.prepare(
+    `INSERT INTO slot_bindings (scope, slot, provider_id, model) VALUES (?, ?, ?, ?)
+     ON CONFLICT (scope, slot) DO UPDATE SET
+       provider_id = excluded.provider_id, model = excluded.model`,
+  );
+  const deleteBinding = db.prepare('DELETE FROM slot_bindings WHERE scope = ? AND slot = ?');
 
   return {
     all: () => (selectAll.all() as unknown as SqlConnectionRow[]).map(fromSql),
@@ -169,6 +190,18 @@ export function createConnectionStore(
     setGlobalBinding(slot, target) {
       if (target === null) deleteGlobalBinding.run(slot);
       else upsertGlobalBinding.run(slot, target.connectionId, target.model);
+    },
+    overrides: (harnessId) =>
+      (
+        selectScope.all(harnessScope(harnessId)) as {
+          slot: string;
+          provider_id: string;
+          model: string;
+        }[]
+      ).map((row) => ({ slot: row.slot, connectionId: row.provider_id, model: row.model })),
+    setOverride(harnessId, slot, target) {
+      if (target === null) deleteBinding.run(harnessScope(harnessId), slot);
+      else upsertBinding.run(harnessScope(harnessId), slot, target.connectionId, target.model);
     },
   };
 }

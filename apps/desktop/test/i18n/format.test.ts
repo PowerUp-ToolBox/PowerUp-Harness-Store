@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatBytes, formatDate, formatNumber } from '../../src/shared/i18n/format.js';
+import { formatBytes, formatDate, formatList, formatNumber } from '../../src/shared/i18n/format.js';
 
 describe('formatBytes', () => {
   it.each([
@@ -31,5 +31,13 @@ describe('formatNumber and formatDate', () => {
     const utc = { dateStyle: 'medium', timeZone: 'UTC' } as const;
     expect(formatDate('en', date, utc)).toBe('Oct 27, 2026');
     expect(formatDate('zh-CN', date, utc)).toBe('2026年10月27日');
+  });
+});
+
+describe('formatList', () => {
+  it('joins a list as the locale does', () => {
+    expect(formatList('en', ['tool calling'])).toBe('tool calling');
+    expect(formatList('en', ['tool calling', 'vision'])).toBe('tool calling and vision');
+    expect(formatList('zh-CN', ['工具调用', '视觉'])).toBe('工具调用和视觉');
   });
 });

@@ -1,6 +1,11 @@
 import { isAbsolute } from 'node:path';
 import type { AuthState, IpcMethodName, IpcOutput, IpcResult } from '../../shared/ipc.js';
-import { parseGlobalBindingChange } from './bindings.js';
+import {
+  isHarnessIdInput,
+  parseGlobalBindingChange,
+  parseModelOverrideChange,
+  parseModelOverrideClear,
+} from './bindings.js';
 import {
   parseConnectionDraft,
   parseConnectionTestDraft,
@@ -107,6 +112,26 @@ export function createHandlers(services: Services): IpcHandlers {
       const change = parseGlobalBindingChange(input);
       if (change === null) return fail('invalid_input', { method: 'bindings.setGlobal' });
       return services.bindings.setGlobal(change);
+    },
+    'bindings.getForHarness': (input) => {
+      if (!isHarnessIdInput(input)) {
+        return fail('invalid_input', { method: 'bindings.getForHarness' });
+      }
+      return ok(services.bindings.getForHarness(input));
+    },
+    'bindings.setOverride': (input) => {
+      const change = parseModelOverrideChange(input);
+      if (change === null) return fail('invalid_input', { method: 'bindings.setOverride' });
+      return services.bindings.setOverride(change);
+    },
+    'bindings.clearOverride': (input) => {
+      const clear = parseModelOverrideClear(input);
+      if (clear === null) return fail('invalid_input', { method: 'bindings.clearOverride' });
+      return services.bindings.clearOverride(clear);
+    },
+    'bindings.resolveAll': (input) => {
+      if (!isHarnessIdInput(input)) return fail('invalid_input', { method: 'bindings.resolveAll' });
+      return services.bindings.resolveAll(input);
     },
     'auth.signIn': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'auth.signIn' });

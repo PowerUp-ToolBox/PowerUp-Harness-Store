@@ -161,6 +161,32 @@ export interface IpcMethods {
    */
   'bindings.setGlobal': { input: GlobalBindingChange; output: readonly GlobalBinding[] };
   /**
+   * The Model Overrides of one Harness, by Slot name: every stored row, including one for a Slot
+   * its Manifest no longer declares (resolution ignores those). Empty for a Harness without any,
+   * installed or not.
+   */
+  'bindings.getForHarness': { input: string; output: readonly ModelOverride[] };
+  /**
+   * Overrides one Model Slot of an installed Harness, and returns its Model Overrides as they now
+   * are. The Model Gateway uses it from that Harness's next request on, ahead of its Recommended
+   * Models and the Default Models. Checked as `bindings.setGlobal` checks a Default Model
+   * (`provider_not_connected`, `invalid_input`); a Slot the Harness's Manifest does not declare is
+   * `invalid_input`, a Harness that is not installed `not_installed`. The model is not checked
+   * against the Slot's Model Requirements: a warning is advisory, never a refusal.
+   */
+  'bindings.setOverride': { input: ModelOverrideChange; output: readonly ModelOverride[] };
+  /**
+   * Removes the Model Override of one Slot of a Harness (nothing to remove is fine), and returns
+   * its Model Overrides as they now are: resolution goes back to the automatic order.
+   */
+  'bindings.clearOverride': { input: ModelOverrideClear; output: readonly ModelOverride[] };
+  /**
+   * What every Model Slot of an installed Harness resolves to right now, and why, exactly as the
+   * Model Gateway would resolve it: `default` first, then the Manifest's order. `not_installed`
+   * for a Harness that is not installed.
+   */
+  'bindings.resolveAll': { input: string; output: readonly ResolvedSlot[] };
+  /**
    * Signs the Publisher in to the Store with GitHub: opens the User's browser (never a window of
    * the app) on the Store's GitHub sign-in, and resolves once the browser comes back through
    * `harnessstore://auth-callback` and the session is stored encrypted. Fails with
@@ -462,6 +488,8 @@ export interface ModelInfo {
   readonly tools?: boolean;
   /** Whether it accepts images. */
   readonly vision?: boolean;
+  /** Whether it has a JSON output mode. No source states it yet: the catalogue leaves it out. */
+  readonly json?: boolean;
 }
 
 /** A saved Connection as the renderer sees it; its secret never leaves the Runtime. */
@@ -523,6 +551,50 @@ export interface BindingTarget {
   readonly model: string;
 }
 
+/** A Model Override: the model one Harness uses for one of its Model Slots. */
+export interface ModelOverride {
+  readonly slot: string;
+  readonly connectionId: string;
+  /** The model name at that Connection's Provider, without the Provider prefix. */
+  readonly model: string;
+}
+
+/** A Model Override to set. */
+export interface ModelOverrideChange {
+  /** The installed Harness. */
+  readonly harnessId: string;
+  /** One of its Manifest's Model Slots. */
+  readonly slot: string;
+  readonly target: BindingTarget;
+}
+
+/** A Model Override to remove. */
+export interface ModelOverrideClear {
+  readonly harnessId: string;
+  readonly slot: string;
+}
+
+/**
+ * Why a Model Slot resolved to its model: the Harness's Model Override, one of its Recommended
+ * Models, the Default Model of the same Slot name, or the Default Model of `default` (which the
+ * `default` Slot's own Default Model also reports). The UI shows the last two as "Default".
+ */
+export type BindingSource = 'override' | 'recommended' | 'default_same_name' | 'default';
+
+/** The model a Model Slot resolves to, and why. */
+export interface ResolvedBinding {
+  readonly connectionId: string;
+  /** The model name at that Connection's Provider, without the Provider prefix. */
+  readonly model: string;
+  readonly source: BindingSource;
+}
+
+/** One Model Slot of a Harness and what it resolves to; null when nothing can fill it. */
+export interface ResolvedSlot {
+  readonly slot: string;
+  readonly binding: ResolvedBinding | null;
+}
+
 /** A change to the Default Model of one Slot name. */
 export interface GlobalBindingChange {
   /** The Model Slot name, as a Manifest declares it (`default`, `fast`, …). */
@@ -557,6 +629,10 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'connections.remove': true,
   'bindings.getGlobal': true,
   'bindings.setGlobal': true,
+  'bindings.getForHarness': true,
+  'bindings.setOverride': true,
+  'bindings.clearOverride': true,
+  'bindings.resolveAll': true,
   'auth.signIn': true,
   'auth.signOut': true,
   'auth.whoami': true,

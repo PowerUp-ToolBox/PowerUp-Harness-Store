@@ -30,6 +30,8 @@
   --color-info-text: #1e3f8f;
   --color-error-bg: #fbe9e7;
   --color-error-border: #f0c2bc;
+  --color-override-bg: #eee6f7;
+  --color-override-text: #5a3a86;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -54,6 +56,8 @@
     --color-info-text: #c3d3f8;
     --color-error-bg: #3b1f1d;
     --color-error-border: #6a2f2a;
+    --color-override-bg: #2f2640;
+    --color-override-text: #d4c2ef;
   }
 }
 
@@ -1233,6 +1237,151 @@ input[aria-invalid='true'] {
   border: 1px solid var(--color-warning-border);
   background: transparent;
   color: var(--color-warning-text);
+}
+
+/* A Model Requirements check under a binding control: a known failure, or unknown capabilities. */
+.requirement-warning {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  font-size: 12px;
+}
+
+.requirement-unknown {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+/* Per-Harness Overrides (P0-03.5): one expandable card per installed Harness. */
+.override-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.override-card {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  scroll-margin-top: 16px;
+}
+
+.override-card-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  border: none;
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.override-card-icon {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.override-card-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.override-card-count,
+.override-card-caret {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.override-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.override-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.override-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.override-row-slot {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.override-row-description {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.override-row-resolved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.override-row-model {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.override-row-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.override-row-controls .model-picker {
+  flex: 1 1 300px;
+}
+
+/* Why a Slot resolved as it did. */
+.status-chip[data-status='override'] {
+  background: var(--color-override-bg);
+  color: var(--color-override-text);
+}
+
+.status-chip[data-status='recommended'] {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.status-chip[data-status='default'],
+.status-chip[data-status='default_same_name'] {
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+}
+
+.status-chip[data-status='unbound'] {
+  background: var(--color-error-bg);
+  color: var(--color-error);
 }
 
 /* A passed Connection test, next to its Test button. */
