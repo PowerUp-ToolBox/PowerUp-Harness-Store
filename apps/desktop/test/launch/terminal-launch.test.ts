@@ -47,6 +47,8 @@ let runtime: Runtime;
 let windows: ReturnType<typeof createFakeWindows>;
 let states: LaunchStatus[];
 let spawned: PtySpawnOptions[];
+/** When set, the pty spawn throws it, after the Runtime issued the launch's token. */
+let spawnFailure: Error | undefined;
 let opened: string[];
 
 beforeEach(async () => {
@@ -56,6 +58,7 @@ beforeEach(async () => {
   fake = await startFakeProvider({ aliases: { 'model-a': 'fake/echo' } });
   states = [];
   spawned = [];
+  spawnFailure = undefined;
   opened = [];
   runtime = await start();
   // A model for the `default` Slot: a launch without one is refused.
@@ -94,6 +97,7 @@ function start(): Promise<Runtime> {
     harnessWindows: windows,
     spawnPty: (options) => {
       spawned.push(options);
+      if (spawnFailure !== undefined) throw spawnFailure;
       return spawnNodePty(options);
     },
     harnessEnvironment: () => ({
@@ -241,6 +245,23 @@ async function context(token: string) {
     headers: { authorization: `Bearer ${token}` },
   });
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+}
+
+/** The Gateway Token the Runtime handed the launch it spawned `index`-th. */
+function spawnedToken(index = 0): string {
+  const token = spawned[index]?.env.HARNESS_GATEWAY_TOKEN;
+  if (token === undefined || token === '') throw new Error('No Gateway Token was spawned');
+  return token;
+}
+
+/** Expects `token` rejected by the Gateway and its launch's row ended with the token revoked. */
+async function expectRevoked(token: string, launchId: string) {
+  const rejected = await context(token);
+  expect(rejected.status).toBe(401);
+  expect(rejected.body).toMatchObject({ error: { code: 'invalid_token' } });
+  const row = launchRows().find((each) => each.launch_id === launchId);
+  expect(row?.ended_at).toEqual(expect.any(String));
+  expect(row?.token_revoked_at).toBe(row?.ended_at);
 }
 
 /** Whether the process `pid` still runs (or has exited and is not reaped yet). */
@@ -509,6 +530,8 @@ describe('a Harness that exits on its own', () => {
     const launchId = await launch('acme/fixture-crash');
     const failed = await waitForState(launchId, 'failed');
     expect(failed).toMatchObject({ reason: 'exit_nonzero', exitCode: 3 });
+    // A failed launch's token is revoked as a stopped one's is.
+    await expectRevoked(spawnedToken(), launchId);
 
     // The window learns it, and stays open, readable, with the exit code.
     expect(windows.sent).toContainEqual({
@@ -603,6 +626,21 @@ describe('refused and failed launches', () => {
       reason: 'spawn_error',
     });
     expect(launchRows()).toEqual([]);
+  });
+
+  it('a pty that cannot start fails spawn_error after the token, and revokes it', async () => {
+    await install('fixture-term');
+    spawnFailure = new Error('posix_spawnp failed.');
+    const launchId = await launch('acme/fixture-term');
+    await expect(waitForState(launchId, 'failed')).resolves.toMatchObject({
+      reason: 'spawn_error',
+    });
+    expect(spawned).toHaveLength(1);
+    expect(launchRows()).toMatchObject([{ launch_id: launchId, exit_code: null }]);
+    await expectRevoked(spawnedToken(), launchId);
+    expect(readFileSync(logPath('fixture-term', launchId), 'utf8')).toMatch(
+      /\[runtime\] Could not start .+: posix_spawnp failed\.\n/,
+    );
   });
 
   it('refuses to install over a Harness while it runs', async () => {
