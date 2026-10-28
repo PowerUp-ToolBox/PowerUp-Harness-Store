@@ -17,12 +17,12 @@ Supporting screens: **Models** (Connections and Slot Bindings), **Publish** (Pub
 
 From top to bottom, mirroring an App Store product page:
 
-1. **Header**: icon, name, Publisher (link), one-line summary, primary action button (see §3), download count, platform badges greyed out for platforms not supported.
+1. **Header**: icon, name, Publisher (link), one-line summary, latest version, primary action button (see §3), download count, platform badges (the declared platforms with this machine's highlighted; when it is not declared, a greyed badge for it marked not supported), tags.
 2. **Screenshots** strip (up to five), horizontally scrollable.
 3. **Trust block** (always above the fold on desktop widths): Declared Permissions on the red/yellow/green scale, runtime kind (Node or binary), UI Kind, Workspace requirement, and the standing sentence "Harness Store does not sandbox Harnesses. Installing means trusting this Publisher."
 4. **Models block**: each Model Slot with its description, Model Requirements and Recommended Models; a live note per Slot showing what it would bind to on this machine ("Will use: Ollama · qwen3:8b" or "No Connection can fill this Slot").
-5. **Description** (Publisher's README).
-6. **Version history** with changelogs, newest first; the currently installed version marked.
+5. **Description** (Publisher's README, rendered as sanitised Markdown; links open in the system browser).
+6. **Version history** of published versions with dates and changelogs, newest first; the currently installed version marked, and "Permissions changed" on a version whose Declared Permissions differ from the previous one's.
 7. **Footer**: license, homepage, source link, Report link.
 
 ## 3. Primary action button states
@@ -35,7 +35,8 @@ The button in the header and on Library cards is one control with mutually exclu
 | Unsupported | Not available for your platform / 不支持当前平台 (disabled) | Platform not in Manifest |
 | Downloading | Downloading 42% / 下载中 42% (progress, cancel) | Transfer in progress |
 | Needs consent | Review and install / 查看权限并安装 | Download complete, consent pending |
-| Installed | Launch / 启动 | Installed, no newer version |
+| Removed | Removed from Store / 已从商店移除 (disabled) | Not installed, and the Store no longer offers it (detail page only) |
+| Installed | Launch / 启动 (secondary on the detail page: Uninstall) | Installed, no newer version, or the Store no longer offers it (note "No longer available in the Store", no Update) |
 | Update available | Update / 更新 (secondary: Launch) | Newer published version |
 | Needs re-consent | Review update / 查看更新 | Newer version changed permissions or Entry |
 | Starting | Starting… / 正在启动… (disabled) | Launch in progress, not ready yet |
@@ -73,5 +74,5 @@ Buttons never change meaning mid-hover; state transitions animate the label, not
 - **Empty** states explain what the screen will hold and offer the one action that fills it (Library empty → "Browse the Store"; Models empty → "Add a Connection"; Usage empty → "Launch a Harness to see usage here").
 - **Loading** uses skeletons for lists and inline spinners for buttons; never a full-screen blocker except during first-run Provider detection (bounded to a few seconds with a skip).
 - **Error** states are inline, keep the User's input, and offer Retry. Network errors in the Store distinguish "offline" from "server error".
-- **Offline**: Library, Models, Usage and Settings work entirely. Store shows the last fetched lists with an offline banner and disables Install. Publish is disabled with an explanation.
+- **Offline**: Library, Models, Usage and Settings work entirely. Store shows an offline panel ("Can't reach the Store") with Retry in place of its pages, beside the offline banner. Publish is disabled with an explanation.
 - Destructive actions (uninstall deletes the Data Directory, Unpublish) always confirm and name what is lost.

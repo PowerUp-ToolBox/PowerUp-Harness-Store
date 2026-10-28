@@ -6,9 +6,9 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 ## Main window shell — owner P0-04
 
-**Purpose.** Frame for all main screens: sidebar navigation, header with search (Store only), offline banner, update badge.
+**Purpose.** Frame for all main screens: sidebar navigation, header, offline banner, update badge.
 
-**Elements.** Sidebar items in order: Library, Store, Models, Publish, Usage, Settings. Header: page title, contextual search. Global toast area bottom-right.
+**Elements.** Sidebar items in order: Library, Store, Models, Publish, Usage, Settings. Header: page title (the Store's search sits in its own filter row, see Store home). Global toast area bottom-right.
 
 **States.** Offline → persistent banner "You're offline. Library and Models still work." / "当前离线。资源库和模型页仍可使用。" Update badge on Library when any installed Harness has an update.
 
@@ -37,11 +37,11 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Everything installed; launch, update, uninstall, open per-Harness settings.
 
-**Elements.** Grid or list of cards: icon, name, Publisher, installed version, primary action button (see design-principles §3), overflow menu (Show in Store, Model Overrides, Show logs, Open data folder, Uninstall). Sort: recently used, name. Filter: Updates available, Running, Local installs. P0-05 builds the cards (ordered recently launched first, then name), Model Overrides, Show logs and Open data folder; P0-10 adds the rest.
+**Elements.** Grid or list of cards: icon, name, Publisher, installed version, primary action button (see design-principles §3), overflow menu (View in Store, Model Overrides, Show logs, Open data folder, Uninstall). The Publisher links to their Publisher page. Sort: recently used, name. Filter: Updates available, Running, Local installs. P0-05 builds the cards (ordered recently launched first, then name), Model Overrides, Show logs and Open data folder; P0-09 adds View in Store (the Harness's detail page) and the Publisher link; P0-10 adds the rest.
 
 **States.** Loading skeleton. Empty: illustration, "Nothing installed yet" with "Browse the Store". Card error: "Exited with an error" (or "Did not start in time", "Could not start") with Show logs and Dismiss; the button stays Launch. No error for a cancelled Workspace, an unsupported platform or a missing model. Card note: "No longer available in the Store" for unpublished or taken-down versions. Local install badge: "Local".
 
-**Key copy.** Launch / 启动 · Update / 更新 · Running… / 运行中… · Show window / 显示窗口 · Stopping… / 正在停止… · Uninstall / 卸载 · Local / 本地 · Model Overrides / 槽位覆盖 · Show logs / 查看日志 · Open data folder / 打开数据目录 · Dismiss / 忽略 · "Exited with an error" / "异常退出" · "Did not start in time" / "启动超时" · "Could not start" / "无法启动" · "Nothing installed yet" / "还没有安装任何 Harness" · "Browse the Store" / "去商店看看" · "Close the Harness to update" / "请先关闭该 Harness 再更新".
+**Key copy.** Launch / 启动 · Update / 更新 · Running… / 运行中… · Show window / 显示窗口 · Stopping… / 正在停止… · Uninstall / 卸载 · Local / 本地 · Model Overrides / 槽位覆盖 · View in Store / 在商店中查看 · Show logs / 查看日志 · Open data folder / 打开数据目录 · Dismiss / 忽略 · "Exited with an error" / "异常退出" · "Did not start in time" / "启动超时" · "Could not start" / "无法启动" · "Nothing installed yet" / "还没有安装任何 Harness" · "Browse the Store" / "去商店看看" · "Close the Harness to update" / "请先关闭该 Harness 再更新".
 
 ---
 
@@ -49,23 +49,23 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Discovery entry point.
 
-**Elements.** Featured row (administrator-curated), tag chips, sections "New" and "Most downloaded", each card: icon, name, Publisher, summary, platform badges, download count.
+**Elements.** Filter row at the top of the Store (search box, tag chips, "My platform only"; see Store search). Featured row (administrator-curated, by rank), then "New" and "Most downloaded" side by side, 12 each. Each card: icon, name (opens the detail page), Publisher login (opens the Publisher page), summary, tags, platform badges (this machine's highlighted; a greyed "not supported" badge for it when the Harness does not declare it), download count. Home rows are never filtered by platform.
 
-**States.** Loading skeletons per section. Offline: last fetched content with banner, Install disabled. Server error: inline message with Retry. Empty section hidden.
+**States.** Loading skeletons per section. Offline: the Store's offline panel "Can't reach the Store" with Retry replaces the Store's pages; Library and Models keep working. Server error: inline message with Retry. Empty section hidden; an empty Store says so.
 
-**Key copy.** Featured / 精选 · New / 最新 · Most downloaded / 下载最多 · "Couldn't load the Store" / "无法加载商店" · Retry / 重试.
+**Key copy.** Featured / 精选 · New / 最新 · Most downloaded / 下载最多 · "Couldn't load the Store" / "无法加载商店" · Retry / 重试 · "Can't reach the Store" / "无法连接商店" · "There are no Harnesses in the Store yet." / "商店里还没有 Harness。".
 
 ---
 
 ## Store search and results — owner P0-09
 
-**Purpose.** Find a Harness by name, summary, tag or Publisher.
+**Purpose.** Find a Harness by name, summary, tag or README text. A query with a Chinese (CJK) character also finds part of a name or summary; a Chinese tag is picked as its translated chip.
 
-**Elements.** Search input in header with debounce, tag filter chips, platform filter (defaults to "My platform"), result list reusing Store cards, result count.
+**Elements.** The filter row at the top of the Store page (no search in the shell header, no separate route): search input (typed text searched 300 ms after the last keystroke, Enter at once, nothing while an input method is still composing), the ten curated tag chips (translated; selected tags must all match, a click searches at once), "My platform only" (on by default, a change searches at once). Text or a tag replaces the home rows with the results, in the Store's ranking, as Store cards; the platform toggle alone keeps the home rows. "Load more" appends the next page of 24 while the last page was full. No result count. The text, tags, toggle and loaded results are kept in memory while the app runs, so Back from a detail or Publisher page, or the sidebar's Store item, restores them.
 
-**States.** Typing (skeleton after debounce). No results: "No Harnesses match" with suggestion to clear filters. Error: inline Retry.
+**States.** Searching (skeletons). No results: "No Harnesses match" with Clear filters (clears text and tags, keeps the platform toggle). Error: inline "Couldn't load the Store" with Retry; a failed Load more keeps the results already shown.
 
-**Key copy.** Search Harnesses / 搜索 Harness · My platform only / 仅显示支持当前平台 · "No Harnesses match" / "没有匹配的 Harness" · Clear filters / 清除筛选.
+**Key copy.** Search Harnesses / 搜索 Harness · My platform only / 仅显示支持当前平台 · "No Harnesses match" / "没有匹配的 Harness" · "Try another word or clear the filters." / "换个关键词，或清除筛选。" · Clear filters / 清除筛选 · Load more / 加载更多.
 
 ---
 
@@ -73,15 +73,16 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Decide whether to install; see trust information before committing.
 
-**Elements.** Header (icon, name, Publisher link, summary, primary button, downloads, platform badges), screenshots, trust block (Declared Permissions scale, runtime kind, UI Kind, Workspace, standing no-sandbox sentence), Models block (per Slot: description, requirements, Recommended Models, "Will use" note), README, version history with changelogs, footer (license, homepage, source, Report).
+**Elements.** Back (to the previous page, else Store home). Header (icon, name, Publisher avatar and name linking to the Publisher page, summary, latest version, primary button, downloads, platform badges, tags), screenshots (up to five), trust block (Declared Permissions scale, runtime kind, UI Kind, Workspace, standing no-sandbox sentence), Models block (per Slot: description, requirements, Recommended Models, "Will use" note from the User's Connections), README (sanitised Markdown; links open in the browser), version history (published versions, newest first, with date, changelog, "Permissions changed" where the Declared Permissions differ from the previous version, the installed version marked), footer (license, homepage, source, Report). The Publish preview (P0-08) is the same component without screenshots. Opened from Store cards and from a Library card's View in Store.
 
-**States.** Loading. Unsupported platform (disabled button, badges greyed). Installed (Launch, installed version highlighted in history). Update available. Running. "Set up a model first" when no Connection can fill `default`. Taken down: 404 page "This Harness is no longer available".
+**States.** Loading. Unsupported platform (disabled "Not available for your platform", this machine's badge greyed). Installed (Launch, secondary Uninstall). Update available (Update, secondary Launch). Starting, Running, Stopping and "Set up a model first" as on a Library card. Installed but no longer in the Store: the page from the installed Manifest with Launch and the note "No longer available in the Store", no Update. Not installed and taken down, Unpublished-only or unknown: "This Harness is no longer available" with the disabled "Removed from Store". Server error: inline Retry.
 
 **Key copy.**
 - "Harness Store does not sandbox Harnesses. Installing means trusting this Publisher." / "Harness Store 不会隔离 Harness 进程。安装即代表你信任该发布者。"
 - Permissions / 声明权限 · Runs shell commands / 会执行命令行命令 · Reads and writes files in the folder you choose / 读写你选择的工作目录 · Accesses your home folder / 访问你的用户主目录 · Connects to the internet (any site) / 访问任意网站 · Connects to: … / 访问以下网站：…
 - Will use: … / 将使用：… · "No Connection can fill this Slot" / "没有模型连接可以填充此槽位"
-- Version history / 版本历史 · Source / 源码 · Report / 举报
+- Version history / 版本历史 · Installed / 已安装 · Permissions changed / 权限有变化 · Homepage / 主页 · Source / 源码 · Report / 举报 · Back / 返回
+- Removed from Store / 已从商店移除 · "No longer available in the Store" / "已不在商店中提供" · "This Harness is no longer available" / "该 Harness 已不可用" · "It was unpublished or taken down. Installed copies keep working." / "它已被撤下或下架。已安装的副本仍可使用。"
 
 ---
 
@@ -89,11 +90,11 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** All Harnesses by one Publisher, with identity from GitHub.
 
-**Elements.** Avatar, GitHub login, link to GitHub profile, join date, list of Harnesses (Store cards), total downloads.
+**Elements.** Back. Avatar (a monogram without one), display name (else the GitHub login), @login linking to the GitHub profile, join date, bio (plain text), total downloads (of the Harnesses listed), list of Harnesses (Store cards, most downloaded first). Every Publisher name in the app links here: Store cards, the detail page header, Library cards.
 
-**States.** Loading. Empty (Publisher with everything unpublished): "No published Harnesses". Error: Retry.
+**States.** Loading (skeleton cards). Empty (Publisher with everything unpublished or taken down): "No published Harnesses". No profile with that login: "No such Publisher". Error: inline Retry.
 
-**Key copy.** Harnesses by … / … 发布的 Harness · Total downloads / 总下载量.
+**Key copy.** Harnesses by … / … 发布的 Harness · Joined … / …加入 · Total downloads / 总下载量 · "No published Harnesses" / "没有已发布的 Harness" · "No such Publisher" / "没有这个发布者".
 
 ---
 

@@ -18,8 +18,8 @@ Each flow lists steps, decision points and error branches. Screen details are in
 
 ## F2. Browse and install
 
-1. Store home: Featured row, tag chips, "New" and "Most downloaded" lists. Search box in the header.
-2. Open a detail page (from any list or search results).
+1. Store home: a filter row (search box, tag chips, "My platform only") over the Featured row and the "New" and "Most downloaded" lists. Text or a tag shows ranked results in place of the lists; Back from a detail page keeps the search.
+2. Open a detail page (from any list, search results, a Publisher page, or a Library card's View in Store).
 3. Primary button state depends on platform and install status (design-principles §3). Click Install.
 4. Download with progress on the button; cancel allowed. Integrity check after download.
    - Integrity mismatch → error "The downloaded package did not match the Store's checksum", Retry.
@@ -30,7 +30,7 @@ Each flow lists steps, decision points and error branches. Screen details are in
    - Buttons: Install (primary, enabled after a short read delay of one second), Cancel.
 6. Installed: button becomes Launch; Library gains a card; toast "Installed Hello Web".
 
-**Error branches:** offline at step 3 → Install disabled with banner. Server error → inline error, Retry. Unsupported platform → disabled button with the platform badges greyed.
+**Error branches:** offline → the Store's offline panel ("Can't reach the Store", Retry) replaces its pages; Library and Models keep working. Server error → inline error, Retry. Unsupported platform → disabled "Not available for your platform" with this machine's platform badge greyed. Not in the Store any more → "This Harness is no longer available" with the disabled "Removed from Store" (an installed copy keeps its page, with Launch).
 
 ## F3. Launch
 
