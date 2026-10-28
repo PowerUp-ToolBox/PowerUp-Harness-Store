@@ -58,7 +58,7 @@ Steps (P0-07.3):
 7. Upload the package to `harness-packages/<publisher>/<slug>/<version>.zip`, then the icon and screenshots to `harness-assets` (paths in data-model.md), never overwriting: an object already there means another publish of this version (`409 version_not_greater`; it is not deleted).
 8. `publish_version()` (SQL, service role only) inserts the Harness on its first version and the Harness Version in one transaction, under a per-Publisher lock, re-checking the rate limit and that no version was published since step 4 (else `409 version_not_greater`; a retry gives the up-to-date answer). Triggers refresh the Harness's listing fields.
 
-On any failure after the first upload, the objects this request uploaded (and only those) are deleted.
+On any failure after the first upload, the objects this request uploaded (and only those) are deleted, except when the outcome of step 8 is unknown: when the call to the database fails without an answer from PostgREST (a lost connection, a gateway timeout), its transaction may still commit, so the objects stay and the answer is `500 internal_error`.
 
 `201` → `{ harness_id, version, url }`, where `url` is the in-app Store route `/store/h/<publisher>/<slug>` (there is no web Store page in P0).
 
@@ -72,7 +72,7 @@ When validatePackage refuses the package, the status comes from all its problems
 
 A `409 version_not_greater` from a publish that lost a race (step 7 or 8) has no `problems`. Other errors: `400 invalid_request` (not multipart, or no `package` part), `401`, `405`, `411`, `413` from the Content-Length or for an icon over 5 MB (no `problems`), `429`, `500`.
 
-Known limitations (P0): the package is held in memory (an Edge Function has no disk to stream to), so publishing near the 500 MB limit needs more memory and a larger request than a hosted Edge Function allows; the gateway (and the local edge runtime) passes the Content-Length refusal on only once the whole body has arrived. A package object left by a crash between upload and commit blocks that version number until it is removed by hand.
+Known limitations (P0): the package is held in memory (an Edge Function has no disk to stream to), so publishing near the 500 MB limit needs more memory and a larger request than a hosted Edge Function allows; the gateway (and the local edge runtime) passes the Content-Length refusal on only once the whole body has arrived. A package object left by a crash between upload and commit, or kept because the database call's outcome was unknown, blocks that version number until it is removed by hand.
 
 ### `POST /functions/v1/download` (anon)
 Body `{ harness_id, version?, platform, app_version }`. Resolves the version (latest published if omitted), checks the platform is supported, inserts a `download_events` row, increments counters, returns `{ url (signed, 60 s), sha256, size, manifest }`.

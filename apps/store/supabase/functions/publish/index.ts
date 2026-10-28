@@ -10,7 +10,8 @@
  * before anything is uploaded -> upload the package, then the assets, never overwriting (an
  * object already there is another publish of this version) -> publish_version writes the rows in
  * one transaction under a lock. On any failure after the first upload, the objects this request
- * created are deleted.
+ * created are deleted, unless publish_version's outcome is unknown (the call failed without an
+ * answer from PostgREST): that transaction may still commit, so its objects stay.
  *
  * Known limitation: the package is held in memory (an Edge Function has no disk to stream to),
  * so the 500 MB package limit is above what a hosted Edge Function's memory and request size
@@ -35,6 +36,7 @@ import {
   publishVersionError,
   RATE_LIMITED,
   rejection,
+  rolledBack,
   storeRoute,
   VERSION_NOT_GREATER,
 } from '../_shared/publish.ts';
@@ -209,7 +211,7 @@ async function publish(request: Request): Promise<Response> {
   const readme = read.contents[assets.length] ?? new Uint8Array();
 
   const created: { bucket: string; path: string }[] = [];
-  let committed = false;
+  let keepObjects = false;
   try {
     const zipPath = packagePath(manifest.id, manifest.version);
     const stored = await admin.storage
@@ -249,30 +251,27 @@ async function publish(request: Request): Promise<Response> {
     if (inserted.error !== null) {
       const known = publishVersionError(inserted.error.code, inserted.error.message);
       if (known !== undefined) return fail(known);
-      // A lost connection can fail the call after the transaction committed: then the objects
-      // belong to a published version and must stay.
-      committed = await versionExists(manifest.id, manifest.version);
+      // Without an answer from PostgREST (a lost connection, the gateway timing out), the
+      // transaction may still be waiting for the Publisher's lock and commit later; no read now
+      // can tell. Its objects stay: deleting them could leave a published version without its
+      // package. A leftover blocks this version number until removed by hand, as after a crash.
+      if (!rolledBack(inserted.error)) {
+        keepObjects = true;
+        console.error(
+          `publish_version outcome unknown; kept ${created.map((object) => `${object.bucket}/${object.path}`).join(', ')}`,
+        );
+      }
       return serverError('publish_version', inserted.error);
     }
-    committed = true;
+    keepObjects = true;
     return jsonResponse(201, {
       harness_id: manifest.id,
       version: manifest.version,
       url: storeRoute(manifest.id),
     });
   } finally {
-    if (!committed) await removeCreated(created);
+    if (!keepObjects) await removeCreated(created);
   }
-}
-
-/** Whether the Harness Version exists; true when that cannot be told (keep its objects). */
-async function versionExists(harnessId: string, version: string): Promise<boolean> {
-  const { data, error } = await admin
-    .from('harness_versions')
-    .select('id, harnesses!inner(harness_id)')
-    .eq('harnesses.harness_id', harnessId)
-    .eq('version', version);
-  return error !== null || data.length > 0;
 }
 
 /** Deletes the objects this request uploaded; never one it did not create. */

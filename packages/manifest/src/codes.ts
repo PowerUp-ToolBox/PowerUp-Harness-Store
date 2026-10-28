@@ -18,7 +18,10 @@ export const PROBLEM_CODES = Object.freeze({
   schema_type: 'schema_type',
   /** A value (or an object key) is not one of the allowed values. Also used for `const`. */
   schema_enum: 'schema_enum',
-  /** A string (or an object key) does not have the required format. */
+  /**
+   * A string (or an object key) does not have the required format. Also a string holding U+0000
+   * or a lone UTF-16 surrogate, which the Store cannot keep (`schema_pattern.unstorable_character`).
+   */
   schema_pattern: 'schema_pattern',
   /** A required key is missing. */
   schema_required: 'schema_required',
@@ -127,6 +130,8 @@ export const MESSAGES_EN = Object.freeze({
     'Recommended Models must be "provider/model" ids such as "anthropic/claude-sonnet-4-5", with a lower-case Provider id. Found {actual}.',
   'schema_pattern.domain':
     'Must be a lower-case domain name such as "api.github.com", optionally starting with "*.". Found {actual}.',
+  'schema_pattern.unstorable_character':
+    'The text contains {character}, which the Store cannot keep. Manifest text may not contain a NUL character (U+0000) or one half of a UTF-16 surrogate pair without the other (a JSON escape such as "\\ud800" on its own). Remove it.',
   schema_required: 'Required key "{key}" is missing.',
   'schema_required.network_access':
     'Declare network access with "domains" (a list, which may be empty) or with "any": true.',

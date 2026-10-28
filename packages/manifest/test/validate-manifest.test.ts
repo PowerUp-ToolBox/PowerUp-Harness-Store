@@ -463,6 +463,62 @@ describe('numbers beyond the range of a double', () => {
   });
 });
 
+describe('text the Store cannot keep', () => {
+  // JSON text may encode both, but Postgres jsonb refuses U+0000 and a lone surrogate has no
+  // UTF-8 form, so the Store could not record such a Manifest.
+  const cases: [path: string, character: string, text: string][] = [
+    ['name', 'U+0000', minimalText.replace('"Hello Web"', '"Hello\\u0000Web"')],
+    ['summary', 'U+D800', minimalText.replace(/"summary": "/, '"summary": "\\ud800')],
+    ['name', 'U+DC00', minimalText.replace('"Hello Web"', '"Hello\\udc00"')],
+    ['changelog', 'U+DBFF', minimalText.replace('"tags": [', '"changelog": "x\\udbff", "tags": [')],
+    [
+      'models.slots.default.description',
+      'U+0000',
+      JSON.stringify({
+        ...minimalManifest(),
+        models: { slots: { default: { description: 'Chat\u0000model' } } },
+      }),
+    ],
+  ];
+
+  it.each(cases)(
+    'reports %s with %s as schema_pattern, as text and as bytes',
+    (path, character, text) => {
+      expect(text).not.toBe(minimalText);
+      for (const input of [text, new TextEncoder().encode(text)]) {
+        const problems = problemsOf(validateManifest(input));
+        expect(findings(problems)).toEqual([`schema_pattern@${path}`]);
+        expect(problems[0]).toMatchObject({
+          messageKey: 'schema_pattern.unstorable_character',
+          params: { character },
+        });
+      }
+    },
+  );
+
+  it('reports each such string once, in document order, and still runs the other rules', () => {
+    const text = minimalText
+      .replace('"Hello Web"', '"\\u0000"')
+      .replace(/"summary": "/, '"summary": "\\udfff');
+    const problems = problemsOf(validateManifest(text));
+    expect(findings(problems)).toEqual([
+      'schema_min_length@name',
+      'schema_pattern@name',
+      'schema_pattern@summary',
+    ]);
+  });
+
+  it('accepts surrogate pairs, written as characters or as escapes', () => {
+    const text = minimalText.replace('"Hello Web"', '"Hello \\ud83d\\ude00 \u{1F600}"');
+    expect(validateManifest(text).ok).toBe(true);
+  });
+
+  it('ignores them under top-level x- keys, which are never validated or returned', () => {
+    const text = minimalText.replace('"tags": [', '"x-note": "\\u0000\\ud800", "tags": [');
+    expect(validateManifest(text)).toMatchObject({ ok: true, warnings: [] });
+  });
+});
+
 describe('the returned Manifest', () => {
   it('is a copy: later changes to the input do not reach it', () => {
     const input = minimalManifest();

@@ -320,6 +320,30 @@ describe('a rejected Harness Package', () => {
     },
   );
 
+  it('is refused with 422 invalid_manifest for text the Store cannot keep, leaving no object', async () => {
+    // JSON text may encode U+0000 and a lone surrogate, but jsonb refuses the one and a lone
+    // surrogate has no UTF-8 form: validatePackage reports both, here as on the desktop.
+    const cases: [string, Record<string, unknown>, string][] = [
+      ['nul-name', { name: 'Hello\u0000Web' }, 'name'],
+      ['surrogate-changelog', { changelog: 'x\ud800y' }, 'changelog'],
+    ];
+    for (const [slug, manifest, path] of cases) {
+      const zip = packageOf(slug, '1.0.0', 'valid-minimal-node', { manifest });
+      const reply = await publish(publisher.token, zip);
+      expect(reply.status, slug).toBe(422);
+      expect(reply.body.error, slug).toEqual({
+        code: 'invalid_manifest',
+        message: expect.any(String) as string,
+        problems: await localProblems(zip, { publisher: login, publishedVersions: [] }),
+      });
+      expect(reply.body.error.problems, slug).toMatchObject([
+        { path, code: 'schema_pattern', messageKey: 'schema_pattern.unstorable_character' },
+      ]);
+      expect(await harnessRow(`${login}/${slug}`), slug).toBeUndefined();
+      expect(await objectsOf(`${login}/${slug}`), slug).toEqual([]);
+    }
+  });
+
   it('is refused with 422 for a zip-slip entry or a symbolic link, leaving no object', async () => {
     const cases: [string, PackageOptions['extra'], string][] = [
       [
@@ -704,6 +728,8 @@ describe('rate limit', () => {
       const reply = await publish(busy.token, zipOf(index));
       expect(reply.status, `publish ${String(index + 1)}`).toBe(201);
     }
+    const before = await objectsOf(busyLogin);
+    expect(before).toHaveLength(40); // A package and an icon per version.
     const reply = await publish(busy.token, zipOf(20));
     expect(reply.status).toBe(429);
     expect(reply.body.error.code).toBe('rate_limited');
@@ -713,8 +739,7 @@ describe('rate limit', () => {
       `harness_versions?select=id,harnesses!inner(publisher_id)&harnesses.publisher_id=eq.${busy.id}`,
     );
     expect(rows).toHaveLength(20);
-    expect(await listObjects('harness-packages', `${busyLogin}/burst-2`)).not.toContain(
-      `${busyLogin}/burst-2/1.0.20.zip`,
-    );
+    // Neither the 21st package nor its icon was left in either bucket.
+    expect(await objectsOf(busyLogin)).toEqual(before);
   });
 });

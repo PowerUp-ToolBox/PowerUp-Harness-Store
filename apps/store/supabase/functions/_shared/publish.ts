@@ -1,8 +1,8 @@
 /**
  * The request rules of the `publish` Edge Function that need no network: which Auth errors mean a
  * bad token, the Content-Length check, which Harness a package is for, the HTTP answer to
- * validatePackage's problems and to publish_version's errors, and the in-app route of a published
- * Harness. The validation itself is
+ * validatePackage's problems and to publish_version's errors, whether a failed publish_version
+ * call surely wrote nothing, and the in-app route of a published Harness. The validation itself is
  * validatePackage from @harness-store/manifest, never repeated here. Plain TypeScript with no
  * imports (see storage-paths.ts).
  */
@@ -174,6 +174,18 @@ export function publishVersionError(sqlState: string, message: string): ApiError
   return [PUBLISHER_MISMATCH, VERSION_NOT_GREATER, HARNESS_TAKEN_DOWN, RATE_LIMITED].find(
     (error) => error.code === message && `PT${String(error.status)}` === sqlState,
   );
+}
+
+/**
+ * Whether a failed call of publish_version surely wrote nothing: PostgREST answered it with a code,
+ * a SQLSTATE from the rolled-back transaction or its own `PGRST…` code for a request it never ran.
+ * An error without one (supabase-js reports a lost connection with an empty code, and the gateway
+ * giving up on PostgREST with a body that has none) leaves the outcome unknown: the transaction can
+ * still be waiting for the Publisher's lock, or running, and commit afterwards. `error` is the
+ * supabase-js PostgrestError, read structurally.
+ */
+export function rolledBack(error: { code?: string | null }): boolean {
+  return typeof error.code === 'string' && error.code !== '';
 }
 
 /** Where the desktop app shows a Harness: its Store tab's detail route (P0-08 opens it). */

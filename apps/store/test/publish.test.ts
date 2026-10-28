@@ -1,11 +1,15 @@
 /**
  * Ticket P0-07.3, the request rules of the `publish` Edge Function that need no stack: the
  * Content-Length check, which Harness's versions are looked up, the status for validatePackage's
- * problems, publish_version's errors and the HTTP helpers. The function itself is tested over
- * HTTP in test-store/publish.test.ts.
+ * problems, publish_version's errors (and whether a failed call surely wrote nothing) and the HTTP
+ * helpers. The function itself is tested over HTTP in test-store/publish.test.ts.
  */
+import { createServer } from 'node:http';
+import type { ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { PACKAGE_LIMITS } from '@harness-store/manifest';
 import type { Problem } from '@harness-store/manifest';
+import { createClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import { bearerToken, errorResponse } from '../supabase/functions/_shared/http.ts';
 import {
@@ -16,6 +20,7 @@ import {
   ownHarnessId,
   publishVersionError,
   rejection,
+  rolledBack,
   storeRoute,
 } from '../supabase/functions/_shared/publish.ts';
 
@@ -158,6 +163,67 @@ describe('publishVersionError', () => {
     expect(publishVersionError('PT409', 'rate_limited')).toBeUndefined();
     expect(publishVersionError('23514', 'check_violation')).toBeUndefined();
     expect(publishVersionError('', 'TypeError: fetch failed')).toBeUndefined();
+  });
+});
+
+describe('rolledBack', () => {
+  /**
+   * The error supabase-js (the version the function imports) gives for publish_version when
+   * PostgREST, or what stands in for it, answers a request with `reply`.
+   */
+  async function rpcError(
+    reply: (response: ServerResponse) => void,
+  ): Promise<{ code?: string | null }> {
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        reply(response);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const client = createClient(`http://127.0.0.1:${String(port)}`, 'service-role-key', {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { error } = await client.rpc('publish_version', { known_versions: 0 });
+      if (error === null) throw new Error('The call did not fail');
+      return error;
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+
+  const json = (status: number, body: unknown) => (response: ServerResponse) => {
+    response.writeHead(status, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(body));
+  };
+
+  it('is true when PostgREST answered with a code: the transaction rolled back or never ran', async () => {
+    for (const reply of [
+      json(409, { code: 'PT409', message: 'version_not_greater', details: null, hint: null }),
+      json(400, { code: '22P05', message: 'unsupported Unicode escape sequence' }),
+      json(400, { code: 'PGRST102', message: 'Empty or invalid json' }),
+      json(503, { code: 'PGRST003', message: 'Timed out acquiring connection from pool.' }),
+    ]) {
+      expect(rolledBack(await rpcError(reply))).toBe(true);
+    }
+  });
+
+  it('is false when the call failed without an answer from PostgREST: the outcome is unknown', async () => {
+    for (const reply of [
+      // The connection is lost before any answer.
+      (response: ServerResponse) => response.socket?.destroy(),
+      // The gateway gave up waiting for PostgREST (Kong's own answers).
+      json(504, { message: 'The upstream server is timing out' }),
+      (response: ServerResponse) => {
+        response.writeHead(502, { 'content-type': 'text/html' });
+        response.end('<html><body>Bad Gateway</body></html>');
+      },
+    ]) {
+      expect(rolledBack(await rpcError(reply))).toBe(false);
+    }
   });
 });
 

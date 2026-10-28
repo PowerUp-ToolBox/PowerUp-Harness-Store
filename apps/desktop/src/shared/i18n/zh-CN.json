@@ -241,6 +241,7 @@
   "manifest.schema_pattern.slotName": "模型槽位名称 \"{key}\" 必须以小写字母开头，且只包含小写字母、数字和连字符（最多 32 个字符）。",
   "manifest.schema_pattern.modelId": "推荐模型必须是 \"provider/model\" 形式的 ID，如 \"anthropic/claude-sonnet-4-5\"，其中 Provider ID 为小写。实际为 {actual}。",
   "manifest.schema_pattern.domain": "必须是小写域名，如 \"api.github.com\"，可以以 \"*.\" 开头。实际为 {actual}。",
+  "manifest.schema_pattern.unstorable_character": "该文本包含商店无法保存的字符 {character}。Manifest 中的文本不能包含 NUL 字符（U+0000），也不能包含缺少另一半的 UTF-16 代理对（例如单独出现的 JSON 转义 \"\\ud800\"）。请删除它。",
   "manifest.schema_required": "缺少必需的键 \"{key}\"。",
   "manifest.schema_required.network_access": "请用 \"domains\"（一个列表，可以为空）或 \"any\": true 声明网络访问。",
   "manifest.schema_min_length": "长度至少为 {limit} 个字符；实际为 {actual}。",

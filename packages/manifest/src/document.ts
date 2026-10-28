@@ -38,7 +38,9 @@ export const MAX_MANIFEST_VALUES = 2000;
  * dropped here, never validated. A document with more than {@link MAX_MANIFEST_VALUES} values
  * in the rest is rejected as a whole, like text that is not JSON. A number too large for a double (`1e400` parses as `Infinity`) is a
  * `schema_type` problem at its path, returned with the document: it has no JSON form, so a
- * Manifest holding one could not be stored or read back.
+ * Manifest holding one could not be stored or read back. So is a string holding U+0000 or a lone
+ * UTF-16 surrogate (`schema_pattern.unstorable_character`): JSON text may encode both (`"\u0000"`,
+ * `"\ud800"`), but the Store's database cannot keep either, and a lone surrogate has no UTF-8 form.
  */
 export function loadDocument(input: unknown): LoadedDocument {
   if (typeof input === 'string') return parseJson(input.replace(/^\uFEFF/, ''));
@@ -76,13 +78,10 @@ function parseJson(text: string): LoadedDocument {
     return invalid('schema_invalid_json', { detail: errorMessage(error) });
   }
   const document = withoutPrivateKeys(parsed);
-  const nonFinite = prepareTree(document);
-  if (nonFinite === undefined) {
+  const problems = prepareTree(document);
+  if (problems === undefined) {
     return invalid('schema_invalid_json.too_large', { limit: MAX_MANIFEST_VALUES });
   }
-  const problems = nonFinite.map(({ path, value }) =>
-    createProblem('schema_type.non_finite', path, { actual: describeActual(value) }),
-  );
   return { ok: true, document, problems };
 }
 
@@ -128,22 +127,34 @@ function pathOf(visit: Visit): PathSegment[] {
  *
  * - counts its values, returning undefined as soon as there are more than
  *   {@link MAX_MANIFEST_VALUES};
- * - collects numbers that are not finite. `JSON.parse` turns a numeral beyond the double range
+ * - reports numbers that are not finite. `JSON.parse` turns a numeral beyond the double range
  *   into `Infinity` or `-Infinity`, which the JSON Schema library accepts as an integer and
  *   `JSON.stringify` writes as `null`;
+ * - reports strings holding U+0000 or a lone UTF-16 surrogate, which the Store cannot keep
+ *   (Postgres `jsonb` refuses `\u0000`, and a lone surrogate has no UTF-8 form). Keys are left
+ *   to the schema: every key a Manifest may hold has a pattern or a fixed set of names;
  * - replaces lone UTF-16 surrogates in object keys with U+FFFD, in place. JSON text may encode
  *   them (`"\ud800"`), but no valid key contains one, and the JSON Schema library cannot build a
  *   JSON pointer for such a key. The renamed key is still reported, as an unknown or malformed
  *   key.
  */
-function prepareTree(document: unknown): { path: PathSegment[]; value: number }[] | undefined {
-  const nonFinite: { path: PathSegment[]; value: number }[] = [];
+function prepareTree(document: unknown): Problem[] | undefined {
+  const problems: Problem[] = [];
   let values = 1;
   const pending: Visit[] = [{ value: document, key: undefined, parent: undefined }];
   for (let visit = pending.pop(); visit !== undefined; visit = pending.pop()) {
     const node = visit.value;
     if (typeof node === 'number' && !Number.isFinite(node)) {
-      nonFinite.push({ path: pathOf(visit), value: node });
+      problems.push(
+        createProblem('schema_type.non_finite', pathOf(visit), { actual: describeActual(node) }),
+      );
+    } else if (typeof node === 'string') {
+      const character = unstorableCharacter(node);
+      if (character !== undefined) {
+        problems.push(
+          createProblem('schema_pattern.unstorable_character', pathOf(visit), { character }),
+        );
+      }
     } else if (Array.isArray(node)) {
       values += node.length;
       if (values > MAX_MANIFEST_VALUES) return undefined;
@@ -175,5 +186,29 @@ function prepareTree(document: unknown): { path: PathSegment[]; value: number }[
       for (const child of children.reverse()) pending.push(child);
     }
   }
-  return nonFinite;
+  return problems;
+}
+
+/**
+ * The first character of `text` the Store cannot keep, as `U+XXXX`: U+0000, or a UTF-16
+ * surrogate without its pair. Undefined when there is none.
+ */
+function unstorableCharacter(text: string): string | undefined {
+  if (!text.includes('\u0000') && text.isWellFormed()) return undefined;
+  for (let index = 0; index < text.length; index++) {
+    const unit = text.charCodeAt(index);
+    if (unit === 0) return 'U+0000';
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) index++;
+      else return codePointName(unit);
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return codePointName(unit);
+    }
+  }
+  return undefined;
+}
+
+function codePointName(unit: number): string {
+  return `U+${unit.toString(16).toUpperCase().padStart(4, '0')}`;
 }
