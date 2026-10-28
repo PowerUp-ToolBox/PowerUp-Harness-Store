@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fail } from '../../src/main/runtime/ipc-result.js';
-import { translatorFor } from '../../src/shared/i18n/translate.js';
+import { createTranslator, translatorFor } from '../../src/shared/i18n/translate.js';
 import type { IpcError } from '../../src/shared/ipc.js';
 
 const SLOT_UNBOUND: IpcError = {
@@ -39,8 +39,32 @@ describe('IPC errors', () => {
     expect(translatorFor('en').errorText(SLOT_UNBOUND)).toBe(SLOT_UNBOUND.message);
   });
 
-  it('falls back to en when the locale cannot format the message', () => {
-    // No `slot` param: neither catalog can render it, so the English message is shown.
+  it('falls back to the en catalog when the zh-CN catalog lacks the key', () => {
+    const translator = createTranslator('zh-CN', {
+      en: { 'error.slot_unbound': 'Slot "{slot}" is unbound (en catalog).' },
+      'zh-CN': {},
+    });
+    expect(translator.errorText(SLOT_UNBOUND)).toBe('Slot "default" is unbound (en catalog).');
+    expect(translator.t('error.slot_unbound', { slot: 'default' })).toBe(
+      'Slot "default" is unbound (en catalog).',
+    );
+  });
+
+  it('falls back to the en catalog when the zh-CN message cannot be formatted', () => {
+    const translator = createTranslator('zh-CN', {
+      en: {
+        'error.slot_unbound': 'Slot "{slot}" is unbound (en catalog).',
+        'section.library': 'Library',
+      },
+      // Broken ICU, and a template that needs a param the caller does not pass.
+      'zh-CN': { 'error.slot_unbound': '模型槽位“{slot”', 'section.library': '{missing}' },
+    });
+    expect(translator.errorText(SLOT_UNBOUND)).toBe('Slot "default" is unbound (en catalog).');
+    expect(translator.t('section.library')).toBe('Library');
+  });
+
+  it('falls back to the English message when no catalog can format it', () => {
+    // No `slot` param: neither catalog can render it, so the error's own message is shown.
     const withoutParams = { messageKey: SLOT_UNBOUND.messageKey, message: SLOT_UNBOUND.message };
     expect(translatorFor('zh-CN').errorText(withoutParams)).toBe(SLOT_UNBOUND.message);
   });

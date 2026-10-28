@@ -1,5 +1,5 @@
 import { IntlMessageFormat } from 'intl-messageformat';
-import { CATALOGS, type MessageKey } from './catalogs.js';
+import { CATALOGS, type Catalog, type MessageKey } from './catalogs.js';
 import type { Locale } from './locale.js';
 
 export type MessageParams = Readonly<Record<string, string | number | Date>>;
@@ -42,7 +42,14 @@ export function translatorFor(locale: Locale): Translator {
   return translator;
 }
 
-function createTranslator(locale: Locale): Translator {
+/**
+ * A translator for `locale` over `catalogs`, with the fallbacks `translatorFor` describes. The app
+ * uses `translatorFor`; tests pass their own catalogs to exercise each fallback.
+ */
+export function createTranslator(
+  locale: Locale,
+  catalogs: Readonly<Record<Locale, Catalog>> = CATALOGS,
+): Translator {
   const formats = new Map<string, IntlMessageFormat | null>();
 
   const formatIn = (
@@ -53,7 +60,7 @@ function createTranslator(locale: Locale): Translator {
     const cacheKey = `${catalogLocale}\u0000${key}`;
     let format = formats.get(cacheKey);
     if (format === undefined) {
-      const catalog = CATALOGS[catalogLocale];
+      const catalog = catalogs[catalogLocale];
       const template = Object.hasOwn(catalog, key) ? catalog[key] : undefined;
       format = template === undefined ? null : compile(template, locale);
       formats.set(cacheKey, format);
