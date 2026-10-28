@@ -50,11 +50,12 @@ Each flow lists steps, decision points and error branches. Screen details are in
 
 ## F4. Update
 
-1. On app start and periodically, the Runtime checks the Store for newer published versions. Library cards and a badge on the Library nav item show available updates.
-2. Click Update.
-   - No change in Declared Permissions or Entry → download, verify, replace, done. Toast with the version and a link to the changelog.
-   - Added permission, changed Entry or changed runtime kind → re-consent prompt listing exactly what changed (diff style: "New: runs shell commands"), the changelog, and buttons Update, Not now.
-3. A Harness that is running cannot be updated; the button explains "Close the Harness to update".
+1. On app start (after 10 s) and every 6 hours, the Runtime checks the Store for newer published versions of Store installs (never Local ones); offline, the check is skipped. A Library card (and the detail page) offers Update for a greater version that runs on this platform, and a badge on the Library nav item counts the updates.
+2. Click Update (the version offered is the one installed).
+   - No added permission, same Entry and runtime kind → download with progress and Cancel on the button, verify, replace, done, with no dialog. Toast "Updated {name} to {version}. See the changelog in Version history."
+   - Added permission, changed Entry or changed runtime kind → the button reads "Review update"; the re-consent prompt opens before the download, listing what the update adds (diff style: "New: runs shell commands"), the changelog, the trust block with the no-sandbox sentence, and buttons Update, Not now. Update then downloads, verifies and replaces as above.
+   - Download or integrity error → inline error under the button; the old version stays installed and launchable. Update retries.
+3. A Harness that is running cannot be updated; "Close the Harness to update" shows under the button.
 4. An installed version that was Unpublished or taken down remains launchable; the card shows a note "No longer available in the Store" and Update is hidden.
 
 ## F5. Publish
@@ -100,7 +101,7 @@ The screen keeps its folder, validation and tab when the User visits another scr
 
 ## F9. Uninstall
 
-1. From the Library card menu or the detail page secondary menu.
+1. From the Library card menu or the detail page's secondary Uninstall.
 2. Confirmation names the Harness and states "This deletes its data directory (size shown). Files in your own folders are not touched."
-3. If running → "Close the Harness first".
-4. Done: card removed; toast with Undo unavailable (deletion is immediate) so the confirmation is explicit.
+3. If running → "Close the Harness first" with only Close.
+4. Done: install folder, Data Directory and the Harness's Model Overrides deleted; launch logs and Usage Records kept. Card removed; toast "Uninstalled {name}" without Undo (deletion is immediate), so the confirmation is explicit.
