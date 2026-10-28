@@ -18,7 +18,10 @@ import { DEFAULT_TIMEOUT_MS } from './upstream-fetch.js';
 
 /** The events a {@link Gateway} emits. */
 export interface GatewayEvents {
-  /** A Usage Record, after `onUsage` received it. */
+  /**
+   * A Usage Record, once `onUsage` has settled (resolved or rejected). Emitted after the
+   * request's response ended, off its critical path.
+   */
   usage: [record: UsageRecord];
   /**
    * A request named a declared Model Slot that has no Slot Binding and got 409 `slot_unbound`;
@@ -68,6 +71,8 @@ class ModelGateway extends EventEmitter<GatewayEvents> implements Gateway {
   readonly #inFlight = new InFlightRegistry();
   readonly #app;
   readonly #logger: Logger;
+  /** Kept whole, so `onUsage` is called on the host's object. */
+  readonly #options: GatewayOptions;
   /** Launches with tokens from {@link issueToken}, so {@link close} can revoke them all. */
   readonly #launches = new Set<string>();
   #state: GatewayState = 'new';
@@ -79,6 +84,7 @@ class ModelGateway extends EventEmitter<GatewayEvents> implements Gateway {
     super();
     this.#verifier = options.tokenVerifier ?? createInMemoryTokenVerifier();
     this.#logger = safeLogger(options.logger);
+    this.#options = options;
     this.#app = createApp({
       options,
       verifier: this.#verifier,
@@ -97,7 +103,31 @@ class ModelGateway extends EventEmitter<GatewayEvents> implements Gateway {
           this.#logger.error('slot_unbound listener failed', { error });
         }
       },
+      recordUsage: (record) => {
+        this.#deliverUsage(record);
+      },
     });
+  }
+
+  /**
+   * Hands a Usage Record to `onUsage`, then to `usage` listeners, on a later turn of the event loop
+   * so that neither delays the response. A rejecting `onUsage` or a throwing listener is logged.
+   */
+  #deliverUsage(record: UsageRecord): void {
+    setTimeout(() => {
+      void (async () => {
+        try {
+          await this.#options.onUsage(record);
+        } catch (error) {
+          this.#logger.error('onUsage failed', { harnessId: record.harnessId, error });
+        }
+        try {
+          this.emit('usage', record);
+        } catch (error) {
+          this.#logger.error('usage listener failed', { harnessId: record.harnessId, error });
+        }
+      })();
+    }, 0);
   }
 
   async listen(host = '127.0.0.1', port = 0): Promise<ListenResult> {

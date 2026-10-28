@@ -172,7 +172,14 @@ Model listing: for each Connection the app calls the Provider's model list where
 
 ## 7. Usage Records
 
-On every completed or failed-after-first-byte request the Gateway writes one Usage Record: `{ timestamp, harnessId, harnessVersion, slot, provider, model, promptTokens, completionTokens, cachedPromptTokens?, durationMs, status }`. Token counts come from the Provider response; when absent they are recorded as `null`, never estimated. Records stay local (SQLite) and feed the Usage page. No cost calculation in P0.
+For every request it attempted an upstream call for, whatever the outcome, the Gateway writes exactly one Usage Record: `{ timestamp, harnessId, harnessVersion, slot, provider, model, promptTokens, completionTokens, cachedPromptTokens?, durationMs, status }`. A request answered before any upstream call (`invalid_token`, `invalid_request`, `unknown_slot`, `slot_unbound`, `provider_not_connected`) writes none: no Provider was contacted.
+
+- `status`: `ok`; `provider_error` for any upstream failure, before or after the first byte (a refused connection included); `timeout` for the first-byte or idle timeout; `aborted` when the Harness disconnected, its Gateway Token was revoked or the Gateway closed.
+- `timestamp`: when the request arrived, ISO-8601 UTC. `durationMs`: from then until the response ended (for a stream, its last event), whole milliseconds, at least 1.
+- `slot`: the Model Slot asked for, `null` for an explicit `provider/model` id. `provider`: the full Provider id (`openai-compatible:vllm`). `model`: the model name without the Provider prefix.
+- Token counts come only from the Provider response: each one it did not report is `null`, never estimated. `cachedPromptTokens` is present only when the Provider reported cached prompt tokens.
+
+Records are handed to the host after the response ended, off the request's critical path. They stay local (SQLite) and feed the Usage page. No cost calculation in P0.
 
 ## 8. Conformance fixtures
 

@@ -17,8 +17,10 @@ import { listSlotModels } from './slots.js';
 import type { SlotUnboundEvent } from './slots.js';
 import { hashToken } from './tokens.js';
 import type { GatewayTokenClaims, TokenVerifier } from './tokens.js';
-import type { GatewayOptions } from './types.js';
+import type { GatewayOptions, UsageRecord } from './types.js';
 import type { UpstreamTimeouts } from './upstream-fetch.js';
+import { receivedNow } from './usage.js';
+import type { ReceivedAt } from './usage.js';
 
 /** The body of `GET /v1/harness/context`. */
 export interface HarnessContext {
@@ -36,6 +38,8 @@ export interface AppDeps {
   readonly timeouts: UpstreamTimeouts;
   /** Told about every request that fails with `slot_unbound`. */
   readonly onSlotUnbound: (event: SlotUnboundEvent) => void;
+  /** Takes each Usage Record once its response has ended; must not throw. */
+  readonly recordUsage: (record: UsageRecord) => void;
   readonly verifier: TokenVerifier;
   readonly inFlight: InFlightRegistry;
   readonly logger: Logger;
@@ -46,6 +50,8 @@ export interface AppDeps {
 interface AppEnv {
   Bindings: HttpBindings;
   Variables: {
+    /** When the request arrived, before any check. */
+    receivedAt: ReceivedAt;
     claims: GatewayTokenClaims;
     /** Aborted when the request's token is revoked or the Gateway closes. */
     signal: AbortSignal;
@@ -87,12 +93,13 @@ function notSupported(c: Ctx): Response {
 }
 
 export function createApp(deps: AppDeps): Hono<AppEnv> {
-  const { options, timeouts, verifier, inFlight, logger, onSlotUnbound } = deps;
+  const { options, timeouts, verifier, inFlight, logger, onSlotUnbound, recordUsage } = deps;
   const app = new Hono<AppEnv>();
 
   // Request metadata at debug level; never bodies or headers. A stream is logged once it ends.
   app.use(async (c, next) => {
-    const started = performance.now();
+    const receivedAt = receivedNow();
+    c.set('receivedAt', receivedAt);
     const trace: CompletionTrace = {};
     c.set('trace', trace);
     await next();
@@ -106,7 +113,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
         status,
         ...(trace.providerStatus !== undefined && { providerStatus: trace.providerStatus }),
         ...(trace.streamError !== undefined && { streamError: trace.streamError }),
-        durationMs: Math.round(performance.now() - started),
+        durationMs: Math.round(performance.now() - receivedAt.mark),
       });
     };
     if (trace.streamEnded === undefined) write();
@@ -176,10 +183,12 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
 
   app.post('/v1/chat/completions', (c) =>
     handleChatCompletion(
-      { options, timeouts, logger, onSlotUnbound },
+      { options, timeouts, logger, onSlotUnbound, recordUsage },
       {
         request: c.req.raw,
         harnessId: c.var.claims.harnessId,
+        harnessVersion: c.var.claims.harnessVersion,
+        receivedAt: c.var.receivedAt,
         signal: c.var.signal,
         trace: c.var.trace,
         detach: c.var.detach,

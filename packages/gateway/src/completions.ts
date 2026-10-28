@@ -3,7 +3,8 @@
  * §5 fixes. Validate the body (400), resolve `model` to a Provider, a model and a Connection
  * (404, 403), call the Provider through its adapter, then answer in the OpenAI shape (a
  * `chat.completion`, or server-sent `chat.completion.chunk`s for `stream: true`), or with the
- * mapped Provider error (502, 504). Nothing before the upstream call reaches a Provider.
+ * mapped Provider error (502, 504). Nothing before the upstream call reaches a Provider; from the
+ * upstream call on, the request ends with exactly one Usage Record.
  */
 import { generateText, streamText, wrapLanguageModel } from 'ai';
 import type { LanguageModel, TextStreamPart, ToolSet } from 'ai';
@@ -26,9 +27,11 @@ import {
 } from './provider-errors.js';
 import { resolveSlot } from './slots.js';
 import type { SlotUnboundEvent } from './slots.js';
-import type { ConnectionSecret, GatewayOptions } from './types.js';
+import type { ConnectionSecret, GatewayOptions, UsageRecord } from './types.js';
 import { createUpstreamFetch } from './upstream-fetch.js';
 import type { UpstreamFetch, UpstreamTimeouts } from './upstream-fetch.js';
+import { UsageMeter } from './usage.js';
+import type { ReceivedAt, UsageStatus } from './usage.js';
 
 /** A model the request resolved to, with the Connection to reach it. */
 export interface ResolvedModel {
@@ -47,6 +50,8 @@ export interface CompletionDeps {
   readonly timeouts: UpstreamTimeouts;
   /** For a Gateway bug that surfaces after a stream started, when no 500 can be sent anymore. */
   readonly logger: Logger;
+  /** Takes the Usage Record of each request once its response has ended; must not throw. */
+  readonly recordUsage: (record: UsageRecord) => void;
 }
 
 /** What one request saw, for the request log: metadata only. */
@@ -66,8 +71,11 @@ export interface CompletionTrace {
 
 export interface CompletionRequest {
   readonly request: Request;
-  /** The calling Harness, from its Gateway Token. */
+  /** The calling Harness and its Harness Version, from its Gateway Token. */
   readonly harnessId: string;
+  readonly harnessVersion: string;
+  /** When the request arrived: the Usage Record's `timestamp` and the start of its `durationMs`. */
+  readonly receivedAt: ReceivedAt;
   /** Aborted when the Gateway Token is revoked or the Gateway closes. */
   readonly signal: AbortSignal;
   readonly trace: CompletionTrace;
@@ -147,19 +155,25 @@ function withProviderToolChoice(
   });
 }
 
-/** What every upstream call starts from: the adapter's model behind the Gateway's timed fetch. */
+/**
+ * What every upstream call starts from: the adapter's model behind the Gateway's timed fetch, and
+ * the meter that writes the request's Usage Record.
+ */
 interface UpstreamCall {
   /** The resolved `provider/model`, as responses report it. */
   model: string;
   languageModel: Exclude<LanguageModel, string>;
   upstream: UpstreamFetch;
   callSettings: Omit<CallSettings, 'toolChoice' | 'strictJsonSchema'>;
+  /** Finished on every path out of the call; records only if the adapter called the Provider. */
+  meter: UsageMeter;
 }
 
 function prepareCall(
   resolved: ResolvedModel,
   settings: CallSettings,
   deps: CompletionDeps,
+  call: CompletionRequest,
 ): UpstreamCall {
   const upstream = createUpstreamFetch(deps.timeouts);
   const { toolChoice, strictJsonSchema, ...callSettings } = settings;
@@ -173,11 +187,24 @@ function prepareCall(
     }),
     toolChoice,
   );
+  const meter = new UsageMeter(
+    {
+      receivedAt: call.receivedAt,
+      harnessId: call.harnessId,
+      harnessVersion: call.harnessVersion,
+      slot: resolved.slot,
+      provider: resolved.providerId,
+      model: resolved.model,
+    },
+    () => upstream.attempted,
+    deps.recordUsage,
+  );
   return {
     model: `${resolved.providerId}/${resolved.model}`,
     languageModel,
     upstream,
     callSettings,
+    meter,
   };
 }
 
@@ -209,14 +236,30 @@ function upstreamFailure(
   return isProviderFailure(error) ? providerError(error, resolved.connection.apiKey) : undefined;
 }
 
+/**
+ * The Usage Record status of a call that failed with `failure`: a Gateway bug (`undefined`) and an
+ * adapter rejection count as `provider_error` too, since the Provider may have been reached.
+ */
+function failureStatus(failure: CallFailure | undefined): UsageStatus {
+  return failure?.code === 'provider_timeout' ? 'timeout' : 'provider_error';
+}
+
 /** Calls the Provider and answers the `chat.completion`, or the mapped Provider error. */
 async function complete(
   resolved: ResolvedModel,
   settings: CallSettings,
   deps: CompletionDeps,
-  { request, signal, trace }: CompletionRequest,
+  call: CompletionRequest,
 ): Promise<Response> {
-  const { model, languageModel, upstream, callSettings } = prepareCall(resolved, settings, deps);
+  const { request, signal, trace } = call;
+  const { model, languageModel, upstream, callSettings, meter } = prepareCall(
+    resolved,
+    settings,
+    deps,
+    call,
+  );
+  // Anything that escapes unforeseen is a failed call.
+  let status: UsageStatus = 'provider_error';
   try {
     const result = await generateText({
       model: languageModel,
@@ -228,6 +271,7 @@ async function complete(
       // Stop the upstream call when the Harness hangs up, too.
       abortSignal: AbortSignal.any([signal, request.signal]),
     });
+    meter.report(result.usage);
     let text = result.text;
     if (settings.output !== undefined) {
       try {
@@ -237,7 +281,7 @@ async function complete(
         // No output (tool calls only): keep the plain text.
       }
     }
-    return Response.json(
+    const response = Response.json(
       toChatCompletion(
         {
           text,
@@ -248,15 +292,21 @@ async function complete(
         model,
       ),
     );
+    status = 'ok';
+    return response;
   } catch (error) {
+    if (signal.aborted || request.signal.aborted) status = 'aborted';
     signal.throwIfAborted();
     // The Harness hung up: nobody reads this response.
     if (request.signal.aborted) return new Response(null, { status: 499 });
     const mapped = upstreamFailure(error, upstream, resolved, deps.timeouts);
+    status = failureStatus(mapped);
     if (mapped === undefined) throw error;
     return errorResponse(mapped.code, mapped.message, mapped.fields);
   } finally {
     if (upstream.status !== undefined) trace.providerStatus = upstream.status;
+    // The body is complete in memory: the response has ended as far as the Gateway's work goes.
+    meter.finish(status);
   }
 }
 
@@ -277,9 +327,15 @@ async function completeStream(
   settings: CallSettings,
   includeUsage: boolean,
   deps: CompletionDeps,
-  { request, signal, trace, detach }: CompletionRequest,
+  call: CompletionRequest,
 ): Promise<Response> {
-  const { model, languageModel, upstream, callSettings } = prepareCall(resolved, settings, deps);
+  const { request, signal, trace, detach } = call;
+  const { model, languageModel, upstream, callSettings, meter } = prepareCall(
+    resolved,
+    settings,
+    deps,
+    call,
+  );
   /** Aborted when the Harness stops reading the stream, or the stream ends in a failure. */
   const stop = new AbortController();
   const result = streamText({
@@ -301,6 +357,10 @@ async function completeStream(
       return { type: 'error', error };
     }
   };
+  /** Keeps the usage the Provider reported, which arrives with the last part. */
+  const observe = (part: StreamPart) => {
+    if (part.type === 'finish') meter.report(part.totalUsage);
+  };
 
   let first: StreamPart | undefined;
   try {
@@ -308,17 +368,34 @@ async function completeStream(
       // A revoked token fails the request with 401 even if the stream is slow to notice.
       first = await unlessAborted(next(), signal);
     } while (first?.type === 'start' || first?.type === 'start-step');
+  } catch (error) {
+    // Only the revocation (or close) can reject here.
+    meter.finish('aborted');
+    throw error;
   } finally {
     if (upstream.status !== undefined) trace.providerStatus = upstream.status;
   }
   if (first === undefined || first.type === 'error' || first.type === 'abort') {
     stop.abort();
+    if (signal.aborted || request.signal.aborted) meter.finish('aborted');
     signal.throwIfAborted();
     if (request.signal.aborted) return new Response(null, { status: 499 });
     const error = first?.type === 'error' ? first.error : new Error('The stream ended unanswered.');
     const mapped = upstreamFailure(error, upstream, resolved, deps.timeouts);
+    meter.finish(failureStatus(mapped));
     if (mapped === undefined) throw error;
     return errorResponse(mapped.code, mapped.message, mapped.fields);
+  }
+
+  const translator = new ChunkTranslator(newCompletionId(), model, includeUsage);
+  let firstChunks;
+  try {
+    observe(first);
+    firstChunks = [translator.start(), ...translator.translate(first)];
+  } catch (error) {
+    stop.abort();
+    meter.finish('provider_error');
+    throw error;
   }
 
   // From here on the response outlives this handler: keep it in flight until the stream ends.
@@ -327,28 +404,39 @@ async function completeStream(
   trace.streamEnded = new Promise((resolve) => {
     streamEnded = resolve;
   });
-  const translator = new ChunkTranslator(newCompletionId(), model, includeUsage);
   const encoder = new TextEncoder();
   let ended = false;
-  const end = (failed: boolean) => {
+  const end = (status: UsageStatus) => {
     if (ended) return;
     ended = true;
-    if (failed) stop.abort();
+    if (status !== 'ok') stop.abort();
     endInFlight();
     streamEnded();
+    meter.finish(status);
   };
-  /** The events that end the stream after a failure; `undefined` when nobody reads them. */
-  const failureEvents = (part: Extract<StreamPart, { type: 'error' | 'abort' }>) => {
+  /**
+   * The events that end the stream after a failure (`undefined` when nobody reads them), and the
+   * request's Usage Record status.
+   */
+  const failure = (
+    part: Extract<StreamPart, { type: 'error' | 'abort' }>,
+  ): { events?: string; status: UsageStatus } => {
     if (signal.aborted) {
       trace.streamError = 'invalid_token';
-      return sseError(errorBody('invalid_token', 'The Gateway Token was revoked.'));
+      return {
+        events: sseError(errorBody('invalid_token', 'The Gateway Token was revoked.')),
+        status: 'aborted',
+      };
     }
-    if (request.signal.aborted || stop.signal.aborted) return undefined;
+    if (request.signal.aborted || stop.signal.aborted) return { status: 'aborted' };
     const error = part.type === 'error' ? part.error : new Error('The stream was aborted.');
     const mapped = upstreamFailure(error, upstream, resolved, deps.timeouts);
     if (mapped !== undefined) {
       trace.streamError = mapped.code;
-      return sseError(errorBody(mapped.code, mapped.message, mapped.fields));
+      return {
+        events: sseError(errorBody(mapped.code, mapped.message, mapped.fields)),
+        status: failureStatus(mapped),
+      };
     }
     trace.streamError = 'internal_error';
     deps.logger.error('internal error', {
@@ -357,10 +445,14 @@ async function completeStream(
       model,
       error,
     });
-    return sseError(errorBody('internal_error', 'The Model Gateway failed to handle the request.'));
+    return {
+      events: sseError(
+        errorBody('internal_error', 'The Model Gateway failed to handle the request.'),
+      ),
+      status: 'provider_error',
+    };
   };
 
-  const firstChunks = [translator.start(), ...translator.translate(first)];
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(encoder.encode(firstChunks.map(sseEvent).join('')));
@@ -373,16 +465,17 @@ async function completeStream(
         if (part === undefined) {
           controller.enqueue(encoder.encode(SSE_DONE));
           controller.close();
-          end(false);
+          end('ok');
           return;
         }
         if (part.type === 'error' || part.type === 'abort') {
-          const events = failureEvents(part);
+          const { events, status } = failure(part);
           if (events !== undefined) controller.enqueue(encoder.encode(events));
           controller.close();
-          end(true);
+          end(status);
           return;
         }
+        observe(part);
         const chunks = translator.translate(part);
         if (chunks.length > 0) {
           controller.enqueue(encoder.encode(chunks.map(sseEvent).join('')));
@@ -391,7 +484,7 @@ async function completeStream(
       }
     },
     cancel() {
-      end(true);
+      end('aborted');
     },
   });
   return new Response(body, { headers: SSE_HEADERS });

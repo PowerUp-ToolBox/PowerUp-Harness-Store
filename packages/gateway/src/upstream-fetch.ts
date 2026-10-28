@@ -18,6 +18,8 @@ export interface UpstreamTimeouts {
 /** One upstream call's `fetch`, and what it saw. */
 export interface UpstreamFetch {
   readonly fetch: typeof globalThis.fetch;
+  /** True once the adapter called `fetch`: from then on the Provider may have been reached. */
+  readonly attempted: boolean;
   /** True once a timeout aborted the upstream request. */
   readonly timedOut: boolean;
   /** The upstream HTTP status, once the response headers arrived. */
@@ -29,6 +31,7 @@ export interface UpstreamFetch {
  * abort signal) still aborts the call.
  */
 export function createUpstreamFetch({ firstByteMs, idleMs }: UpstreamTimeouts): UpstreamFetch {
+  let attempted = false;
   let timedOut = false;
   let status: number | undefined;
 
@@ -36,6 +39,7 @@ export function createUpstreamFetch({ firstByteMs, idleMs }: UpstreamTimeouts): 
     input: Parameters<typeof globalThis.fetch>[0],
     init: RequestInit = {},
   ): Promise<Response> => {
+    attempted = true;
     const controller = new AbortController();
     const outer = init.signal;
     const forward = () => {
@@ -105,6 +109,9 @@ export function createUpstreamFetch({ firstByteMs, idleMs }: UpstreamTimeouts): 
 
   return {
     fetch: timedFetch,
+    get attempted() {
+      return attempted;
+    },
     get timedOut() {
       return timedOut;
     },

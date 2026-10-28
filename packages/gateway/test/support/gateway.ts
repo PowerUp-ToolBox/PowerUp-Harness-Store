@@ -33,7 +33,7 @@ export function baseOptions(overrides: Partial<GatewayOptions> = {}): GatewayOpt
     resolveBinding: unexpected('resolveBinding'),
     getConnection: unexpected('getConnection'),
     getManifest: () => Promise.resolve(manifestWith({ default: {} })),
-    onUsage: unexpected('onUsage'),
+    onUsage: () => Promise.resolve(),
     // Keep expected internal errors out of the test output; tests that care pass their own.
     logger: { debug: () => undefined, error: () => undefined },
     ...overrides,

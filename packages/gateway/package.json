@@ -24,7 +24,8 @@
     "build": "tsc --build tsconfig.build.json",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bench": "node scripts/bench.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.90",

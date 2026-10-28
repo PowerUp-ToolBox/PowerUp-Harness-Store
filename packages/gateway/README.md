@@ -1,6 +1,6 @@
 # @harness-store/gateway
 
-> Status: P0-02.1 (the [Gateway server](#the-gateway-server) with Gateway Token auth and `GET /v1/harness/context`), P0-02.2 (the [fake Provider](#fake-provider-harness-storegatewaytestingfake-provider)), P0-02.3 ([non-streaming chat completions](#post-v1chatcompletions) for explicit `provider/model` ids through the `openai-compatible` adapter), P0-02.4 ([streaming](#streaming), tool calls, image parts and usage), P0-02.5 ([Model Slot resolution](#model-slots-and-get-v1models) and `GET /v1/models`) and P0-02.6 ([every Provider adapter](#providers-and-adapters) and the conformance suite) are in. Usage Records arrive with P0-02.7.
+> Status: P0-02.1 (the [Gateway server](#the-gateway-server) with Gateway Token auth and `GET /v1/harness/context`), P0-02.2 (the [fake Provider](#fake-provider-harness-storegatewaytestingfake-provider)), P0-02.3 ([non-streaming chat completions](#post-v1chatcompletions) for explicit `provider/model` ids through the `openai-compatible` adapter), P0-02.4 ([streaming](#streaming), tool calls, image parts and usage), P0-02.5 ([Model Slot resolution](#model-slots-and-get-v1models) and `GET /v1/models`) P0-02.6 ([every Provider adapter](#providers-and-adapters) and the conformance suite) and P0-02.7 ([Usage Records](#usage-records)) are in.
 
 The **Model Gateway**: the local service, hosted by the **Runtime**, that is the only path from a running **Harness** to any model. It is a loopback HTTP server that speaks the OpenAI Chat Completions protocol, authenticates each request with the Harness's per-launch **Gateway Token**, resolves the requested **Model Slot** to the User's **Slot Binding** (Model Override, then Recommended Models, then Default Model), forwards the call to the chosen **Provider** through a **Connection** the Harness never sees, streams the answer back and writes a **Usage Record**.
 
@@ -17,7 +17,7 @@ const gateway = createGateway({
   getManifest: (harnessId) => installed.manifestOf(harnessId), // Manifest | null
   resolveBinding: ({ harnessId, slot }) => bindings.resolve(harnessId, slot), // Binding | null
   getConnection: (providerId) => connections.decrypt(providerId), // ConnectionSecret | null
-  onUsage: (record) => usage.insert(record),
+  onUsage: (record) => usage.insert(record), // after the response ended; a rejection is logged
   // tokenVerifier: optional, defaults to in-memory per-launch tokens
   // logger: optional, defaults to no debug logs and errors on console.error
   // firstByteTimeoutMs, streamIdleTimeoutMs: optional, default 120 000 each
@@ -38,7 +38,7 @@ await gateway.close();
 - `listen(host = '127.0.0.1', port = 0)` accepts only `127.0.0.1`, `::1` and `localhost` and resolves to `{ port, url }` with `url` = `http://<host>:<port>/v1` (IPv6 in brackets). It rejects when called a second time or after `close()`.
 - `close()` revokes every token, fails every request in flight, destroys open connections and stops listening. It is idempotent.
 - `issueToken(claims)` returns 32 random bytes, base64url. Tokens live until `revokeToken(token)`, `revokeLaunch(launchId)` (every token of that launch) or `close()`. Revoking fails the matching requests in flight with 401 `invalid_token`, or ends their open streams with an `invalid_token` error event and `[DONE]`.
-- The Gateway is an `EventEmitter`. It emits `slot_unbound` with `{ harnessId, slot }` for every request that gets 409 `slot_unbound` (the Runtime's cue for the "needs a model" notification; a throwing listener is logged and does not change the response), and `usage` with each Usage Record once Usage Records land (P0-02.7).
+- The Gateway is an `EventEmitter`. It emits `slot_unbound` with `{ harnessId, slot }` for every request that gets 409 `slot_unbound` (the Runtime's cue for the "needs a model" notification; a throwing listener is logged and does not change the response), and `usage` with each [Usage Record](#usage-records) once `onUsage` has settled.
 - Every request is checked in this order: the `Host` header (`127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, else 403 `invalid_host`), the Gateway Token (else 401 `invalid_token`), then routing (else 404 `not_supported`). No response carries a CORS header.
 - `GET /v1/harness/context` answers `{ harnessId, version, locale, workspace?, slots }` from the token's claims and the Manifest from `getManifest` (called on every request, never cached; `null` gives `slots: {}`).
 - `firstByteTimeoutMs` bounds the wait for a Provider's response headers, `streamIdleTimeoutMs` the gap between two chunks of its response body; either one running out fails the request with 504 `provider_timeout` and aborts the upstream call.
@@ -89,6 +89,22 @@ Types the host implements or receives (all exported):
 | `Logger`             | `{ debug(message, fields?): void; error(message, fields?): void }`; every message and field is redacted (keys, Bearer tokens) before it reaches the logger                |
 
 A callback that throws or rejects gets the request 500 `internal_error` and is logged through `logger.error`.
+
+### Usage Records
+
+Every request the Gateway attempted an upstream call for ends with exactly one Usage Record ([`src/usage.ts`](src/usage.ts), protocol §7), whatever the outcome; a request answered before that (`invalid_token`, `invalid_request`, `unknown_slot`, `slot_unbound`, `provider_not_connected`) gets none. "Attempted" means the adapter called the Gateway's upstream `fetch`, so a refused connection still counts and a request revoked during model resolution does not.
+
+| `status`         | When                                                                                          |
+| ---------------- | --------------------------------------------------------------------------------------------- |
+| `ok`             | The response (or stream) ended normally                                                       |
+| `provider_error` | Any upstream failure, before or after the first byte; also a Gateway bug after the call began |
+| `timeout`        | The first-byte or idle timeout ran out                                                        |
+| `aborted`        | The Harness disconnected, its Gateway Token was revoked, or `close()` stopped the request     |
+
+- `promptTokens` and `completionTokens` are the Provider's own counts, each `null` when it reported none (`fake/stream-no-usage`), with or without `stream_options.include_usage`. `cachedPromptTokens` is present only when the Provider reported cached prompt tokens (the `openai-compatible` adapter reports 0 for "nothing said", which is left out as on the wire).
+- `timestamp` is when the request arrived; `durationMs` runs from then until the response ended: the full body built for a non-streaming call, the last event for a stream. Both include the Gateway's own work.
+- Records are delivered after the response ended, on a later turn of the event loop: first `await onUsage(record)` (a rejection or throw is logged and changes nothing), then the `usage` event. `close()` does not wait for them, so `onUsage` can still run just after it resolves, for the requests `close()` stopped.
+- Storing records (the `usage_records` table) and aggregating them belong to the desktop app (P0-04, P0-11); this package only produces them.
 
 ## Providers and adapters
 
@@ -167,9 +183,10 @@ The request's `model` picks a scenario by exact name (an unknown name gets 404 `
 
 ## Scripts
 
-| Command          | What it does                                                                                                      |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `pnpm test`      | Vitest over `test/` (offline: a connection beyond loopback throws); run `pnpm build` first                        |
-| `pnpm lint`      | ESLint with the shared root config (type-aware; run `pnpm build` first)                                           |
-| `pnpm typecheck` | `tsc --noEmit` against `tsconfig.json` (sources and tests); run `pnpm build` first                                |
-| `pnpm build`     | Emits `dist/` from `tsconfig.build.json`; the tests import the package by its own name, which resolves to `dist/` |
+| Command          | What it does                                                                                                                                                                                                                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm test`      | Vitest over `test/` (offline: a connection beyond loopback throws); run `pnpm build` first                                                                                                                                                                                  |
+| `pnpm lint`      | ESLint with the shared root config (type-aware; run `pnpm build` first)                                                                                                                                                                                                     |
+| `pnpm typecheck` | `tsc --noEmit` against `tsconfig.json` (sources and tests); run `pnpm build` first                                                                                                                                                                                          |
+| `pnpm build`     | Emits `dist/` from `tsconfig.build.json`; the tests import the package by its own name, which resolves to `dist/`                                                                                                                                                           |
+| `pnpm bench`     | [`scripts/bench.mjs`](scripts/bench.mjs) against `dist/`: startup (< 300 ms) and the median overhead of 200 sequential non-streaming calls through the Gateway versus straight to the fake (< 20 ms), Usage Records on; exits non-zero over budget. Not part of `pnpm test` |
