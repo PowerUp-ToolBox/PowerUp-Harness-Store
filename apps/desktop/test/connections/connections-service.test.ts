@@ -214,6 +214,47 @@ describe('single-instance Providers', () => {
     );
   });
 
+  it('adding it again without a base URL keeps the custom one stored, and tests with it', async () => {
+    data(
+      await service.add({
+        providerId: 'openai',
+        apiKey: OPENAI_KEY,
+        baseUrl: 'https://proxy.example.com/v1',
+      }),
+    );
+    data(await service.update({ id: 'openai', enabled: false }));
+    tester.mockClear();
+    // What the wizard's Remote Provider step sends for a preset, when setup is run again.
+    const again = data(
+      await service.add({ providerId: 'openai', apiKey: 'sk-proj-replaced-wxyz' }),
+    );
+    expect(tester).toHaveBeenCalledWith({
+      providerId: 'openai',
+      apiKey: 'sk-proj-replaced-wxyz',
+      baseUrl: 'https://proxy.example.com/v1',
+    });
+    expect(again).toMatchObject({
+      id: 'openai',
+      baseUrl: 'https://proxy.example.com/v1',
+      keyHint: 'wxyz',
+      enabled: true,
+    });
+    expect(connectionRows()).toEqual([
+      expect.objectContaining({ id: 'openai', base_url: 'https://proxy.example.com/v1' }),
+    ]);
+  });
+
+  it('adding it again with a base URL replaces the stored one; an empty one means the default', async () => {
+    data(await service.add({ providerId: 'ollama', baseUrl: 'http://10.0.0.5:11434/v1' }));
+    const moved = data(
+      await service.add({ providerId: 'ollama', baseUrl: 'http://10.0.0.6:11434/v1' }),
+    );
+    expect(moved.baseUrl).toBe('http://10.0.0.6:11434/v1');
+    const reset = data(await service.add({ providerId: 'ollama', baseUrl: '' }));
+    expect(reset.baseUrl).toBe('http://127.0.0.1:11434/v1');
+    expect(connectionRows()).toEqual([expect.objectContaining({ id: 'ollama', base_url: null })]);
+  });
+
   it('a local Provider needs no key; its default base URL is stored as NULL', async () => {
     const ollama = data(
       await service.add({ providerId: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1/' }),

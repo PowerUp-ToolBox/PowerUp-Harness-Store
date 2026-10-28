@@ -92,8 +92,10 @@ export interface ConnectionsServiceOptions {
  * of shared/connection-input.ts.
  *
  * A Provider other than the custom endpoint has at most one Connection, whose id is the Provider
- * id; adding it again edits that Connection in place and enables it. Each custom endpoint is
- * named, and its id `openai-compatible:<slug>` comes from the name it was added with.
+ * id; adding it again edits that Connection in place: what the draft gives replaces what is stored,
+ * what it leaves out (a custom base URL, a key) is kept, and the Connection is enabled, since the
+ * User asked to use it. Each custom endpoint is named, and its id `openai-compatible:<slug>` comes
+ * from the name it was added with.
  */
 export function createConnectionsService(options: ConnectionsServiceOptions): ConnectionsService {
   const { store, cipher, test = passThroughTest, providers = PROVIDERS } = options;
@@ -170,15 +172,23 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
       } else if (draft.displayName !== undefined) {
         return invalid();
       }
-      const baseUrl = storedBaseUrl(draft.baseUrl ?? '', provider);
+      // A single-instance Provider's saved Connection, which this add edits in place.
+      const existing = custom ? undefined : store.get(provider.id);
+      const baseUrl =
+        draft.baseUrl === undefined && existing !== undefined
+          ? existing.baseUrl
+          : storedBaseUrl(draft.baseUrl ?? '', provider);
       if (baseUrl === undefined) return invalid();
       if (key.key !== undefined && !(await cipher.isAvailable())) {
         return fail('encryption_unavailable');
       }
 
+      // Without a new key, the stored one (if any) is kept, and tested with the base URL.
+      const keptKey = key.key === undefined && existing !== undefined ? existing : undefined;
+      const apiKey = key.key ?? (keptKey === undefined ? undefined : await storedKey(keptKey));
       const tested = await test({
         providerId: provider.id,
-        ...(key.key === undefined ? {} : { apiKey: key.key }),
+        ...(apiKey === undefined ? {} : { apiKey }),
         baseUrl: effectiveBaseUrl(baseUrl, provider),
       });
       if (!tested.ok) return fail('provider_error', { detail: tested.detail });
@@ -195,8 +205,8 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
         providerId: provider.id,
         displayName,
         baseUrl,
-        secretRef: key.key === undefined ? null : id,
-        keyHint: key.key === undefined ? null : keyHintFor(key.key),
+        secretRef: key.key === undefined ? (keptKey?.secretRef ?? null) : id,
+        keyHint: key.key === undefined ? (keptKey?.keyHint ?? null) : keyHintFor(key.key),
         enabled: true,
         lastTestedAt: null,
         lastTestOk: null,
