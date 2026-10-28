@@ -171,6 +171,23 @@ describe('publishing from the review', () => {
     expect(screen.queryByText(FOLDER)).toBeNull();
   });
 
+  it('a change the watcher reports after the success leaves the success screen as it is', async () => {
+    const api = signedIn();
+    api.publish.publish.mockResolvedValue({ ok: true, data: PUBLISHED });
+    fireEvent.click(await toReview());
+    await screen.findByRole('link', { name: 'View listing' });
+    // Reported before the watch was stopped, and delivered after the answer.
+    act(() => {
+      api.emit('publish.folderChanged', { path: FOLDER });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.publish.validateFolder).toHaveBeenCalledOnce();
+    expect(screen.getByRole('link', { name: 'View listing' })).toBeDefined();
+    expect(screen.getByText('octo-cat/hello-web 1.1.0 is now in the Store.')).toBeDefined();
+  });
+
   it('Cancel aborts the upload while it is sent, back to the review saying so', async () => {
     const api = signedIn();
     const answer = deferred<IpcResult<PublishedVersion>>();

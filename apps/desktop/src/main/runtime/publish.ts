@@ -124,7 +124,7 @@ export interface PublishService {
  * The upload (P0-08.2) sends the latest run's zip, unchanged, to the Store's `publish` function
  * (./package-upload.ts) with the Publisher's session, reporting the bytes sent after each chunk;
  * it can be cancelled until all of them are sent. A 401 ends the session (`session_expired`), and
- * no answer at all has connectivity checked again.
+ * no answer at all has connectivity checked again. A version published ends the folder's watch.
  */
 export function createPublishService(options: PublishServiceOptions): PublishService {
   const debounceMs = options.debounceMs ?? FOLDER_CHANGE_DEBOUNCE_MS;
@@ -323,7 +323,7 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
         id: archiveId,
         bytes: built.bytes,
         // Only a Harness Package without problems is uploaded.
-        fileName: result.ok ? packageFileName(result.manifest) : null,
+        manifest: result.ok ? result.manifest : null,
       };
       const highest = versions === undefined ? null : (semver.rsort([...versions])[0] ?? null);
       return ok({
@@ -348,9 +348,10 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
 
     async publish({ archiveId, jobId }) {
       const archive = latest;
-      if (archive?.id !== archiveId || archive.fileName === null || jobs.has(jobId)) {
+      if (archive?.id !== archiveId || archive.manifest === null || jobs.has(jobId)) {
         return fail('package_invalid');
       }
+      const { manifest } = archive;
       const controller = new AbortController();
       jobs.set(jobId, controller);
       try {
@@ -368,7 +369,7 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
         const outcome = await upload({
           url: `${base}/functions/v1/publish`,
           headers: { apikey: options.anonKey, authorization: `Bearer ${token}` },
-          fileName: archive.fileName,
+          fileName: packageFileName(manifest),
           bytes: archive.bytes,
           signal: controller.signal,
           onProgress: (sent, total) => options.onProgress?.(jobId, { sent, total }),
@@ -379,7 +380,11 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
           return fail('store_unreachable');
         }
         if (outcome.status === 401) await options.auth.sessionRejected(token);
-        return publishAnswer(outcome);
+        const answer = publishAnswer(outcome, manifest);
+        // The folder is published: its watch ends before the answer goes back, so no change
+        // reported afterwards can replace the success screen with a new validation.
+        if (answer.ok) stopWatching();
+        return answer;
       } finally {
         jobs.delete(jobId);
       }
@@ -402,8 +407,8 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
 interface LatestArchive {
   readonly id: string;
   readonly bytes: Uint8Array;
-  /** The upload's file name, `<slug>-<version>.zip`; null when the zip has problems. */
-  readonly fileName: string | null;
+  /** The zip's Manifest; null when the zip has problems, and is never uploaded. */
+  readonly manifest: Manifest | null;
 }
 
 /** The Store's refusals of a publish, by `error.code`, each kept as it is. */
@@ -429,22 +434,27 @@ const REFUSAL_BY_STATUS: Readonly<Record<number, IpcErrorCode>> = {
 
 /**
  * The `publish` function's answer (docs/tech/api.md): `201 { harness_id, version, url }`, or
- * `{ error: { code, message, problems? } }`. A refusal keeps the Store's code when the app knows
- * it, else goes by status; its English message and its problems (ordered by path) come along. A 5xx is
- * `store_unreachable`; anything else unexpected `internal_error`.
+ * `{ error: { code, message, problems? } }`. A 201 is the version published, whatever its body:
+ * one cut off or unreadable is answered from the uploaded zip's `manifest`. A refusal keeps the
+ * Store's code when the app knows it, else goes by status; its English message and its problems
+ * (ordered by path) come along. A 5xx is `store_unreachable`; anything else unexpected
+ * `internal_error`.
  */
 function publishAnswer(
   outcome: Extract<UploadOutcome, { kind: 'answered' }>,
+  manifest: Manifest,
 ): IpcResult<PublishedVersion> {
   const { status, body } = outcome;
-  if (status === 201 && isRecord(body)) {
-    const { harness_id: harnessId, version, url } = body;
-    if (typeof harnessId === 'string' && typeof version === 'string') {
-      // The listing's in-app route; built from the ID when the Store sent anything else.
-      const route =
-        typeof url === 'string' && url.startsWith('/store/h/') ? url : `/store/h/${harnessId}`;
-      return ok({ harnessId, version, url: route });
-    }
+  if (status === 201) {
+    const { harness_id: id, version: answered, url } = isRecord(body) ? body : {};
+    const [harnessId, version] =
+      typeof id === 'string' && typeof answered === 'string'
+        ? [id, answered]
+        : [manifest.id, manifest.version];
+    // The listing's in-app route; built from the ID when the Store sent anything else.
+    const route =
+      typeof url === 'string' && url.startsWith('/store/h/') ? url : `/store/h/${harnessId}`;
+    return ok({ harnessId, version, url: route });
   }
   if (status >= 500) return fail('store_unreachable');
   const error = isRecord(body) && isRecord(body.error) ? body.error : {};

@@ -5,7 +5,8 @@
  * validation of that folder; a run that a newer one replaced never takes the watch from it. The
  * watch starts once the build has listed the folder within the limit, so a folder too large to
  * list is never watched; on Linux, each folder listed is watched on its own (Node emulates a
- * recursive watch by walking the whole tree, excluded folders included, synchronously).
+ * recursive watch by walking the whole tree, excluded folders included, synchronously). A publish
+ * that succeeds (P0-08.2) ends the watch before it answers; one that fails keeps it.
  */
 import { EventEmitter } from 'node:events';
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, type watch } from 'node:fs';
@@ -182,6 +183,48 @@ describe('the folder watcher', () => {
     await expect(older).resolves.toMatchObject({ ok: false, error: { code: 'package_invalid' } });
     expect(watches.map((entry) => entry.path)).toEqual([other]);
     expect(live().map((entry) => entry.path)).toEqual([other]);
+  });
+});
+
+describe('a publish of the watched folder', () => {
+  /** The service, signed in, with a `publish` function answering `status` at once. */
+  function publishing(status: number) {
+    service.close();
+    service = createService({
+      auth: {
+        login: () => Promise.resolve(null),
+        accessToken: () => Promise.resolve('access-token'),
+        sessionRejected: () => Promise.resolve(),
+      },
+      upload: () =>
+        Promise.resolve({
+          kind: 'answered',
+          status,
+          body: status === 201 ? { harness_id: 'acme/fixture-web', version: '1.0.0' } : null,
+        }),
+    });
+  }
+
+  it('that succeeds ends the watch before it answers, a change about to be reported included', async () => {
+    publishing(201);
+    const { archiveId } = await validate();
+    live()[0]?.send('change', 'README.md');
+    await expect(service.publish({ archiveId: archiveId ?? '', jobId: 'job' })).resolves.toEqual(
+      expect.objectContaining({ ok: true }),
+    );
+    expect(live()).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS * 3));
+    expect(changes).toEqual([]);
+  });
+
+  it('that fails keeps watching: a change is validated again', async () => {
+    publishing(500);
+    const { archiveId } = await validate();
+    await expect(service.publish({ archiveId: archiveId ?? '', jobId: 'job' })).resolves.toEqual(
+      expect.objectContaining({ ok: false }),
+    );
+    live()[0]?.send('change', 'README.md');
+    await reported();
   });
 });
 

@@ -214,6 +214,9 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
     });
     const offFolder = window.api.on('publish.folderChanged', ({ path }) => {
       if (flowRef.current.folder !== path) return;
+      // Published: the watch was stopped on purpose, and a report already on its way must not
+      // replace the success screen with a validation of the version just published.
+      if (flowRef.current.upload?.kind === 'published') return;
       if (isUploading(flowRef.current)) changedWhileUploading.current = true;
       else void validate(path);
     });

@@ -6,6 +6,7 @@
  * version, which the Harness detail read then returns. The Harness Package uploaded is the zip
  * `publish.validateFolder` built, byte for byte, with the exclusions it listed left out. Progress
  * is reported as bytes of the request sent; Cancel aborts the request, and the Store keeps nothing.
+ * A `201` is the version published even when its body is cut off.
  * The Store's refusals keep its code, its message and its problems, including those it answers
  * from the headers alone, before reading the body (401, 413 by Content-Length, 429).
  */
@@ -47,6 +48,8 @@ interface Upload {
   readonly headers: IncomingMessage['headers'];
   /** Whether the whole body arrived. */
   complete: boolean;
+  /** Whether the body ended before all of it arrived: the client aborted the request. */
+  dropped: boolean;
   /** The `package` part, once the body arrived. */
   fileName: string | null;
   bytes: Uint8Array | null;
@@ -56,13 +59,16 @@ interface Upload {
 interface PublishBehaviour {
   /**
    * Stops reading request bodies after their first chunk, calling this as it does: the upload
-   * stalls once the connection's buffers are full, like a slow network.
+   * stalls once the connection's buffers are full, like a slow network. Reading goes on once
+   * `resume` is called, and a body that then arrives whole is published.
    */
-  stall: (() => void) | null;
+  stall: ((resume: () => void) => void) | null;
   /** Holds the answer, once the body arrived, until the test releases it. */
   hold: Promise<void> | null;
   /** Answers this instead of publishing. */
   refuse: { status: number; body: unknown } | null;
+  /** Publishes, then cuts the connection off once the `201`'s headers and a little body are sent. */
+  cutAnswer: boolean;
   /**
    * Answers this from the headers alone, never reading the body, as the real function answers
    * 401, 413 by Content-Length and 429 (api.md); a client sending the body sees it fail.
@@ -91,7 +97,7 @@ beforeEach(async () => {
   cpSync(FIXTURE, folder, { recursive: true });
   editManifest({ id: 'octo-cat/fixture-web' });
   uploads = [];
-  behaviour = { stall: null, hold: null, refuse: null, refuseEarly: null };
+  behaviour = { stall: null, hold: null, refuse: null, refuseEarly: null, cutAnswer: false };
   versions = new Map();
   token = TOKEN;
   sessionRejected = vi.fn<(accessToken: string) => Promise<void>>(() => Promise.resolve());
@@ -170,7 +176,13 @@ async function serve(
     return;
   }
 
-  const upload: Upload = { headers: request.headers, complete: false, fileName: null, bytes: null };
+  const upload: Upload = {
+    headers: request.headers,
+    complete: false,
+    dropped: false,
+    fileName: null,
+    bytes: null,
+  };
   uploads.push(upload);
   // The real function authenticates, checks the Content-Length and the rate limit first.
   if (request.headers.authorization !== `Bearer ${TOKEN}`) {
@@ -182,17 +194,27 @@ async function serve(
     return;
   }
   goAhead();
+  const chunks: Buffer[] = [];
   const stall = behaviour.stall;
   if (stall !== null) {
     // Once the body has begun to arrive.
-    request.once('data', () => {
-      request.pause();
-      stall();
+    await new Promise<void>((resume) => {
+      request.once('data', (chunk: Buffer) => {
+        chunks.push(chunk);
+        request.pause();
+        stall(resume);
+      });
     });
+  }
+  try {
+    for await (const chunk of request as AsyncIterable<Buffer>) chunks.push(chunk);
+  } catch {
+    // Aborted by the client: Node reports it as an error of the body.
+  }
+  if (!request.complete) {
+    upload.dropped = true;
     return;
   }
-  const chunks: Buffer[] = [];
-  for await (const chunk of request as AsyncIterable<Buffer>) chunks.push(chunk);
   upload.complete = true;
   const part = packagePart(request.headers['content-type'] ?? '', Buffer.concat(chunks));
   if (part === null) {
@@ -219,6 +241,14 @@ async function serve(
     return;
   }
   versions.set(id, [...(versions.get(id) ?? []), result.manifest.version]);
+  if (behaviour.cutAnswer) {
+    // Committed, then cut off mid-answer (a proxy's reset, a timeout): only the status arrives.
+    response.writeHead(201, { 'content-type': 'application/json' });
+    response.write('{"harness_id":', () => {
+      setTimeout(() => request.socket.destroy(), 20);
+    });
+    return;
+  }
   json(201, {
     harness_id: id,
     version: result.manifest.version,
@@ -408,11 +438,11 @@ describe('publish.publish', () => {
   it('Cancel aborts the request while it is sent: upload_cancelled, and the Store keeps nothing', async () => {
     addLargeFile(4 * 1024 * 1024);
     const data = await validation();
-    const stalled = new Promise<void>((resolve) => {
+    const stalled = new Promise<() => void>((resolve) => {
       behaviour.stall = resolve;
     });
     const result = publish(data.archiveId ?? '');
-    await stalled;
+    const resume = await stalled;
     await cancel();
     await expect(result).resolves.toMatchObject({
       ok: false,
@@ -421,9 +451,30 @@ describe('publish.publish', () => {
     const reports = progress.get('job-1') ?? [];
     expect(reports.at(-1)?.sent).toBeLessThan(reports.at(-1)?.total ?? 0);
     expect(uploads).toHaveLength(1);
+    // The Store reads on: the body ends short, so the request was aborted, not merely abandoned
+    // (a request left open would now arrive whole, and be published).
+    resume();
+    await vi.waitFor(() => {
+      expect(uploads[0]?.dropped).toBe(true);
+    });
     expect(uploads[0]?.complete).toBe(false);
     expect(versions.get('octo-cat/fixture-web')).toBeUndefined();
     expect(await listing('octo-cat/fixture-web')).toEqual([]);
+    expect(unreachable).not.toHaveBeenCalled();
+  });
+
+  it('a 201 cut off before its body is read is still the version published, named by its Manifest', async () => {
+    behaviour.cutAnswer = true;
+    const data = await validation();
+    await expect(publish(data.archiveId ?? '')).resolves.toEqual({
+      ok: true,
+      data: {
+        harnessId: 'octo-cat/fixture-web',
+        version: '1.0.0',
+        url: '/store/h/octo-cat/fixture-web',
+      },
+    });
+    expect(versions.get('octo-cat/fixture-web')).toEqual(['1.0.0']);
     expect(unreachable).not.toHaveBeenCalled();
   });
 
