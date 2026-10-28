@@ -6,7 +6,8 @@
  * version, which the Harness detail read then returns. The Harness Package uploaded is the zip
  * `publish.validateFolder` built, byte for byte, with the exclusions it listed left out. Progress
  * is reported as bytes of the request sent; Cancel aborts the request, and the Store keeps nothing.
- * The Store's refusals keep its code, its message and its problems.
+ * The Store's refusals keep its code, its message and its problems, including those it answers
+ * from the headers alone, before reading the body (401, 413 by Content-Length, 429).
  */
 import { randomBytes } from 'node:crypto';
 import {
@@ -54,14 +55,19 @@ interface Upload {
 /** How the fake Store's `publish` function behaves. */
 interface PublishBehaviour {
   /**
-   * Stops reading request bodies, calling this as it does: the upload stalls once the
-   * connection's buffers are full, like a slow network.
+   * Stops reading request bodies after their first chunk, calling this as it does: the upload
+   * stalls once the connection's buffers are full, like a slow network.
    */
   stall: (() => void) | null;
   /** Holds the answer, once the body arrived, until the test releases it. */
   hold: Promise<void> | null;
   /** Answers this instead of publishing. */
   refuse: { status: number; body: unknown } | null;
+  /**
+   * Answers this from the headers alone, never reading the body, as the real function answers
+   * 401, 413 by Content-Length and 429 (api.md); a client sending the body sees it fail.
+   */
+  refuseEarly: { status: number; body: unknown } | null;
 }
 
 let root: string;
@@ -85,7 +91,7 @@ beforeEach(async () => {
   cpSync(FIXTURE, folder, { recursive: true });
   editManifest({ id: 'octo-cat/fixture-web' });
   uploads = [];
-  behaviour = { stall: null, hold: null, refuse: null };
+  behaviour = { stall: null, hold: null, refuse: null, refuseEarly: null };
   versions = new Map();
   token = TOKEN;
   sessionRejected = vi.fn<(accessToken: string) => Promise<void>>(() => Promise.resolve());
@@ -94,6 +100,12 @@ beforeEach(async () => {
   onProgress = null;
   server = createServer((request, response) => {
     void serve(request, response);
+  });
+  // `Expect: 100-continue`: go ahead only when the publish function would read the body.
+  server.on('checkContinue', (request: IncomingMessage, response: ServerResponse) => {
+    void serve(request, response, () => {
+      response.writeContinue();
+    });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   baseUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`;
@@ -120,12 +132,24 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-/** The fake Store: the "Own versions" read, the Harness detail read and the `publish` function. */
-async function serve(request: IncomingMessage, response: ServerResponse) {
+/**
+ * The fake Store: the "Own versions" read, the Harness detail read and the `publish` function.
+ * `goAhead` answers a request's `Expect: 100-continue`, called once the body is to be read.
+ */
+async function serve(
+  request: IncomingMessage,
+  response: ServerResponse,
+  goAhead: () => void = () => undefined,
+) {
   const url = new URL(request.url ?? '/', 'http://store.test');
   const json = (status: number, body: unknown) => {
     response.writeHead(status, { 'content-type': 'application/json' });
     response.end(JSON.stringify(body));
+  };
+  /** An answer before the body is read, the connection then dropped, as a refusing server does. */
+  const refuseEarly = (status: number, body: unknown) => {
+    response.writeHead(status, { 'content-type': 'application/json', connection: 'close' });
+    response.end(JSON.stringify(body), () => request.socket.destroy());
   };
   if (request.method === 'GET' && url.pathname === '/rest/v1/harness_versions') {
     const id = (url.searchParams.get('manifest->>id') ?? '').replace(/^eq\./, '');
@@ -148,18 +172,28 @@ async function serve(request: IncomingMessage, response: ServerResponse) {
 
   const upload: Upload = { headers: request.headers, complete: false, fileName: null, bytes: null };
   uploads.push(upload);
-  if (behaviour.stall !== null) {
-    request.pause();
-    behaviour.stall();
+  // The real function authenticates, checks the Content-Length and the rate limit first.
+  if (request.headers.authorization !== `Bearer ${TOKEN}`) {
+    refuseEarly(401, { error: { code: 'unauthenticated', message: 'Sign in again.' } });
+    return;
+  }
+  if (behaviour.refuseEarly !== null) {
+    refuseEarly(behaviour.refuseEarly.status, behaviour.refuseEarly.body);
+    return;
+  }
+  goAhead();
+  const stall = behaviour.stall;
+  if (stall !== null) {
+    // Once the body has begun to arrive.
+    request.once('data', () => {
+      request.pause();
+      stall();
+    });
     return;
   }
   const chunks: Buffer[] = [];
   for await (const chunk of request as AsyncIterable<Buffer>) chunks.push(chunk);
   upload.complete = true;
-  if (request.headers.authorization !== `Bearer ${TOKEN}`) {
-    json(401, { error: { code: 'unauthenticated', message: 'Sign in again.' } });
-    return;
-  }
   const part = packagePart(request.headers['content-type'] ?? '', Buffer.concat(chunks));
   if (part === null) {
     json(400, { error: { code: 'invalid_request', message: 'No package part.' } });
@@ -444,6 +478,43 @@ describe('publish.publish', () => {
     expect(uploads[1]?.bytes).toEqual(uploads[0]?.bytes);
   });
 
+  it('a refusal’s problems come back ordered by path, without entries that are not Problems', async () => {
+    const data = await validation();
+    const problem = (path: string, code: string) => ({
+      path,
+      code,
+      messageKey: code,
+      message: `${code} at ${path}.`,
+    });
+    behaviour.refuse = {
+      status: 422,
+      body: {
+        error: {
+          code: 'invalid_manifest',
+          message: 'Invalid.',
+          problems: [
+            problem('slots.chat', 'slot_invalid'),
+            { path: 'name', code: 'manifest_invalid' },
+            problem('name', 'manifest_invalid'),
+            'not a problem',
+            { ...problem('id', 'id_invalid'), params: { nested: { no: 1 } } },
+            problem('description', 'manifest_invalid'),
+            problem('name', 'name_too_long'),
+          ],
+        },
+      },
+    };
+    const result = await publish(data.archiveId ?? '');
+    expect(result).toMatchObject({ ok: false, error: { code: 'invalid_manifest' } });
+    // Stable within a path: the Store's order of the two `name` problems is kept.
+    expect(!result.ok && result.error.problems).toEqual([
+      problem('description', 'manifest_invalid'),
+      problem('name', 'manifest_invalid'),
+      problem('name', 'name_too_long'),
+      problem('slots.chat', 'slot_invalid'),
+    ]);
+  });
+
   it.each([
     [403, 'publisher_mismatch', 'publisher_mismatch'],
     [409, 'harness_taken_down', 'harness_taken_down'],
@@ -471,15 +542,40 @@ describe('publish.publish', () => {
     }
   });
 
-  it('a 401 is unauthenticated and ends the session it was sent with', async () => {
+  it('a 401, answered before the body is read, is unauthenticated and ends the session it was sent with', async () => {
+    // Megabytes the Store never reads: sending them into a closed connection must not hide the answer.
+    addLargeFile(8 * 1024 * 1024);
     const data = await validation();
     token = 'access-token-the-store-refuses';
     await expect(publish(data.archiveId ?? '')).resolves.toMatchObject({
       ok: false,
-      error: { code: 'unauthenticated' },
+      error: { code: 'unauthenticated', message: 'Sign in again.' },
     });
     expect(sessionRejected).toHaveBeenCalledExactlyOnceWith('access-token-the-store-refuses');
+    expect(uploads[0]?.complete).toBe(false);
+    expect(progress.get('job-1')).toBeUndefined();
+    expect(unreachable).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [413, 'package_too_large'],
+    [429, 'rate_limited'],
+  ] as const)(
+    'a %i answered before the body is read is %s, not store_unreachable',
+    async (status, code) => {
+      addLargeFile(8 * 1024 * 1024);
+      const data = await validation();
+      behaviour.refuseEarly = { status, body: { error: { code, message: 'From the Store.' } } };
+      await expect(publish(data.archiveId ?? '')).resolves.toMatchObject({
+        ok: false,
+        error: { code, messageKey: `error.${code}`, message: 'From the Store.' },
+      });
+      expect(uploads[0]?.complete).toBe(false);
+      expect(progress.get('job-1')).toBeUndefined();
+      expect(unreachable).not.toHaveBeenCalled();
+      expect(sessionRejected).not.toHaveBeenCalled();
+    },
+  );
 
   it('signed out (or the refresh refused) is unauthenticated, with nothing sent', async () => {
     const data = await validation();
@@ -516,6 +612,97 @@ describe('publish.publish', () => {
 });
 
 describe('uploadPackage', () => {
+  /** A server that ignores `Expect: 100-continue`, never sending `100 Continue`. */
+  async function ignoringExpect(
+    handle: (request: IncomingMessage, response: ServerResponse) => void,
+  ): Promise<{ url: string; close: () => Promise<void> }> {
+    const other = createServer(handle);
+    other.on('checkContinue', handle);
+    await new Promise<void>((resolve) => other.listen(0, '127.0.0.1', resolve));
+    return {
+      url: `http://127.0.0.1:${String((other.address() as AddressInfo).port)}/functions/v1/publish`,
+      close: async () => {
+        other.closeAllConnections();
+        await new Promise((resolve) => other.close(resolve));
+      },
+    };
+  }
+
+  function send(url: string, bytes: Uint8Array) {
+    return uploadPackage({
+      url,
+      headers: {},
+      fileName: 'x-1.0.0.zip',
+      bytes,
+      onProgress: () => undefined,
+      signal: new AbortController().signal,
+      continueTimeoutMs: 50,
+    });
+  }
+
+  it('sends the body anyway, once the wait for `100 Continue` runs out', async () => {
+    let received = 0;
+    const other = await ignoringExpect((request, response) => {
+      void (async () => {
+        for await (const chunk of request as AsyncIterable<Buffer>) received += chunk.length;
+        response.writeHead(201, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ harness_id: 'a/b', version: '1.0.0' }));
+      })();
+    });
+    try {
+      const bytes = randomBytes(256 * 1024);
+      await expect(send(other.url, bytes)).resolves.toEqual({
+        kind: 'answered',
+        status: 201,
+        body: { harness_id: 'a/b', version: '1.0.0' },
+      });
+      expect(received).toBeGreaterThan(bytes.length);
+    } finally {
+      await other.close();
+    }
+  });
+
+  it.each([true, false])(
+    'keeps a refusal from the headers of a server that ignores `Expect` (connection dropped: %s)',
+    async (drop) => {
+      const other = await ignoringExpect((request, response) => {
+        response.writeHead(413, { 'content-type': 'application/json', connection: 'close' });
+        response.end(JSON.stringify({ error: { code: 'package_too_large' } }), () => {
+          if (drop) request.socket.destroy();
+        });
+      });
+      try {
+        for (let run = 0; run < 5; run += 1) {
+          await expect(send(other.url, new Uint8Array(8 * 1024 * 1024))).resolves.toEqual({
+            kind: 'answered',
+            status: 413,
+            body: { error: { code: 'package_too_large' } },
+          });
+        }
+      } finally {
+        await other.close();
+      }
+    },
+  );
+
+  it('keeps an answer whose connection is cut off while it is read: its status still says what it was', async () => {
+    const other = await ignoringExpect((request, response) => {
+      response.writeHead(413, { 'content-type': 'application/json' });
+      response.write('{"error":', () => {
+        setTimeout(() => request.socket.destroy(), 20);
+      });
+    });
+    try {
+      await expect(send(other.url, new Uint8Array(8 * 1024 * 1024))).resolves.toEqual({
+        kind: 'answered',
+        status: 413,
+        body: null,
+      });
+    } finally {
+      await other.close();
+    }
+  });
+
   it('gives up on a Store that takes the request but never answers', async () => {
     behaviour.hold = new Promise(() => undefined);
     const outcome = await uploadPackage({
