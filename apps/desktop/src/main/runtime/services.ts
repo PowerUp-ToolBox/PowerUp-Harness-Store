@@ -39,5 +39,8 @@ export interface Services {
   /** The installed Harnesses, and installing one from a local folder. */
   readonly installs: InstallsService;
   /** Launching installed Harnesses (the Process Supervisor), and how their launches are going. */
-  readonly launch: Pick<Supervisor, 'start' | 'chooseWorkspace' | 'lastWorkspace' | 'status'>;
+  readonly launch: Pick<
+    Supervisor,
+    'start' | 'chooseWorkspace' | 'lastWorkspace' | 'status' | 'openLogs' | 'openDataFolder'
+  >;
 }

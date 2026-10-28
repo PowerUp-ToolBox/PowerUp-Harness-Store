@@ -256,6 +256,17 @@ export interface IpcMethods {
   'launch.lastWorkspace': { input: string; output: LastWorkspace | null };
   /** The latest launch of every Harness launched since the app started. */
   'launch.status': { input: undefined; output: readonly LaunchStatus[] };
+  /**
+   * Opens this installed Harness's newest launch log in the OS's app for it: its latest launch's
+   * log, else the most recently written one; its logs folder (created) before it has any. Main
+   * computes the path; `not_installed`.
+   */
+  'launch.openLogs': { input: string; output: null };
+  /**
+   * Opens this installed Harness's Data Directory in the OS file browser, creating it when
+   * missing. Main computes the path; `not_installed`.
+   */
+  'launch.openDataFolder': { input: string; output: null };
 }
 
 /** Which installed Harness to launch, and with which Workspace. */
@@ -744,6 +755,8 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'launch.chooseWorkspace': true,
   'launch.lastWorkspace': true,
   'launch.status': true,
+  'launch.openLogs': true,
+  'launch.openDataFolder': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */

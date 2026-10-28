@@ -51,6 +51,8 @@ describe('buildApi (window.api)', () => {
       'chooseWorkspace',
       'lastWorkspace',
       'status',
+      'openLogs',
+      'openDataFolder',
     ]);
     expect(Object.keys(api.providers)).toEqual(['list']);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);

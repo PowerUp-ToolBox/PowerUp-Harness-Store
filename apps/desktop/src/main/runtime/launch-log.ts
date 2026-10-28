@@ -111,17 +111,36 @@ function withoutCarriageReturn(line: string): string {
 }
 
 /**
+ * The newest launch log (`*.log`, by modification time) in `folder`; null when it has none or
+ * cannot be read.
+ */
+export async function newestLaunchLog(folder: string): Promise<string | null> {
+  return (await launchLogsNewestFirst(folder))[0] ?? null;
+}
+
+/**
  * Deletes all but the `keep` newest launch logs (`*.log`, by modification time) in `folder`.
  * Never throws: a log that cannot be deleted is left for the next launch.
  */
 export async function pruneLaunchLogs(folder: string, keep = KEPT_LAUNCH_LOGS): Promise<void> {
+  const logs = await launchLogsNewestFirst(folder);
+  await Promise.all(
+    logs.slice(keep).map((path) => rm(path, { force: true }).catch(() => undefined)),
+  );
+}
+
+/**
+ * The paths of the launch logs (`*.log`) in `folder`, newest first by modification time (the
+ * later name first on a tie); none when it cannot be read. A log that cannot be read counts as
+ * the oldest.
+ */
+async function launchLogsNewestFirst(folder: string): Promise<string[]> {
   let names: string[];
   try {
     names = (await readdir(folder)).filter((name) => name.endsWith('.log'));
   } catch {
-    return;
+    return [];
   }
-  if (names.length <= keep) return;
   const logs = await Promise.all(
     names.map(async (name) => {
       const path = join(folder, name);
@@ -133,7 +152,5 @@ export async function pruneLaunchLogs(folder: string, keep = KEPT_LAUNCH_LOGS): 
     }),
   );
   logs.sort((a, b) => b.modified - a.modified || (a.path < b.path ? 1 : -1));
-  await Promise.all(
-    logs.slice(keep).map(({ path }) => rm(path, { force: true }).catch(() => undefined)),
-  );
+  return logs.map(({ path }) => path);
 }

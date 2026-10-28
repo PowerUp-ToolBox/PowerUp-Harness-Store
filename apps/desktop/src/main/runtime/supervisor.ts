@@ -24,7 +24,13 @@ import type { InstallRow, InstallStore } from './install-store.js';
 import { readIcon } from './installer.js';
 import { fail, ok } from './ipc-result.js';
 import { launchEnvironment } from './launch-env.js';
-import { KEPT_LAUNCH_LOGS, openLaunchLog, pruneLaunchLogs, type LaunchLog } from './launch-log.js';
+import {
+  KEPT_LAUNCH_LOGS,
+  newestLaunchLog,
+  openLaunchLog,
+  pruneLaunchLogs,
+  type LaunchLog,
+} from './launch-log.js';
 import type { LaunchStore } from './launch-store.js';
 import { spawnPiped, type PipedSpawner } from './piped-process.js';
 import { processTreeAlive, processTreeEndsWithin, signalProcessTree } from './process-tree.js';
@@ -174,6 +180,16 @@ export interface Supervisor {
   lastWorkspace(harnessId: string): Promise<IpcResult<LastWorkspace | null>>;
   /** `launch.status`: the latest launch of every Harness launched since the app started. */
   status(): readonly LaunchStatus[];
+  /**
+   * `launch.openLogs`: opens the Harness's newest launch log with the OS (its latest launch's,
+   * else the most recently written one), or its logs folder, created, before it has any.
+   */
+  openLogs(harnessId: string): Promise<IpcResult<null>>;
+  /**
+   * `launch.openDataFolder`: opens the Harness's Data Directory in the OS file browser, creating
+   * it when missing.
+   */
+  openDataFolder(harnessId: string): Promise<IpcResult<null>>;
   /** Whether the Harness has a launch that has not ended (it is never installed over then). */
   isRunning(harnessId: string): boolean;
   /**
@@ -311,6 +327,19 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     ((message: string, error: unknown) => {
       console.error(message, error);
     });
+  /**
+   * Opens `log` when that file exists, else the Harness's logs folder, created: the paths are the
+   * Runtime's own, never one a window sent.
+   */
+  const openLogOrFolder = async (harnessId: string, log: string | null) => {
+    if (log !== null && (await isFile(log))) {
+      await openPath(log);
+      return;
+    }
+    const folder = paths.logsDir(harnessId);
+    await mkdir(folder, { recursive: true });
+    await openPath(folder);
+  };
   /** The latest launch of each Harness. */
   const byHarness = new Map<string, Launch>();
   /** The same launches by launch id. */
@@ -754,6 +783,23 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       return ok(path === null ? null : { path, exists: await isDirectory(path) });
     },
     status: () => [...byHarness.values()].map(statusOf),
+    async openLogs(harnessId) {
+      if (installs.get(harnessId) === undefined) return fail('not_installed');
+      const latest = byHarness.get(harnessId)?.log?.path;
+      const log =
+        latest !== undefined && (await isFile(latest))
+          ? latest
+          : await newestLaunchLog(paths.logsDir(harnessId));
+      await openLogOrFolder(harnessId, log);
+      return ok(null);
+    },
+    async openDataFolder(harnessId) {
+      const install = installs.get(harnessId);
+      if (install === undefined) return fail('not_installed');
+      await mkdir(install.dataDir, { recursive: true });
+      await openPath(install.dataDir);
+      return ok(null);
+    },
     isRunning: (harnessId) => byHarness.get(harnessId)?.finished === null,
     async stopAll() {
       closing = true;
@@ -783,16 +829,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
             status: statusOf(launch),
           };
         },
-        async openLogs() {
-          const path = launch.log?.path;
-          if (path !== undefined && (await isFile(path))) {
-            await openPath(path);
-            return;
-          }
-          const folder = paths.logsDir(harnessId);
-          await mkdir(folder, { recursive: true });
-          await openPath(folder);
-        },
+        openLogs: () => openLogOrFolder(harnessId, launch.log?.path ?? null),
         relaunch: () => start(harnessId, launch.workspace),
         close() {
           windows.close(launchId);
@@ -891,6 +928,9 @@ export function createSupervisorStub(): Supervisor {
     lastWorkspace: () =>
       Promise.resolve(fail('not_implemented', { method: 'launch.lastWorkspace' })),
     status: () => [],
+    openLogs: () => Promise.resolve(fail('not_implemented', { method: 'launch.openLogs' })),
+    openDataFolder: () =>
+      Promise.resolve(fail('not_implemented', { method: 'launch.openDataFolder' })),
     isRunning: () => false,
     stopAll: () => Promise.resolve(),
     window: () => null,

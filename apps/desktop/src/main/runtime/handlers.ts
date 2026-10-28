@@ -191,6 +191,16 @@ export function createHandlers(services: Services): IpcHandlers {
       if (input !== undefined) return fail('invalid_input', { method: 'launch.status' });
       return ok(services.launch.status());
     },
+    'launch.openLogs': (input) => {
+      if (!isHarnessIdInput(input)) return fail('invalid_input', { method: 'launch.openLogs' });
+      return services.launch.openLogs(input);
+    },
+    'launch.openDataFolder': (input) => {
+      if (!isHarnessIdInput(input)) {
+        return fail('invalid_input', { method: 'launch.openDataFolder' });
+      }
+      return services.launch.openDataFolder(input);
+    },
   };
 }
 

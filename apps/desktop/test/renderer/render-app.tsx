@@ -327,6 +327,12 @@ export function installFakeApi(
       status: vi.fn((): Promise<IpcResult<readonly LaunchStatus[]>> =>
         Promise.resolve({ ok: true, data: [] }),
       ),
+      openLogs: vi.fn<(harnessId: string) => Promise<IpcResult<null>>>(() =>
+        Promise.resolve({ ok: true, data: null }),
+      ),
+      openDataFolder: vi.fn<(harnessId: string) => Promise<IpcResult<null>>>(() =>
+        Promise.resolve({ ok: true, data: null }),
+      ),
     },
     on: vi.fn((event: string, listener: (payload: unknown) => void) => {
       const forEvent = listeners.get(event) ?? new Set();

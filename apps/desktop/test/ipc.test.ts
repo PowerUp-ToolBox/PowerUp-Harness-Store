@@ -3,7 +3,7 @@ import { createDispatcher, UntrustedSenderError } from '../src/main/runtime/disp
 import { createHandlers, type IpcHandlers } from '../src/main/runtime/handlers.js';
 import { createConnectionsStub, providerPresets } from '../src/main/runtime/connections.js';
 import { createInstallsStub } from '../src/main/runtime/installer.js';
-import { ok } from '../src/main/runtime/ipc-result.js';
+import { fail, ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { StoreAuthError } from '../src/main/runtime/store-auth.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
@@ -73,6 +73,10 @@ const fakeServices: Services = {
         startedAt: '2026-10-28T09:00:00.000Z',
       },
     ],
+    openLogs: (harnessId) =>
+      Promise.resolve(harnessId === 'acme/hello' ? ok(null) : fail('not_installed')),
+    openDataFolder: (harnessId) =>
+      Promise.resolve(harnessId === 'acme/hello' ? ok(null) : fail('not_installed')),
   },
 };
 const en = translatorFor('en');
@@ -256,6 +260,10 @@ describe('IPC handlers against a fake service container', () => {
     ['launch.chooseWorkspace', undefined],
     ['launch.chooseWorkspace', { harnessId: 'acme/hello' }],
     ['launch.lastWorkspace', ''],
+    ['launch.openLogs', undefined],
+    ['launch.openLogs', { harnessId: 'acme/hello' }],
+    ['launch.openDataFolder', ''],
+    ['launch.openDataFolder', 'a'.repeat(257)],
   ])('%s rejects %j as invalid_input', async (method, input) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
@@ -305,6 +313,20 @@ describe('IPC handlers against a fake service container', () => {
       ok: true,
       data: [{ harnessId: 'acme/hello', state: 'failed', reason: 'exit_nonzero', exitCode: 3 }],
     });
+  });
+
+  it('launch.openLogs and launch.openDataFolder act on the Harness named', async () => {
+    const { dispatch } = dispatcherFor();
+    for (const method of ['launch.openLogs', 'launch.openDataFolder']) {
+      await expect(dispatch(MAIN_WINDOW, { method, input: 'acme/hello' })).resolves.toEqual({
+        ok: true,
+        data: null,
+      });
+      await expect(dispatch(MAIN_WINDOW, { method, input: 'acme/other' })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'not_installed' },
+      });
+    }
   });
 
   it('bindings.getGlobal returns the global Slot Bindings', async () => {

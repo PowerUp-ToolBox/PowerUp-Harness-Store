@@ -1881,3 +1881,86 @@ input[aria-invalid='true'] {
   font-size: 13px;
   font-weight: 600;
 }
+
+/*
+ * A Library card's failed launch and overflow menu (P0-05.6): the error line with Show logs and
+ * Dismiss, and the three-dot menu under the card's top right corner.
+ */
+.harness-card-failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-size: 12px;
+}
+
+.harness-card-failure-text {
+  font-weight: 600;
+}
+
+.harness-card-failure .button-link {
+  min-height: 24px;
+  padding: 0;
+  color: inherit;
+  font-size: 12px;
+}
+
+.card-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.card-menu-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.card-menu-button:hover,
+.card-menu-button[aria-expanded='true'] {
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+}
+
+.card-menu-list {
+  position: absolute;
+  top: 40px;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 10px;
+  background: var(--color-bg);
+  box-shadow: 0 8px 24px rgb(28 29 33 / 16%);
+}
+
+.card-menu-list [role='menuitem'] {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.card-menu-list [role='menuitem']:hover,
+.card-menu-list [role='menuitem']:focus-visible {
+  background: var(--color-bg-subtle);
+}
