@@ -64,6 +64,13 @@ const PublishContext = createContext<PublishContextValue | null>(null);
 
 const NO_FOLDER: PublishFlow = { folder: null, check: null, reviewing: false, dropRefused: false };
 
+/** The chosen folder, validated again, is no longer a folder (`invalid_input`). */
+const FOLDER_GONE: IpcError = {
+  code: 'package_invalid',
+  messageKey: 'error.package_invalid',
+  message: 'The folder is no longer a folder. Choose it again.',
+};
+
 /**
  * The Publish screen's state (flow F5), held above the screens so leaving Publish and coming back
  * keeps the chosen folder, its validation and the review step; the Runtime keeps watching the
@@ -112,9 +119,10 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
         });
         const result = await window.api.publish.validateFolder(target);
         if (!mounted.current || at !== runs.current) return;
-        if (!result.ok && result.error.code === 'invalid_input') {
-          // Not a folder (a dropped file): the folder chosen before stays, as it was, and a run
-          // of it this one replaced runs again.
+        const notFolder = !result.ok && result.error.code === 'invalid_input';
+        if (notFolder && !same) {
+          // A dropped file: the folder chosen before stays, as it was, and a run of it this one
+          // replaced runs again (a run of that folder never comes back here).
           setFlow({ ...before, dropRefused: true });
           if (before.folder !== null && before.check?.kind === 'checking') {
             await run(before.folder);
@@ -126,7 +134,8 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
           ...current,
           check: result.ok
             ? { kind: 'done', result: result.data }
-            : { kind: 'error', error: result.error },
+            : // The chosen folder was replaced by a file: it changed since it was checked.
+              { kind: 'error', error: notFolder ? FOLDER_GONE : result.error },
           reviewing: current.reviewing && result.ok && result.data.problems.length === 0,
         }));
       };

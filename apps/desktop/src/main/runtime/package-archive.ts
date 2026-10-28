@@ -38,7 +38,10 @@ export interface BuiltPackage {
   readonly bytes: Uint8Array | null;
   /** The zip's size in bytes; once it went past the limit, how far it had got. */
   readonly size: number;
-  /** Why there is no zip: one `archive_too_large` or `archive_too_many_files` problem. */
+  /**
+   * Why there is no zip: one `archive_too_large` or `archive_too_many_files` problem
+   * (`archive_too_many_files.not_counted` for a folder too large to count).
+   */
   readonly problem: Problem | null;
   /**
    * What was left out, topmost only, sorted: a folder as `dir/` (nothing inside it is listed), a
@@ -57,6 +60,11 @@ export interface BuildOptions {
   readonly isCurrent?: () => boolean;
   /** Default: `PACKAGE_LIMITS.maxArchiveBytes`. Tests lower it. */
   readonly maxBytes?: number;
+  /**
+   * The folder is listed up to this many files, then the build stops; default
+   * `PACKAGE_LIMITS.maxListedEntries`, where `validatePackage` stops listing a zip. Tests lower it.
+   */
+  readonly maxListed?: number;
 }
 
 /** The folder itself cannot be listed (gone, or not readable). */
@@ -94,14 +102,23 @@ export class BuildSupersededError extends Error {
   }
 }
 
+/** The folder holds more files than the build lists ({@link BuildOptions.maxListed}). */
+class TooManyFilesError extends Error {
+  constructor() {
+    super('The folder holds too many files to list.');
+    this.name = 'TooManyFilesError';
+  }
+}
+
 /** One item of the folder that goes into the zip. */
 interface Item {
   /** Relative, `/`-separated. */
   readonly path: string;
-  /** A regular file is read; a link or special file goes in as an empty entry with its mode. */
+  /**
+   * A regular file is read; a link or special file goes in as an empty entry with its mode (read
+   * with `lstat` once the folder is known to be within the limits).
+   */
   readonly kind: 'file' | 'other';
-  /** Its Unix mode as `lstat` gives it, file type bits included. */
-  readonly mode: number;
 }
 
 /** One entry of the zip being written. */
@@ -132,7 +149,10 @@ interface Entry {
  * header carries the sizes and CRC-32 (no data descriptors), as `validatePackage` rejects a
  * stored entry with one. A zip that grows past `PACKAGE_LIMITS.maxArchiveBytes` is abandoned with
  * an `archive_too_large` problem, and a folder with more than `PACKAGE_LIMITS.maxFiles` files with
- * an `archive_too_many_files` one, without being read, so no ZIP64 record is ever needed.
+ * an `archive_too_many_files` one, without being read, so no ZIP64 record is ever needed. Listing
+ * stops after `PACKAGE_LIMITS.maxListedEntries` files, as `validatePackage` stops listing a zip
+ * (`archive_too_many_files.not_counted`), so a folder picked by mistake (a project root with its
+ * `node_modules`, a home folder) is not walked to the end on every run.
  *
  * @throws {FolderUnreadableError} when `folder` cannot be listed, {@link EntryUnreadableError}
  *   for a file or folder in it the User may not open, {@link FolderChangedError} when something
@@ -144,10 +164,21 @@ export async function buildPackage(
 ): Promise<BuiltPackage> {
   const isCurrent = options.isCurrent ?? (() => true);
   const maxBytes = options.maxBytes ?? PACKAGE_LIMITS.maxArchiveBytes;
+  const maxListed = options.maxListed ?? PACKAGE_LIMITS.maxListedEntries;
   const rules = exclusionRules(await readHarnessIgnore(folder));
   const items: Item[] = [];
   const excluded: string[] = [];
-  await walk(folder, '', rules, items, excluded, isCurrent);
+  try {
+    await walk(folder, '', { rules, items, excluded, isCurrent, maxListed });
+  } catch (error) {
+    if (!(error instanceof TooManyFilesError)) throw error;
+    excluded.sort(compare);
+    const problem = packageProblem('archive_too_many_files.not_counted', {
+      counted: maxListed,
+      limit: PACKAGE_LIMITS.maxFiles,
+    });
+    return { bytes: null, size: 0, problem, excluded, rules };
+  }
   items.sort((a, b) => compare(a.path, b.path));
   excluded.sort(compare);
 
@@ -166,7 +197,7 @@ export async function buildPackage(
     const entry =
       item.kind === 'file'
         ? await deflateFile(folder, item, maxBytes - size)
-        : emptyEntry(item.path, item.mode);
+        : emptyEntry(item.path, await modeOf(folder, item.path));
     size += localHeaderSize(entry) + entry.compressedSize + centralHeaderSize(entry);
     if (entry.size > MAX_ZIP32 || size + END_RECORD_SIZE > maxBytes) {
       const problem = packageProblem('archive_too_large', {
@@ -190,7 +221,7 @@ function compare(a: string, b: string): number {
 function packageProblem(messageKey: MessageKey, params: ProblemParams): Problem {
   return {
     path: '$',
-    code: messageKey,
+    code: messageKey.split('.', 1)[0] ?? messageKey,
     messageKey,
     params,
     message: interpolate(MESSAGES_EN[messageKey], params),
@@ -213,15 +244,21 @@ async function readHarnessIgnore(folder: string): Promise<string | null> {
   }
 }
 
-/** Lists `relative` (inside `root`): what goes in to `items`, what is left out to `excluded`. */
-async function walk(
-  root: string,
-  relative: string,
-  rules: ExclusionRules,
-  items: Item[],
-  excluded: string[],
-  isCurrent: () => boolean,
-): Promise<void> {
+/** What a walk of the folder fills in, and what it follows. */
+interface Walk {
+  readonly rules: ExclusionRules;
+  /** What goes in. */
+  readonly items: Item[];
+  /** What is left out. */
+  readonly excluded: string[];
+  readonly isCurrent: () => boolean;
+  /** More items than this stop the walk with {@link TooManyFilesError}. */
+  readonly maxListed: number;
+}
+
+/** Lists `relative` (inside `root`) into `walk`. */
+async function walk(root: string, relative: string, state: Walk): Promise<void> {
+  const { rules, items, excluded, isCurrent } = state;
   if (!isCurrent()) throw new BuildSupersededError();
   let children: Dirent[];
   try {
@@ -234,20 +271,24 @@ async function walk(
     const path = relative === '' ? child.name : `${relative}/${child.name}`;
     if (child.isDirectory()) {
       if (rules.excludesFolder(path)) excluded.push(`${path}/`);
-      else await walk(root, path, rules, items, excluded, isCurrent);
+      else await walk(root, path, state);
       continue;
     }
     if (rules.excludesFile(path)) {
       excluded.push(path);
       continue;
     }
-    let mode: number;
-    try {
-      mode = (await lstat(join(root, ...splitPath(path)))).mode;
-    } catch (error) {
-      throw unreadable(path, error);
-    }
-    items.push({ path, kind: child.isFile() ? 'file' : 'other', mode });
+    items.push({ path, kind: child.isFile() ? 'file' : 'other' });
+    if (items.length > state.maxListed) throw new TooManyFilesError();
+  }
+}
+
+/** The Unix mode of a link or special file, as `lstat` gives it, file type bits included. */
+async function modeOf(root: string, path: string): Promise<number> {
+  try {
+    return (await lstat(join(root, ...splitPath(path)))).mode;
+  } catch (error) {
+    throw unreadable(path, error);
   }
 }
 

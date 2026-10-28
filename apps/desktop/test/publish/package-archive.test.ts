@@ -174,4 +174,31 @@ describe('buildPackage', () => {
       /^The Harness Package is \d+ bytes; the limit is 524288000 bytes/,
     );
   });
+
+  it('stops listing a folder with too many files, as validatePackage stops listing a zip', async () => {
+    rmSync(folder, { recursive: true });
+    for (let index = 0; index < 10; index++) {
+      for (let file = 0; file < 5; file++) write(`d${String(index)}/f${String(file)}.txt`);
+    }
+    let directoriesEntered = 0;
+    const built = await buildPackage(folder, {
+      maxListed: 3,
+      isCurrent: () => {
+        directoriesEntered += 1;
+        return true;
+      },
+    });
+    expect(built.bytes).toBeNull();
+    expect(built.problem).toMatchObject({
+      path: '$',
+      code: 'archive_too_many_files',
+      messageKey: 'archive_too_many_files.not_counted',
+      params: { counted: 3, limit: 20_000 },
+    });
+    expect(built.problem?.message).toBe(
+      'The Harness Package has more than 3 entries, far more than the limit of 20000 files, so it was not checked further.',
+    );
+    // The root and the first folder, whose fourth file stopped the walk: no other folder.
+    expect(directoriesEntered).toBe(2);
+  });
 });

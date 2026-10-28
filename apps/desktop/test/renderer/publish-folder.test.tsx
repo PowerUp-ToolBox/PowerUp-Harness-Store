@@ -78,6 +78,16 @@ function validation(overrides: Partial<FolderValidation> = {}): FolderValidation
 
 const ICON_PROBLEM = problem('assets/icon.png', 'icon_dimensions', { width: '256', height: '256' });
 
+/** What the Runtime answers for a path that is not a folder. */
+const NOT_A_FOLDER = {
+  ok: false,
+  error: {
+    code: 'invalid_input',
+    messageKey: 'error.invalid_input',
+    message: 'Harness Store sent an invalid request internally.',
+  },
+} as const;
+
 function signedIn(locale: 'en' | 'zh-CN' = 'en') {
   const api = installFakeApi(locale);
   api.auth.whoami.mockResolvedValue({ ok: true, data: FAKE_PUBLISHER });
@@ -180,6 +190,43 @@ describe('choosing and validating a folder', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('Drop a folder, not a file.');
     expect(screen.getByText('/dropped/hello-web')).toBeDefined();
     expect(screen.getByText('No problems found.')).toBeDefined();
+  });
+
+  it('the chosen folder, now a file, is an error rather than a refused drop', async () => {
+    const api = signedIn();
+    api.publish.validateFolder.mockResolvedValueOnce({ ok: true, data: validation() });
+    await renderApp('#/publish');
+    await chooseFolder();
+    await screen.findByText('No problems found.');
+
+    api.publish.validateFolder.mockResolvedValue(NOT_A_FOLDER);
+    fireEvent.click(screen.getByRole('button', { name: 'Re-check' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'This folder is not a valid Harness, or it changed since it was checked. Check it again.',
+    );
+    expect(screen.queryByText('Drop a folder, not a file.')).toBeNull();
+    expect(screen.queryByText('No problems found.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull();
+    expect(api.publish.validateFolder).toHaveBeenCalledTimes(2);
+  });
+
+  it('two overlapping runs of the chosen folder, now a file, end without running it again', async () => {
+    const api = signedIn();
+    api.publish.validateFolder.mockResolvedValueOnce({ ok: true, data: validation() });
+    await renderApp('#/publish');
+    await chooseFolder();
+    await screen.findByText('No problems found.');
+
+    api.publish.validateFolder.mockResolvedValue(NOT_A_FOLDER);
+    act(() => {
+      api.emit('publish.folderChanged', { path: FOLDER });
+      api.emit('publish.folderChanged', { path: FOLDER });
+    });
+    await screen.findByText(
+      'This folder is not a valid Harness, or it changed since it was checked. Check it again.',
+    );
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(api.publish.validateFolder).toHaveBeenCalledTimes(3);
   });
 
   it('accepts drag-over, so the drop reaches the screen', async () => {

@@ -48,6 +48,8 @@ export interface PublishServiceOptions {
   readonly debounceMs?: number;
   /** The archive size limit; default `PACKAGE_LIMITS.maxArchiveBytes`. Tests lower it. */
   readonly maxArchiveBytes?: number;
+  /** Watches the folder; default `fs.watch`. Tests drive its events. */
+  readonly watch?: typeof watch;
 }
 
 /** The Publish flow's Runtime side (P0-08), as the IPC handlers use it. */
@@ -77,11 +79,13 @@ export interface PublishService {
  *
  * The folder of the latest run is watched (`fs.watch`, recursive, one folder at a time): a change
  * outside what the exclusion rules leave out, `.harnessignore` itself included, is reported once
- * the folder has been quiet for {@link FOLDER_CHANGE_DEBOUNCE_MS}. A folder the OS cannot watch
- * is not watched; Re-check still works.
+ * the folder has been quiet for {@link FOLDER_CHANGE_DEBOUNCE_MS}. A watcher that could not start,
+ * that failed, or whose folder itself was deleted or moved is dropped, after one last report: the
+ * next validation of the folder (that report's, a Re-check, a new pick) watches it afresh.
  */
 export function createPublishService(options: PublishServiceOptions): PublishService {
   const debounceMs = options.debounceMs ?? FOLDER_CHANGE_DEBOUNCE_MS;
+  const watchFolder = options.watch ?? watch;
   let runs = 0;
   let latest: { readonly id: string; readonly bytes: Uint8Array } | null = null;
   let watched: Watched | null = null;
@@ -94,7 +98,7 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
   };
 
   const startWatching = (path: string) => {
-    if (watched?.path === path) return;
+    if (watched?.path === path && watched.watcher !== null) return;
     stopWatching();
     const entry: Watched = { path, rules: exclusionRules(null), watcher: null, timer: null };
     const changed = () => {
@@ -104,21 +108,30 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
         if (watched === entry) options.onFolderChanged?.(path);
       }, debounceMs);
     };
+    /** The watcher is dead: the next validation of the folder starts a new one. */
+    const drop = () => {
+      entry.watcher?.close();
+      entry.watcher = null;
+    };
     try {
-      entry.watcher = watch(path, { recursive: true }, (_event, filename) => {
-        const relative = filename === null ? null : filename.split(sep).join('/');
-        if (relative !== null && relative !== HARNESS_IGNORE_FILE) {
+      entry.watcher = watchFolder(path, { recursive: true }, (event, filename) => {
+        const relative = filename === null ? '' : filename.split(sep).join('/');
+        if (relative === '') {
+          // The folder itself. Linux reports its deletion or move as a 'rename' of '' (and the
+          // rules cannot be asked about '').
+          if (event === 'rename') drop();
+        } else if (relative !== HARNESS_IGNORE_FILE) {
           if (entry.rules.excludesFile(relative) || entry.rules.excludesFolder(relative)) return;
         }
         changed();
       });
       // The folder was deleted or moved: one more report, whose validation says so.
       entry.watcher.on('error', () => {
-        entry.watcher?.close();
+        drop();
         changed();
       });
     } catch {
-      // Too many watches, or a file system that cannot be watched: Re-check still works.
+      // Too many watches, or a file system that cannot be watched: Re-check tries again.
     }
     watched = entry;
   };
@@ -171,6 +184,8 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
       } catch {
         return fail('package_invalid');
       }
+      // A newer run may already watch its own folder: this one must not take the watch back.
+      if (!isCurrent()) return fail('package_invalid');
       startWatching(path);
 
       let built;
@@ -192,7 +207,7 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
         }
         throw error;
       }
-      if (watched?.path === path) watched.rules = built.rules;
+      if (isCurrent() && watched?.path === path) watched.rules = built.rules;
 
       const empty = {
         warnings: [],
