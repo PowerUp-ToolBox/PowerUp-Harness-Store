@@ -20,6 +20,15 @@ export function createHandlers(services: Services): IpcHandlers {
       if (input !== undefined) return fail('invalid_input', { method: 'app.ping' });
       return ok({ version: services.app.version });
     },
+    'app.status': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'app.status' });
+      return ok(services.app.status());
+    },
+    'app.quit': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'app.quit' });
+      services.app.quit();
+      return ok(null);
+    },
     'settings.get': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'settings.get' });
       return ok(services.settings.get());
@@ -28,6 +37,10 @@ export function createHandlers(services: Services): IpcHandlers {
       const patch = parseSettingsPatch(input);
       if (patch === null) return fail('invalid_input', { method: 'settings.set' });
       return ok(services.settings.set(patch));
+    },
+    'diagnostics.get': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'diagnostics.get' });
+      return ok(services.diagnostics.get());
     },
   };
 }

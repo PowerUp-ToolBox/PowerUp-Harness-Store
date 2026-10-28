@@ -20,7 +20,7 @@ export interface SettingsState {
 const I18nContext = createContext<I18n | null>(null);
 const SettingsContext = createContext<SettingsState | null>(null);
 
-// Used only if the Runtime cannot answer settings.get, which reads a local file and never fails.
+// Used only if the Runtime cannot answer settings.get, which falls back to the OS locale itself.
 const FALLBACK_SETTINGS: Settings = { resolvedLocale: 'en' };
 
 /**

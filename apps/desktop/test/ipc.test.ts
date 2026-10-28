@@ -6,11 +6,23 @@ import { translatorFor } from '../src/shared/i18n/translate.js';
 import { IPC_METHODS } from '../src/shared/ipc.js';
 
 const MAIN_WINDOW = { id: 'main window webContents' };
+const quit = vi.fn();
 const fakeServices: Services = {
-  app: { version: '1.2.3' },
+  app: {
+    version: '1.2.3',
+    status: () => ({ state: 'failed', stage: 'gateway', detail: 'listen EADDRINUSE' }),
+    quit,
+  },
   settings: {
     get: () => ({ resolvedLocale: 'en' }),
     set: () => ({ resolvedLocale: 'en' }),
+  },
+  diagnostics: {
+    get: () => ({
+      version: '1.2.3',
+      gateway: { running: true, port: 51234 },
+      databasePath: '/profile/harness-store.sqlite',
+    }),
   },
 };
 const en = translatorFor('en');
@@ -37,6 +49,46 @@ describe('IPC handlers against a fake service container', () => {
       data: { version: '1.2.3' },
     });
   });
+
+  it('app.status returns how the Runtime started', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'app.status' })).resolves.toEqual({
+      ok: true,
+      data: { state: 'failed', stage: 'gateway', detail: 'listen EADDRINUSE' },
+    });
+  });
+
+  it('app.quit asks the app to quit', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'app.quit' })).resolves.toEqual({
+      ok: true,
+      data: null,
+    });
+    expect(quit).toHaveBeenCalledOnce();
+  });
+
+  it('diagnostics.get returns the version, Model Gateway status and database path', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'diagnostics.get' })).resolves.toEqual({
+      ok: true,
+      data: {
+        version: '1.2.3',
+        gateway: { running: true, port: 51234 },
+        databasePath: '/profile/harness-store.sqlite',
+      },
+    });
+  });
+
+  it.each(['app.status', 'app.quit', 'diagnostics.get'])(
+    '%s rejects any input as invalid_input',
+    async (method) => {
+      const { dispatch } = dispatcherFor();
+      await expect(dispatch(MAIN_WINDOW, { method, input: {} })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'invalid_input', params: { method } },
+      });
+    },
+  );
 
   it('app.ping rejects any input as invalid_input', async () => {
     const { dispatch } = dispatcherFor();

@@ -5,8 +5,9 @@ import type { IpcRequest } from '../src/shared/ipc.js';
 describe('buildApi (window.api)', () => {
   it('exposes one function per method, nested by domain, plus on()', () => {
     const api = buildApi(vi.fn<Invoke>(), vi.fn<Listen>());
-    expect(Object.keys(api).sort()).toEqual(['app', 'on', 'settings']);
-    expect(Object.keys(api.app)).toEqual(['ping']);
+    expect(Object.keys(api).sort()).toEqual(['app', 'diagnostics', 'on', 'settings']);
+    expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit']);
+    expect(Object.keys(api.diagnostics)).toEqual(['get']);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
     expect(Object.isFrozen(api)).toBe(true);
     expect(Object.isFrozen(api.app)).toBe(true);

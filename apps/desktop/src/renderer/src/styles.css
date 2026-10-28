@@ -20,6 +20,7 @@
   --color-accent: #2b59c3;
   --color-accent-hover: #1e3f8f;
   --color-error: #b3261e;
+  --color-success: #1e7d3c;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -34,6 +35,7 @@
     --color-accent: #8aa9f0;
     --color-accent-hover: #b0c6f6;
     --color-error: #f2b8b5;
+    --color-success: #7fd49a;
   }
 }
 
@@ -165,8 +167,42 @@ code {
   align-items: baseline;
 }
 
-.settings-row label {
+.settings-row label,
+.settings-heading {
+  margin: 0;
+  font-size: inherit;
   font-weight: 600;
+}
+
+.diagnostics {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0;
+}
+
+.diagnostics dt {
+  color: var(--color-text-muted);
+}
+
+.diagnostics dd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.status-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-error);
+}
+
+.status-dot[data-running='true'] {
+  background: var(--color-success);
 }
 
 .settings-control {
@@ -195,4 +231,70 @@ select {
 .error-message {
   margin: 0;
   color: var(--color-error);
+}
+
+button {
+  font: inherit;
+}
+
+.button-primary {
+  min-height: 32px;
+  padding: 6px 16px;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-accent);
+  color: var(--color-bg);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button-primary:hover {
+  background: var(--color-accent-hover);
+}
+
+/* The blocking screen shown instead of the app when the Runtime could not start. */
+.startup-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 36px 16px;
+  background: var(--color-bg-subtle);
+}
+
+.startup-error-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  max-width: 560px;
+  padding: 28px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg);
+}
+
+.startup-error-card h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.startup-error-card p {
+  margin: 0;
+}
+
+.startup-error-card details {
+  width: 100%;
+}
+
+.startup-error-card pre {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--color-bg-subtle);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

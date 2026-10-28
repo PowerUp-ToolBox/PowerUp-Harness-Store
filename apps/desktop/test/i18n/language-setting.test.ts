@@ -1,29 +1,57 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createAppStateFile } from '../../src/main/runtime/app-state-file.js';
+import { openDatabase } from '../../src/main/runtime/database.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
+import type { Services } from '../../src/main/runtime/services.js';
+import { createSqliteSettingsStore } from '../../src/main/runtime/settings-store.js';
 import { createSettingsService, parseSettingsPatch } from '../../src/main/runtime/settings.js';
 
 const MAIN_WINDOW = {};
 
 let dir: string;
 let path: string;
+let opened: DatabaseSync[];
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'harness-store-settings-'));
-  path = join(dir, 'app-state.json');
+  path = join(dir, 'harness-store.sqlite');
+  opened = [];
 });
 afterEach(() => {
+  for (const db of opened) db.close();
   rmSync(dir, { recursive: true, force: true });
 });
 
+/** The database of one app run, on the same userData. */
+function database(): DatabaseSync {
+  const db = openDatabase(path);
+  opened.push(db);
+  return db;
+}
+
+/** The `settings` table's rows, values JSON-decoded. */
+function storedSettings(): Record<string, unknown> {
+  const rows = database().prepare('SELECT key, value FROM settings').all() as {
+    key: string;
+    value: string;
+  }[];
+  return Object.fromEntries(rows.map(({ key, value }) => [key, JSON.parse(value) as unknown]));
+}
+
 /** One app run: a fresh Runtime reading the same userData, on an OS in `osLocale`. */
 function launch(osLocale: string) {
-  const settings = createSettingsService(createAppStateFile(path), () => osLocale);
+  const services: Services = {
+    app: { version: '1.0.0', status: () => ({ state: 'ready' }), quit: () => undefined },
+    settings: createSettingsService(createSqliteSettingsStore(database()), () => osLocale),
+    diagnostics: {
+      get: () => ({ version: '1.0.0', gateway: { running: false }, databasePath: path }),
+    },
+  };
   const dispatch = createDispatcher({
-    handlers: createHandlers({ app: { version: '1.0.0' }, settings }),
+    handlers: createHandlers(services),
     isTrustedSender: (sender) => sender === MAIN_WINDOW,
   });
   return (method: string, input?: unknown) => dispatch(MAIN_WINDOW, { method, input });
@@ -55,7 +83,7 @@ describe('language setting over IPC', () => {
       ok: true,
       data: { locale: 'zh-CN', resolvedLocale: 'zh-CN' },
     });
-    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ locale: 'zh-CN' });
+    expect(storedSettings()).toEqual({ locale: 'zh-CN' });
   });
 
   it('choosing System (locale: null) clears the override, back to the OS locale', async () => {
@@ -64,15 +92,15 @@ describe('language setting over IPC', () => {
       ok: true,
       data: { resolvedLocale: 'zh-CN' },
     });
-    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({});
+    expect(storedSettings()).toEqual({});
   });
 
   it('keeps the window state when the locale changes', () => {
-    const file = createAppStateFile(path);
+    const store = createSqliteSettingsStore(database());
     const windowState = { x: 1, y: 2, width: 1000, height: 700, isMaximized: false };
-    file.update({ windowState });
-    createSettingsService(file, () => 'en').set({ locale: 'zh-CN' });
-    expect(file.read()).toEqual({ windowState, locale: 'zh-CN' });
+    store.write('window_state', windowState);
+    createSettingsService(store, () => 'en').set({ locale: 'zh-CN' });
+    expect(storedSettings()).toEqual({ window_state: windowState, locale: 'zh-CN' });
   });
 
   it.each([
@@ -109,9 +137,16 @@ describe('parseSettingsPatch', () => {
   });
 });
 
-describe('createAppStateFile locale', () => {
-  it.each(['"fr"', '"zh"', '1', 'null'])('reads the stored locale %s as absent', (value) => {
-    writeFileSync(path, `{"locale":${value}}`);
-    expect(createAppStateFile(path).read()).toEqual({});
-  });
+describe('stored locale', () => {
+  it.each(['"fr"', '"zh"', '1', 'null', '{not json'])(
+    'reads the stored value %s as absent',
+    (value) => {
+      database().prepare("INSERT INTO settings (key, value) VALUES ('locale', ?)").run(value);
+      expect(
+        createSettingsService(createSqliteSettingsStore(database()), () => 'en').get(),
+      ).toEqual({
+        resolvedLocale: 'en',
+      });
+    },
+  );
 });

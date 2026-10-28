@@ -47,9 +47,32 @@ export type IpcResult<T> =
  */
 export interface IpcMethods {
   'app.ping': { input: undefined; output: { version: string } };
+  /** Whether the Runtime started; the renderer asks first and shows an error screen on failure. */
+  'app.status': { input: undefined; output: StartupStatus };
+  /** Quits the app, stopping the Model Gateway and closing the database first. */
+  'app.quit': { input: undefined; output: null };
   'settings.get': { input: undefined; output: Settings };
   /** Applies the patch and returns the settings as they now are. */
   'settings.set': { input: SettingsPatch; output: Settings };
+  /** Read-only facts for support and debugging, shown in Settings. */
+  'diagnostics.get': { input: undefined; output: Diagnostics };
+}
+
+/** The Runtime's startup steps, in order: open and migrate SQLite, then start the Model Gateway. */
+export type StartupStage = 'database' | 'gateway';
+
+/** How the Runtime's startup went; `detail` is the cause, in English, for a support request. */
+export type StartupStatus =
+  | { readonly state: 'ready' }
+  | { readonly state: 'failed'; readonly stage: StartupStage; readonly detail: string };
+
+export interface Diagnostics {
+  /** The desktop app's version. */
+  readonly version: string;
+  /** The Model Gateway as it is now: listening on a loopback port, or not running. */
+  readonly gateway: { readonly running: true; readonly port: number } | { readonly running: false };
+  /** The absolute path of the local SQLite database file. */
+  readonly databasePath: string;
 }
 
 /** The app settings as the renderer sees them. */
@@ -73,8 +96,11 @@ export type IpcOutput<M extends IpcMethodName> = IpcMethods[M]['output'];
 // not here, or listed here but not in IpcMethods.
 const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'app.ping': true,
+  'app.status': true,
+  'app.quit': true,
   'settings.get': true,
   'settings.set': true,
+  'diagnostics.get': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */

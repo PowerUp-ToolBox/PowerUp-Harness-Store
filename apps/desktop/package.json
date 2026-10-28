@@ -16,7 +16,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --build tsconfig.json tsconfig.web.json",
     "test": "vitest run",
-    "test:i18n": "vitest run i18n"
+    "test:i18n": "vitest run i18n",
+    "test:runtime-bootstrap": "vitest run runtime-bootstrap"
   },
   "devDependencies": {
     "@formatjs/icu-messageformat-parser": "3.5.21",

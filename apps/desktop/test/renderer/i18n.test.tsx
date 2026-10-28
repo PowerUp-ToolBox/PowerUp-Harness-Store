@@ -49,7 +49,7 @@ describe('UI language', () => {
   it('switching the language in Settings updates every visible string at once', async () => {
     const api = installFakeApi('en');
     await renderApp('#/settings');
-    expect(await screen.findByText('Version 4.5.6')).toBeDefined();
+    expect(await screen.findByText('Running on port 51234')).toBeDefined();
 
     const select = screen.getByLabelText<HTMLSelectElement>('Language');
     expect(select.value).toBe('system');
@@ -61,7 +61,7 @@ describe('UI language', () => {
     expect(api.settings.set).toHaveBeenCalledWith({ locale: 'zh-CN' });
     expect(sidebarLabels('主导航')).toEqual(ZH_SECTIONS);
     expect(screen.getByRole('heading', { level: 1, name: '设置' })).toBeDefined();
-    expect(screen.getByText('版本 4.5.6')).toBeDefined();
+    expect(screen.getByText('运行中，端口 51234')).toBeDefined();
     const zhSelect = screen.getByLabelText<HTMLSelectElement>('语言');
     expect(zhSelect.value).toBe('zh-CN');
     expect([...zhSelect.options].map((option) => option.text)).toEqual([

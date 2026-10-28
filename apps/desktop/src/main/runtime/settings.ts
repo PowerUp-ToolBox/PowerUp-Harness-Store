@@ -1,6 +1,6 @@
 import { isLocale, resolveLocale } from '../../shared/i18n/locale.js';
 import type { Settings, SettingsPatch } from '../../shared/ipc.js';
-import type { AppStateFile } from './app-state-file.js';
+import type { SettingsStore } from './settings-store.js';
 
 /** The app settings the renderer reads and writes over IPC (`settings.get`, `settings.set`). */
 export interface SettingsService {
@@ -10,22 +10,24 @@ export interface SettingsService {
 }
 
 /**
- * Settings kept in the app state file until P0-04.3 moves them into SQLite. `osLocale` is
- * Electron's `app.getLocale()`, read on every call so the resolved locale follows the OS.
+ * Settings kept in `store` (the SQLite `settings` table). `osLocale` is Electron's
+ * `app.getLocale()`, read on every call so the resolved locale follows the OS. A stored locale
+ * that is not a known one reads as absent.
  */
 export function createSettingsService(
-  store: AppStateFile,
+  store: SettingsStore,
   osLocale: () => string,
 ): SettingsService {
   const get = (): Settings => {
-    const { locale } = store.read();
+    const stored = store.read('locale');
+    const locale = isLocale(stored) ? stored : undefined;
     const resolvedLocale = resolveLocale(locale, osLocale());
     return locale === undefined ? { resolvedLocale } : { locale, resolvedLocale };
   };
   return {
     get,
     set(patch) {
-      if (patch.locale !== undefined) store.update({ locale: patch.locale ?? undefined });
+      if (patch.locale !== undefined) store.write('locale', patch.locale ?? undefined);
       return get();
     },
   };

@@ -1,8 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createAppStateFile } from '../src/main/runtime/app-state-file.js';
+import { describe, expect, it } from 'vitest';
 import {
   initialWindowBounds,
   parseWindowState,
@@ -93,34 +89,4 @@ describe('parseWindowState', () => {
   ])('rejects %j', (value) => {
     expect(parseWindowState(value)).toBeNull();
   });
-});
-
-describe('createAppStateFile', () => {
-  let dir: string;
-  let path: string;
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'harness-store-app-state-'));
-    path = join(dir, 'app-state.json');
-  });
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('reads a missing file as empty', () => {
-    expect(createAppStateFile(path).read()).toEqual({});
-  });
-
-  it('round-trips the window state across instances (an app restart)', () => {
-    createAppStateFile(path).update({ windowState: SAVED });
-    expect(createAppStateFile(path).read()).toEqual({ windowState: SAVED });
-    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ windowState: SAVED });
-  });
-
-  it.each(['{not json', '[]', '{"windowState":{"x":1}}'])(
-    'reads the corrupt or malformed file %j as empty',
-    (content) => {
-      writeFileSync(path, content);
-      expect(createAppStateFile(path).read()).toEqual({});
-    },
-  );
 });

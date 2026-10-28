@@ -26,12 +26,12 @@ describe('catalog parity (CI)', () => {
     const broken = {
       ...zhCN,
       'extra.key': '多余',
-      'settings.version': '版本 {ver}',
+      'settings.diagnostics.gateway.running': '运行中，端口 {portNumber}',
       'error.slot_unbound': '槽位 {slot',
     };
     expect(compareCatalogs(en, broken, 'zh-CN')).toEqual([
       'zh-CN.json has the key "extra.key", which en.json does not',
-      'zh-CN.json "settings.version" uses the arguments [ver], but en.json uses [version]',
+      'zh-CN.json "settings.diagnostics.gateway.running" uses the arguments [portNumber], but en.json uses [port]',
       expect.stringMatching(/^zh-CN\.json "error\.slot_unbound" is not valid ICU: /),
     ]);
   });

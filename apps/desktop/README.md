@@ -1,6 +1,6 @@
 # @harness-store/desktop
 
-> Status: shell and i18n (P0-04.1, P0-04.2): sidebar navigation, placeholder screens, typed IPC, window state, and every UI string in `en` and `zh-CN`. The embedded Gateway and SQLite, offline handling and the first-run wizard follow in P0-04; the Runtime's installer and Process Supervisor in P0-05 and P0-10.
+> Status: shell, i18n and the embedded Runtime (P0-04.1 to P0-04.3): sidebar navigation, placeholder screens, typed IPC, window state, every UI string in `en` and `zh-CN`, and the Model Gateway and local SQLite database starting with the app. Offline handling and the first-run wizard follow in P0-04; the Runtime's installer and Process Supervisor in P0-05 and P0-10.
 
 The Harness Store desktop app, built with Electron + React + TypeScript ([ADR-0003](../../docs/adr/0003-typescript-electron-stack.md)).
 
@@ -12,16 +12,22 @@ References: [`docs/tech/architecture.md`](../../docs/tech/architecture.md) §2 a
 
 ## Layout
 
-| Path                | What it holds                                                                                                                                  |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main/index.ts` | The Electron main process (the Runtime): app lifecycle, the main window, IPC registration. The only main file that imports Electron            |
-| `src/main/runtime/` | Services, IPC handlers and the dispatcher, window state. Never imports Electron (an ESLint rule enforces it), so it is tested under plain Node |
-| `src/preload/`      | Exposes `window.api`, built from the IPC method list, through the context bridge. Bundled as CommonJS (`index.cjs`) for the sandbox            |
-| `src/shared/ipc.ts` | The IPC contract: method names with input and output types, the `{ ok, data } \| { ok, error }` result, events                                 |
-| `src/shared/i18n/`  | The `en.json` and `zh-CN.json` message catalogs (ICU), locale resolution, the translator with its fallbacks, and Intl formatting               |
-| `src/renderer/`     | The React UI: hash routes, the shell (sidebar, page header), one module per screen, and `I18nProvider` with the `useI18n()` hook               |
+| Path                | What it holds                                                                                                                                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main/index.ts` | The Electron main process (the Runtime): app lifecycle, the main window, IPC registration. The only main file that imports Electron                                                                              |
+| `src/main/runtime/` | Startup and shutdown (`bootstrap.ts`), SQLite and its migrations, services, IPC handlers and the dispatcher, window state. Never imports Electron (an ESLint rule enforces it), so it is tested under plain Node |
+| `src/preload/`      | Exposes `window.api`, built from the IPC method list, through the context bridge. Bundled as CommonJS (`index.cjs`) for the sandbox                                                                              |
+| `src/shared/ipc.ts` | The IPC contract: method names with input and output types, the `{ ok, data } \| { ok, error }` result, events                                                                                                   |
+| `src/shared/i18n/`  | The `en.json` and `zh-CN.json` message catalogs (ICU), locale resolution, the translator with its fallbacks, and Intl formatting                                                                                 |
+| `src/renderer/`     | The React UI: hash routes, the shell (sidebar, page header), one module per screen, and `I18nProvider` with the `useI18n()` hook                                                                                 |
 
-The renderer runs with `contextIsolation`, `sandbox` and no Node integration under a strict Content Security Policy (`src/renderer/index.html`). It sees only `window.api`: `await window.api.app.ping()` returns `{ ok: true, data: { version } }`. The main window's size and position, and the language chosen in Settings, are saved in `app-state.json` in the userData folder; set `HARNESS_STORE_USER_DATA_DIR` to run with a fresh profile.
+The renderer runs with `contextIsolation`, `sandbox` and no Node integration under a strict Content Security Policy (`src/renderer/index.html`). It sees only `window.api`: `await window.api.app.ping()` returns `{ ok: true, data: { version } }`. Set `HARNESS_STORE_USER_DATA_DIR` to run with a fresh profile.
+
+## Runtime startup and data
+
+On launch, before the window opens, the Runtime opens `harness-store.sqlite` in the userData folder (creating it and applying the migrations on first run), then starts the Model Gateway on `127.0.0.1` with a port the OS picks. If either step fails, the window shows a blocking error screen naming the step, with the details and Quit, instead of the app (`app.status`). Settings shows the Gateway's port, the database path and the app version (`diagnostics.get`). Quitting stops the Gateway, which writes its last Usage Records, then closes the database.
+
+SQLite is Node's built-in `node:sqlite`, so there is no native module to rebuild. Migrations are plain SQL files in `src/main/runtime/migrations/` (`0001_…sql`, never edited once released), bundled into the main process and tracked with `PRAGMA user_version`; each runs in its own transaction. The first creates `settings` (key/value, JSON values: the language override and the main window's size and position) and `usage_records` (one row per Usage Record from the Gateway).
 
 ## Languages
 
@@ -31,12 +37,13 @@ Every string the User sees comes from `src/shared/i18n/en.json` and `zh-CN.json`
 
 Run them with `pnpm --filter @harness-store/desktop <script>` from the repo root.
 
-| Command          | What it does                                                                                      |
-| ---------------- | ------------------------------------------------------------------------------------------------- |
-| `pnpm dev`       | `electron-vite dev`: the app with renderer hot reload; main and preload rebuild and restart       |
-| `pnpm build`     | `electron-vite build`: compiles main, preload and renderer into `out/` (what the root build runs) |
-| `pnpm package`   | Builds, then packages the app for the current OS into `release/` with electron-builder (manual)   |
-| `pnpm test`      | Vitest: seam tests under Node, renderer component tests under jsdom                               |
-| `pnpm test:i18n` | Only the i18n tests: catalog parity, locale resolution, translation, formatting, the lint rule    |
-| `pnpm lint`      | ESLint with the shared root config                                                                |
-| `pnpm typecheck` | `tsc --build` over `tsconfig.json` (main, preload, shared) and `tsconfig.web.json` (renderer)     |
+| Command                       | What it does                                                                                                    |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev`                    | `electron-vite dev`: the app with renderer hot reload; main and preload rebuild and restart                     |
+| `pnpm build`                  | `electron-vite build`: compiles main, preload and renderer into `out/` (what the root build runs)               |
+| `pnpm package`                | Builds, then packages the app for the current OS into `release/` with electron-builder (manual)                 |
+| `pnpm test`                   | Vitest: seam tests under Node, renderer component tests under jsdom                                             |
+| `pnpm test:i18n`              | Only the i18n tests: catalog parity, locale resolution, translation, formatting, the lint rule                  |
+| `pnpm test:runtime-bootstrap` | Only the startup tests: SQLite and migrations against a temp data dir, Gateway start and stop, the error screen |
+| `pnpm lint`                   | ESLint with the shared root config                                                                              |
+| `pnpm typecheck`              | `tsc --build` over `tsconfig.json` (main, preload, shared) and `tsconfig.web.json` (renderer)                   |

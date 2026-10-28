@@ -17,8 +17,13 @@ describe('t(key, params)', () => {
   });
 
   it('fills ICU arguments from params', () => {
-    expect(translatorFor('en').t('settings.version', { version: '1.2.3' })).toBe('Version 1.2.3');
-    expect(translatorFor('zh-CN').t('settings.version', { version: '1.2.3' })).toBe('版本 1.2.3');
+    const port = { port: 51234 };
+    expect(translatorFor('en').t('settings.diagnostics.gateway.running', port)).toBe(
+      'Running on port 51234',
+    );
+    expect(translatorFor('zh-CN').t('settings.diagnostics.gateway.running', port)).toBe(
+      '运行中，端口 51234',
+    );
   });
 
   it('accepts number params', () => {

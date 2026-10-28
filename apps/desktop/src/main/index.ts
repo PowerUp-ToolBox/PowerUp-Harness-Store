@@ -6,16 +6,10 @@
 import { join, resolve } from 'node:path';
 import { app, BrowserWindow, ipcMain, screen, session, shell } from 'electron';
 import { IPC_INVOKE_CHANNEL } from '../shared/ipc.js';
-import {
-  APP_STATE_FILE_NAME,
-  createAppStateFile,
-  type AppStateFile,
-} from './runtime/app-state-file.js';
+import { startRuntime, type Runtime } from './runtime/bootstrap.js';
 import { createDispatcher } from './runtime/dispatcher.js';
 import { createHandlers } from './runtime/handlers.js';
 import { isAllowedExternalUrl, mainWindowOptions } from './runtime/main-window.js';
-import type { Services } from './runtime/services.js';
-import { createSettingsService } from './runtime/settings.js';
 import { initialWindowBounds } from './runtime/window-state.js';
 
 // A fresh profile for manual runs and E2E: must be set before `ready`.
@@ -23,6 +17,10 @@ const userDataDir = process.env.HARNESS_STORE_USER_DATA_DIR;
 if (userDataDir) app.setPath('userData', resolve(userDataDir));
 
 let mainWindow: BrowserWindow | null = null;
+/** The Runtime from the moment `start` begins it; null before that. */
+let runtime: Promise<Runtime> | null = null;
+/** Quitting: 'idle', then 'stopping' while the Runtime shuts down, then 'stopped'. */
+let quitState: 'idle' | 'stopping' | 'stopped' = 'idle';
 
 // One Runtime per profile: a second launch focuses the existing window instead.
 if (!app.requestSingleInstanceLock()) {
@@ -37,18 +35,49 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => {
     app.quit();
   });
+  // The first quit request is held until the Runtime has stopped: the Model Gateway stops
+  // listening (writing its last Usage Records), then the database closes. Then the app quits.
+  app.on('before-quit', (event) => {
+    if (runtime === null || quitState === 'stopped') return;
+    event.preventDefault();
+    if (quitState === 'stopping') return;
+    quitState = 'stopping';
+    void runtime
+      .then((started) => {
+        if (mainWindow !== null) saveWindowState(mainWindow, started);
+        return started.shutdown();
+      })
+      .catch((error: unknown) => {
+        console.error('The Runtime did not shut down cleanly', error);
+      })
+      .finally(() => {
+        quitState = 'stopped';
+        app.quit();
+      });
+  });
   void app.whenReady().then(start);
 }
 
-function start(): void {
-  const appState = createAppStateFile(join(app.getPath('userData'), APP_STATE_FILE_NAME));
-  const services: Services = {
-    app: { version: app.getVersion() },
+/**
+ * Starts the Runtime (SQLite, then the Model Gateway) before the window exists, then opens the
+ * window. A failed step still opens it: the renderer asks `app.status` first and shows a blocking
+ * error screen instead of the app.
+ */
+async function start(): Promise<void> {
+  runtime = startRuntime({
+    dataDir: app.getPath('userData'),
+    version: app.getVersion(),
     // On Linux app.getLocale() follows LANG; on macOS and Windows the OS language, or `--lang`.
-    settings: createSettingsService(appState, () => app.getLocale()),
-  };
+    osLocale: () => app.getLocale(),
+    quit: () => {
+      app.quit();
+    },
+  });
+  const started = await runtime;
+  // Quit while starting: the Runtime is already shutting down.
+  if (quitState !== 'idle') return;
   const dispatch = createDispatcher({
-    handlers: createHandlers(services),
+    handlers: createHandlers(started.services),
     isTrustedSender: (sender) => mainWindow !== null && sender === mainWindow.webContents,
     onHandlerError: (method, error) => {
       console.error(`IPC handler ${method} threw`, error);
@@ -59,12 +88,12 @@ function start(): void {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
     callback(false);
   });
-  mainWindow = createMainWindow(appState);
+  mainWindow = createMainWindow(started);
 }
 
-function createMainWindow(appState: AppStateFile): BrowserWindow {
+function createMainWindow(started: Runtime): BrowserWindow {
   const workAreas = screen.getAllDisplays().map((display) => display.workArea);
-  const bounds = initialWindowBounds(appState.read().windowState ?? null, workAreas);
+  const bounds = initialWindowBounds(started.windowState.read(), workAreas);
   const window = new BrowserWindow(
     mainWindowOptions(bounds, join(import.meta.dirname, '../preload/index.cjs')),
   );
@@ -74,13 +103,7 @@ function createMainWindow(appState: AppStateFile): BrowserWindow {
     window.show();
   });
   window.on('close', () => {
-    try {
-      appState.update({
-        windowState: { ...window.getNormalBounds(), isMaximized: window.isMaximized() },
-      });
-    } catch (error) {
-      console.error('Could not save the window state', error);
-    }
+    saveWindowState(window, started);
   });
   window.on('closed', () => {
     mainWindow = null;
@@ -103,4 +126,16 @@ function createMainWindow(appState: AppStateFile): BrowserWindow {
     void window.loadFile(join(import.meta.dirname, '../renderer/index.html'));
   }
   return window;
+}
+
+/**
+ * Saves the window's geometry for the next launch: on close, and on quit before the database
+ * closes (after that, saving does nothing).
+ */
+function saveWindowState(window: BrowserWindow, started: Runtime): void {
+  try {
+    started.windowState.save({ ...window.getNormalBounds(), isMaximized: window.isMaximized() });
+  } catch (error) {
+    console.error('Could not save the window state', error);
+  }
 }

@@ -67,7 +67,7 @@ describe('main window shell', () => {
 
   it('shows the version the Runtime returns over IPC on Settings', async () => {
     await renderAt('#/settings');
-    expect(await screen.findByText('Version 4.5.6')).toBeDefined();
-    expect(window.api.app.ping).toHaveBeenCalled();
+    expect(await screen.findByText('4.5.6')).toBeDefined();
+    expect(window.api.diagnostics.get).toHaveBeenCalled();
   });
 });
