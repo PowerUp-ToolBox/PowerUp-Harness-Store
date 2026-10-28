@@ -7,6 +7,7 @@ import type {
 } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
+import { connectionName, providerName } from '../models/names.js';
 import { CheckIcon, LockIcon } from '../shell/icons.js';
 import { useMounted } from './use-mounted.js';
 import { WizardActions, type WizardNav } from './WizardActions.js';
@@ -25,8 +26,9 @@ export interface CloudKeyStepProps {
 }
 
 /**
- * The optional remote Provider: a preset from `providers.list` (the custom OpenAI-compatible
- * endpoint also asks for a name and a base URL), an API key, and Test connection, which adds the
+ * The optional remote Provider: a preset from `providers.list` other than the local ones (the
+ * custom OpenAI-compatible endpoint also asks for a name and a base URL), an API key, and Test
+ * connection, which adds the
  * Connection when the test succeeds (`connections.add`). A failed test shows the error inline with
  * Retry, Edit and Skip, and keeps what the User typed. Continue with an empty form is Skip;
  * Continue waits, like Test connection, while a started form misses a field it needs; Continue
@@ -51,8 +53,10 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
     void window.api.providers.list().then((result) => {
       if (!current) return;
       if (result.ok) {
-        setPresets(result.data);
-        setProviderId((id) => (id === '' ? (result.data[0]?.id ?? '') : id));
+        // Local Providers are found by the Local Providers step instead.
+        const remote = result.data.filter((item) => !item.local);
+        setPresets(remote);
+        setProviderId((id) => (id === '' ? (remote[0]?.id ?? '') : id));
       } else {
         setLoadError(result.error);
       }
@@ -108,8 +112,8 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
     if (await runTest()) nav.next();
   };
 
-  const providerName = (item: ProviderPreset) =>
-    item.custom ? t('onboarding.cloud.custom') : item.displayName;
+  const presetName = (item: ProviderPreset) =>
+    item.custom ? t('onboarding.cloud.custom') : providerName(t, item.id, item.displayName);
 
   return (
     <>
@@ -132,7 +136,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
             >
               {presets.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {providerName(item)}
+                  {presetName(item)}
                 </option>
               ))}
             </select>
@@ -212,7 +216,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
           {remote.map((connection) => (
             <li key={connection.id}>
               <CheckIcon />
-              {t('onboarding.cloud.added', { name: connection.displayName })}
+              {t('onboarding.cloud.added', { name: connectionName(t, connection) })}
             </li>
           ))}
         </ul>

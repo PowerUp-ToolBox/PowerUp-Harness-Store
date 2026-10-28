@@ -1,6 +1,6 @@
 # @harness-store/desktop
 
-> Status: shell, i18n, the embedded Runtime, offline handling and the first-run wizard (P0-04.1 to P0-04.5): sidebar navigation, placeholder screens, typed IPC, window state, every UI string in `en` and `zh-CN`, the Model Gateway and local SQLite database starting with the app, an offline banner and Store offline panel when the Store is unreachable, and a skippable five-step setup wizard. Connections, detection and the Default Model behind the wizard follow in P0-03; the Runtime's installer and Process Supervisor in P0-05 and P0-10.
+> Status: shell, i18n, the embedded Runtime, offline handling and the first-run wizard (P0-04.1 to P0-04.5): sidebar navigation, placeholder screens, typed IPC, window state, every UI string in `en` and `zh-CN`, the Model Gateway and local SQLite database starting with the app, an offline banner and Store offline panel when the Store is unreachable, and a skippable five-step setup wizard. Provider Connections with encrypted keys on the Models page (P0-03.1). Testing Connections, model listing, local detection and Default Models follow in the rest of P0-03; the Runtime's installer and Process Supervisor in P0-05 and P0-10.
 
 The Harness Store desktop app, built with Electron + React + TypeScript ([ADR-0003](../../docs/adr/0003-typescript-electron-stack.md)).
 
@@ -12,14 +12,15 @@ References: [`docs/tech/architecture.md`](../../docs/tech/architecture.md) §2 a
 
 ## Layout
 
-| Path                | What it holds                                                                                                                                                                                                    |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main/index.ts` | The Electron main process (the Runtime): app lifecycle, the main window, IPC registration. The only main file that imports Electron                                                                              |
-| `src/main/runtime/` | Startup and shutdown (`bootstrap.ts`), SQLite and its migrations, services, IPC handlers and the dispatcher, window state. Never imports Electron (an ESLint rule enforces it), so it is tested under plain Node |
-| `src/preload/`      | Exposes `window.api`, built from the IPC method list, through the context bridge. Bundled as CommonJS (`index.cjs`) for the sandbox                                                                              |
-| `src/shared/ipc.ts` | The IPC contract: method names with input and output types, the `{ ok, data } \| { ok, error }` result, events                                                                                                   |
-| `src/shared/i18n/`  | The `en.json` and `zh-CN.json` message catalogs (ICU), locale resolution, the translator with its fallbacks, and Intl formatting                                                                                 |
-| `src/renderer/`     | The React UI: hash routes, the shell (sidebar, page header), one module per screen, and `I18nProvider` with the `useI18n()` hook                                                                                 |
+| Path                             | What it holds                                                                                                                                                                                                    |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main/index.ts`              | The Electron main process (the Runtime): app lifecycle, the main window, IPC registration. The only main file that imports Electron                                                                              |
+| `src/main/runtime/`              | Startup and shutdown (`bootstrap.ts`), SQLite and its migrations, services, IPC handlers and the dispatcher, window state. Never imports Electron (an ESLint rule enforces it), so it is tested under plain Node |
+| `src/preload/`                   | Exposes `window.api`, built from the IPC method list, through the context bridge. Bundled as CommonJS (`index.cjs`) for the sandbox                                                                              |
+| `src/shared/ipc.ts`              | The IPC contract: method names with input and output types, the `{ ok, data } \| { ok, error }` result, events                                                                                                   |
+| `src/shared/connection-input.ts` | The rules for what a User types into a Connection form (API key, base URL, custom endpoint name and id), used by the renderer for inline feedback and by the Runtime, which checks again                         |
+| `src/shared/i18n/`               | The `en.json` and `zh-CN.json` message catalogs (ICU), locale resolution, the translator with its fallbacks, and Intl formatting                                                                                 |
+| `src/renderer/`                  | The React UI: hash routes, the shell (sidebar, page header), one module per screen, and `I18nProvider` with the `useI18n()` hook                                                                                 |
 
 The renderer runs with `contextIsolation`, `sandbox` and no Node integration under a strict Content Security Policy (`src/renderer/index.html`). It sees only `window.api`: `await window.api.app.ping()` returns `{ ok: true, data: { version } }`. Set `HARNESS_STORE_USER_DATA_DIR` to run with a fresh profile.
 
@@ -27,7 +28,15 @@ The renderer runs with `contextIsolation`, `sandbox` and no Node integration und
 
 On launch, before the window opens, the Runtime opens `harness-store.sqlite` in the userData folder (creating it and applying the migrations on first run), then starts the Model Gateway on `127.0.0.1` with a port the OS picks. If either step fails, the window shows a blocking error screen naming the step, with the details and Quit, instead of the app (`app.status`). Settings shows the Gateway's port, the database path and the app version (`diagnostics.get`). Quitting stops the Gateway, which writes its last Usage Records, then closes the database.
 
-SQLite is Node's built-in `node:sqlite`, so there is no native module to rebuild. Migrations are plain SQL files in `src/main/runtime/migrations/` (`0001_…sql`, never edited once released), bundled into the main process and tracked with `PRAGMA user_version`; each runs in its own transaction. The first creates `settings` (key/value, JSON values: the language override, whether the first-run wizard has run, and the main window's size and position) and `usage_records` (one row per Usage Record from the Gateway).
+SQLite is Node's built-in `node:sqlite`, so there is no native module to rebuild. Migrations are plain SQL files in `src/main/runtime/migrations/` (`0001_…sql`, never edited once released), bundled into the main process and tracked with `PRAGMA user_version`; each runs in its own transaction. The first creates `settings` (key/value, JSON values: the language override, whether the first-run wizard has run, and the main window's size and position) and `usage_records` (one row per Usage Record from the Gateway). The second creates `connections`, `secrets` and `slot_bindings` ([data-model.md](../../docs/tech/data-model.md) §2).
+
+## Connections
+
+The Models page lists the User's Connections, one per Provider, plus any number of named custom OpenAI-compatible endpoints (`openai-compatible:<slug>`, the slug taken from the name when it is added and never changed). Add Connection opens a modal with every Provider of the Gateway's table (`providers.list`, letter monograms, no logos); picking a Provider that already has its one Connection opens that Connection to edit. Each row shows a status (Disabled, Connection failed with the Provider's text, Local, Connected, Not tested), Edit, Enable or Disable, and Remove, which names the Slot Bindings that use the Connection and deletes them with it.
+
+Keys are encrypted with Electron's `safeStorage` (async API) behind the Electron-free `SecretCipher`, and stored in `secrets`; the renderer only ever sees `keyHint`, the last 4 characters (none for a key under 12 characters). When the OS offers no encryption (on Linux: no keyring, or the `basic_text` backend), a key is refused with `encryption_unavailable` and an explanation; it is never stored in plaintext, and keyless Connections still work. `connections.add` and `connections.update` test new credentials before saving them; until P0-03.2 the test passes every Connection.
+
+The Model Gateway reads Connections from SQLite on every request (`getConnection`, in `gateway-host.ts`), decrypting the key just for that call, so adding, disabling or removing a Connection applies to the next request without a restart; a disabled Connection answers 403 `provider_not_connected`. Slot names resolve to nothing until the resolver (P0-03.4) and installed Harnesses (P0-05) arrive; explicit `provider/model` ids already work.
 
 ## Offline
 
@@ -41,7 +50,7 @@ The Store base URL is the `store_base_url` setting (no UI until P0-11), else `ht
 
 On a fresh profile (`settings.onboardingDone` false) the app opens on the first-run wizard (`/onboarding`), which fills the window without the sidebar: Welcome and language → Local Providers → Remote Provider (optional) → Default model → Done, with a step list on top and Skip on every step ("Skip setup" on Welcome jumps to the summary). Back works on every step but Welcome. Reaching Done sets `onboarding_done`, so later launches open on the Library; Open Store lands on Store home. The steps are a pure reducer (`src/renderer/src/onboarding/wizard-reducer.ts`); progress is not kept, so quitting midway starts again at Welcome. Settings has "Re-run setup", which opens the wizard at Welcome and clears nothing.
 
-Until P0-03, the Runtime's `connections.detectLocal` finds nothing and `connections.add` answers `not_implemented`, so the wizard shows its "not found" (with links to install Ollama and LM Studio), failed-test and "set this later in Models" states. The wizard keeps the chosen Default Model in its own state for the summary; P0-03 saves it as the `default` Slot Binding.
+Until P0-03.3, the Runtime's `connections.detectLocal` finds nothing, so the wizard shows its "not found" state with links to install Ollama and LM Studio. The Remote Provider step saves a real Connection through `connections.add` (its list leaves out the local Providers). The wizard keeps the chosen Default Model in its own state for the summary; P0-03.4 saves it as the `default` Slot Binding.
 
 ## Languages
 
@@ -51,15 +60,16 @@ Every string the User sees comes from `src/shared/i18n/en.json` and `zh-CN.json`
 
 Run them with `pnpm --filter @harness-store/desktop <script>` from the repo root.
 
-| Command                       | What it does                                                                                                      |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `pnpm dev`                    | `electron-vite dev`: the app with renderer hot reload; main and preload rebuild and restart                       |
-| `pnpm build`                  | `electron-vite build`: compiles main, preload and renderer into `out/` (what the root build runs)                 |
-| `pnpm package`                | Builds, then packages the app for the current OS into `release/` with electron-builder (manual)                   |
-| `pnpm test`                   | Vitest: seam tests under Node, renderer component tests under jsdom                                               |
-| `pnpm test:i18n`              | Only the i18n tests: catalog parity, locale resolution, translation, formatting, the lint rule                    |
-| `pnpm test:runtime-bootstrap` | Only the startup tests: SQLite and migrations against a temp data dir, Gateway start and stop, the error screen   |
-| `pnpm test:connectivity`      | Only the offline tests: the connectivity check, its backoff and debounce, the banner and the Store offline panel  |
-| `pnpm test:onboarding`        | Only the first-run wizard tests: the step table, `onboarding_done` in SQLite, the wizard screens and Re-run setup |
-| `pnpm lint`                   | ESLint with the shared root config                                                                                |
-| `pnpm typecheck`              | `tsc --build` over `tsconfig.json` (main, preload, shared) and `tsconfig.web.json` (renderer)                     |
+| Command                       | What it does                                                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm dev`                    | `electron-vite dev`: the app with renderer hot reload; main and preload rebuild and restart                                                                        |
+| `pnpm build`                  | `electron-vite build`: compiles main, preload and renderer into `out/` (what the root build runs)                                                                  |
+| `pnpm package`                | Builds, then packages the app for the current OS into `release/` with electron-builder (manual)                                                                    |
+| `pnpm test`                   | Vitest: seam tests under Node, renderer component tests under jsdom                                                                                                |
+| `pnpm test:i18n`              | Only the i18n tests: catalog parity, locale resolution, translation, formatting, the lint rule                                                                     |
+| `pnpm test:runtime-bootstrap` | Only the startup tests: SQLite and migrations against a temp data dir, Gateway start and stop, the error screen                                                    |
+| `pnpm test:connectivity`      | Only the offline tests: the connectivity check, its backoff and debounce, the banner and the Store offline panel                                                   |
+| `pnpm test:onboarding`        | Only the first-run wizard tests: the step table, `onboarding_done` in SQLite, the wizard screens and Re-run setup                                                  |
+| `pnpm test:connections`       | Only the Connections tests: input rules, the service against a temp SQLite file with a fake cipher, the Model Gateway seam with the fake Provider, the Models page |
+| `pnpm lint`                   | ESLint with the shared root config                                                                                                                                 |
+| `pnpm typecheck`              | `tsc --build` over `tsconfig.json` (main, preload, shared) and `tsconfig.web.json` (renderer)                                                                      |

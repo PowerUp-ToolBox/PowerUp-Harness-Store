@@ -7,7 +7,7 @@ import type {
   LocalProvider,
   SettingsPatch,
 } from '../../src/shared/ipc.js';
-import { installFakeApi, renderApp } from './render-app.js';
+import { connectionSummary, installFakeApi, renderApp } from './render-app.js';
 
 const WELCOME = 'Run any AI agent on any model you already have.';
 const DETECT = 'Local Providers';
@@ -61,18 +61,17 @@ const LM_STUDIO: LocalProvider = {
   models: ['gemma-3'],
 };
 
-/** connections.add as P0-03 will answer: the Connection, with the models it lists. */
+/** connections.add as the Runtime answers: the Connection, with the models it lists. */
 function connectionFor(providerId: string, displayName: string, models: string[]) {
   return (): Promise<IpcResult<ConnectionSummary>> =>
     Promise.resolve({
       ok: true,
-      data: {
+      data: connectionSummary({
         id: providerId,
-        providerId,
         displayName,
         local: providerId === 'ollama' || providerId === 'lmstudio',
         models,
-      },
+      }),
     });
 }
 
@@ -339,7 +338,7 @@ describe('Remote Provider', () => {
     return api;
   }
 
-  it('offers the presets from providers.list, the custom endpoint by name', async () => {
+  it('offers the presets from providers.list without the local ones, the custom endpoint by name', async () => {
     await openCloudStep();
     const provider = screen.getByLabelText<HTMLSelectElement>('Provider');
     expect([...provider.options].map((option) => option.textContent)).toEqual([

@@ -31,6 +31,7 @@ const fakeServices: Services = {
   },
   providers: { list: () => providerPresets() },
   connections: createConnectionsStub(),
+  bindings: { getGlobal: () => [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }] },
 };
 const en = translatorFor('en');
 
@@ -110,11 +111,52 @@ describe('IPC handlers against a fake service container', () => {
     'connectivity.check',
     'providers.list',
     'connections.detectLocal',
+    'connections.list',
+    'bindings.getGlobal',
   ])('%s rejects any input as invalid_input', async (method) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input: {} })).resolves.toMatchObject({
       ok: false,
       error: { code: 'invalid_input', params: { method } },
+    });
+  });
+
+  it.each([undefined, 42, { id: 'anthropic' }])(
+    'connections.remove rejects %j as invalid_input',
+    async (input) => {
+      const { dispatch } = dispatcherFor();
+      await expect(
+        dispatch(MAIN_WINDOW, { method: 'connections.remove', input }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'invalid_input', params: { method: 'connections.remove' } },
+      });
+    },
+  );
+
+  it.each([
+    undefined,
+    'anthropic',
+    { enabled: false },
+    { id: 7 },
+    { id: 'anthropic', enabled: 'no' },
+    { id: 'anthropic', apiKey: null },
+    { id: 'anthropic', secret: 'x' },
+  ])('connections.update rejects %j as invalid_input', async (input) => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'connections.update', input }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input', params: { method: 'connections.update' } },
+    });
+  });
+
+  it('bindings.getGlobal returns the global Slot Bindings', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'bindings.getGlobal' })).resolves.toEqual({
+      ok: true,
+      data: [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }],
     });
   });
 

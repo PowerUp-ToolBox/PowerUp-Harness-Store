@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ConnectionSummary } from '../../../shared/ipc.js';
 import { useI18n } from '../i18n/I18nProvider.js';
+import { connectionName } from '../models/names.js';
 import { WizardActions, type WizardNav } from './WizardActions.js';
 
 /** A model of one of the wizard's Connections, picked for the `default` Model Slot. */
@@ -57,7 +58,7 @@ export function DefaultModelStep({ nav, connections, choice, onChoose }: Default
               }}
             >
               {connections.map((connection) => (
-                <optgroup key={connection.id} label={connection.displayName}>
+                <optgroup key={connection.id} label={connectionName(t, connection)}>
                   {choices.map((item, index) =>
                     item.connection === connection ? (
                       <option key={item.model} value={String(index)}>

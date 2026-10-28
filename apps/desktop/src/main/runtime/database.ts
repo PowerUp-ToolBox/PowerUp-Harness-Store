@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import m0001 from './migrations/0001_settings_and_usage_records.sql?raw';
+import m0002 from './migrations/0002_connections_and_slot_bindings.sql?raw';
 
 /** The local SQLite file's name in the app data root (data-model.md, install layout). */
 export const DATABASE_FILE_NAME = 'harness-store.sqlite';
@@ -9,7 +10,7 @@ export const DATABASE_FILE_NAME = 'harness-store.sqlite';
  * built main process does not need them on disk. A new migration is a new file appended here;
  * a released one is never edited.
  */
-export const MIGRATIONS: readonly string[] = [m0001];
+export const MIGRATIONS: readonly string[] = [m0001, m0002];
 
 /**
  * Opens (creating it if needed) the Runtime's SQLite database at `path` and brings its schema up
@@ -60,6 +61,23 @@ export function migrate(db: DatabaseSync, migrations: readonly string[]): void {
       throw new Error(`Database migration ${String(version)} failed.`, { cause: error });
     }
   });
+}
+
+/**
+ * Runs `work` in one transaction: every write it makes is committed together, or, when it throws,
+ * none is. Not re-entrant: `work` must not start another transaction.
+ */
+export function transaction<T>(db: DatabaseSync, work: () => T): T {
+  db.exec('BEGIN');
+  try {
+    const result = work();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    // As in migrate(): SQLite may have ended the transaction itself already.
+    if (db.isTransaction) db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 /** How many migrations the database has applied. */

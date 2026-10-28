@@ -56,6 +56,7 @@ function launch(osLocale: string) {
     },
     providers: { list: () => providerPresets() },
     connections: createConnectionsStub(),
+    bindings: { getGlobal: () => [] },
   };
   const dispatch = createDispatcher({
     handlers: createHandlers(services),

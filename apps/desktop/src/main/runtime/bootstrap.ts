@@ -3,7 +3,13 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { createGateway, type Gateway, type GatewayOptions } from '@harness-store/gateway';
 import type { IpcEventName, IpcEvents, StartupStage, StartupStatus } from '../../shared/ipc.js';
-import { createConnectionsStub, providerPresets } from './connections.js';
+import { createConnectionStore, type ConnectionStore } from './connection-store.js';
+import {
+  createConnectionsService,
+  createConnectionsStub,
+  providerPresets,
+  type ConnectionsService,
+} from './connections.js';
 import {
   createConnectivityService,
   storeBaseUrlFrom,
@@ -11,6 +17,8 @@ import {
   type FetchLike,
 } from './connectivity.js';
 import { DATABASE_FILE_NAME, openDatabase } from './database.js';
+import { createGatewayHost } from './gateway-host.js';
+import type { SecretCipher } from './secret-cipher.js';
 import type { Services } from './services.js';
 import { createSettingsService } from './settings.js';
 import {
@@ -32,6 +40,8 @@ export interface RuntimeOptions {
   readonly quit: () => void;
   /** Makes the Store connectivity checks (Electron's `net.fetch`, so system proxies apply). */
   readonly fetch: FetchLike;
+  /** Encrypts Connection secrets (Electron's `safeStorage`); tests pass a reversible fake. */
+  readonly secretCipher: SecretCipher;
   /** Pushes an event to the main window; dropped while there is none. */
   readonly emit?: <E extends IpcEventName>(event: E, payload: IpcEvents[E]) => void;
   /** Creates the Model Gateway; tests wrap the real one to make `listen` fail. */
@@ -85,11 +95,19 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   // whose tables are not what this build expects (a tampered or pre-release file) fails this step
   // instead of rejecting startRuntime later.
   let db: DatabaseSync | null = null;
-  let sqlite: { settings: SettingsStore; usageRecords: UsageRecordStore } | null = null;
+  let sqlite: {
+    settings: SettingsStore;
+    usageRecords: UsageRecordStore;
+    connections: ConnectionStore;
+  } | null = null;
   try {
     mkdirSync(options.dataDir, { recursive: true });
     db = openDatabase(databasePath);
-    sqlite = { settings: createSqliteSettingsStore(db), usageRecords: createUsageRecordStore(db) };
+    sqlite = {
+      settings: createSqliteSettingsStore(db),
+      usageRecords: createUsageRecordStore(db),
+      connections: createConnectionStore(db),
+    };
   } catch (error) {
     db?.close();
     db = null;
@@ -101,12 +119,10 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   let gatewayPort: number | null = null;
   if (sqlite !== null) {
     const { usageRecords } = sqlite;
-    // Slot Bindings, Connections and installed Manifests arrive with P0-03 and P0-10; until then
-    // nothing resolves, so a Harness request ends in slot_unbound or provider_not_connected.
+    // Connections are read from SQLite on every request. The resolver arrives in P0-03.4 and
+    // installed Manifests with P0-05, so until then only explicit provider/model ids resolve.
     gateway = (options.createGateway ?? createGateway)({
-      resolveBinding: () => Promise.resolve(null),
-      getConnection: () => Promise.resolve(null),
-      getManifest: () => Promise.resolve(null),
+      ...createGatewayHost({ store: sqlite.connections, cipher: options.secretCipher }),
       onUsage: (record) => {
         usageRecords.insert(record);
         return Promise.resolve();
@@ -120,6 +136,11 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
 
   const store = sqlite?.settings ?? createMemorySettingsStore();
+  const connectionStore = sqlite?.connections;
+  const connections: ConnectionsService =
+    connectionStore === undefined
+      ? createConnectionsStub()
+      : createConnectionsService({ store: connectionStore, cipher: options.secretCipher });
   let stopping = false;
   let stopped: Promise<void> | undefined;
   const startupStatus = status;
@@ -147,7 +168,8 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       },
       connectivity,
       providers: { list: () => providerPresets() },
-      connections: createConnectionsStub(),
+      connections,
+      bindings: { getGlobal: () => connectionStore?.globalBindings() ?? [] },
     },
     windowState: {
       read() {

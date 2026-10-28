@@ -12,6 +12,7 @@ import { openDatabase } from '../../src/main/runtime/database.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createSqliteSettingsStore } from '../../src/main/runtime/settings-store.js';
+import { createFakeCipher } from '../support/fake-cipher.js';
 
 const MAIN_WINDOW = {};
 
@@ -35,6 +36,7 @@ async function launch(options: Partial<RuntimeOptions> & Pick<RuntimeOptions, 'f
     osLocale: () => 'en-US',
     quit: () => undefined,
     logError: () => undefined,
+    secretCipher: createFakeCipher(),
     ...options,
   });
   started.push(runtime);

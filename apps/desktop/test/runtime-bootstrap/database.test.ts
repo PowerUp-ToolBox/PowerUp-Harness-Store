@@ -66,7 +66,11 @@ describe('openDatabase', () => {
     expect(existsSync(path)).toBe(true);
     expect(schemaVersion(db)).toBe(MIGRATIONS.length);
     expect(schema(db).map(({ type, name }) => `${type} ${name}`)).toEqual([
+      'table connections',
+      'table secrets',
       'table settings',
+      'table slot_bindings',
+      'index slot_bindings_provider_id',
       'table usage_records',
       'index usage_records_harness_id_timestamp',
     ]);

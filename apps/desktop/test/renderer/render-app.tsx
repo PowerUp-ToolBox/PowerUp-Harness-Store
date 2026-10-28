@@ -5,9 +5,11 @@ import type { Locale } from '../../src/shared/i18n/locale.js';
 import type {
   ConnectionDraft,
   ConnectionSummary,
+  ConnectionUpdate,
   Connectivity,
   ConnectivityState,
   Diagnostics,
+  GlobalBinding,
   IpcEventName,
   IpcEvents,
   IpcResult,
@@ -29,13 +31,17 @@ export const FAKE_DIAGNOSTICS: Diagnostics = {
   databasePath: '/profile/harness-store.sqlite',
 };
 
-/** Three of the Runtime's presets, the custom endpoint among them. */
+/** Four of the Runtime's presets: two cloud ones, a local one and the custom endpoint. */
 export const FAKE_PRESETS: readonly ProviderPreset[] = [
   {
     id: 'anthropic',
     displayName: 'Anthropic',
     requiresKey: true,
     custom: false,
+    local: false,
+    baseUrl: 'https://api.anthropic.com/v1',
+    docsUrl: 'https://docs.claude.com/en/api/overview',
+    supportsModelList: false,
     keyPlaceholder: 'sk-ant-...',
   },
   {
@@ -43,16 +49,56 @@ export const FAKE_PRESETS: readonly ProviderPreset[] = [
     displayName: 'OpenAI',
     requiresKey: true,
     custom: false,
+    local: false,
+    baseUrl: 'https://api.openai.com/v1',
+    docsUrl: 'https://platform.openai.com/docs/api-reference',
+    supportsModelList: true,
     keyPlaceholder: 'sk-...',
+  },
+  {
+    id: 'ollama',
+    displayName: 'Ollama',
+    requiresKey: false,
+    custom: false,
+    local: true,
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    docsUrl: 'https://docs.ollama.com/api/openai-compatibility',
+    supportsModelList: true,
+    keyPlaceholder: '',
   },
   {
     id: 'openai-compatible',
     displayName: 'OpenAI-compatible endpoint',
     requiresKey: false,
     custom: true,
+    local: false,
+    baseUrl: null,
+    docsUrl: 'https://platform.openai.com/docs/api-reference/chat',
+    supportsModelList: true,
     keyPlaceholder: '',
   },
 ];
+
+/** A saved Connection as `connections.list` answers it; `overrides` change any field. */
+export function connectionSummary(
+  overrides: Partial<ConnectionSummary> & Pick<ConnectionSummary, 'id'>,
+): ConnectionSummary {
+  const providerId = overrides.providerId ?? overrides.id.split(':')[0] ?? overrides.id;
+  const preset = FAKE_PRESETS.find((item) => item.id === providerId);
+  return {
+    providerId,
+    displayName: preset?.displayName ?? providerId,
+    local: preset?.local ?? false,
+    enabled: true,
+    baseUrl: preset?.baseUrl ?? '',
+    keyHint: null,
+    lastTestedAt: null,
+    lastTestOk: null,
+    lastTestError: null,
+    models: [],
+    ...overrides,
+  };
+}
 
 export interface FakeApiOptions {
   /** Whether the first-run wizard already ran; true, a returning User, unless a test says so. */
@@ -62,10 +108,10 @@ export interface FakeApiOptions {
 /**
  * A fake `window.api` whose settings behave like the Runtime's: `osLocale` stands in for
  * `app.getLocale()` and an override set through `settings.set` wins over it. The Runtime started
- * fine, the Store is online, and Connections are the Runtime's stubs (detection finds nothing,
- * adding answers `not_implemented`); a test changes `app.status`, `diagnostics.get`, the
- * `connectivity` or `connections` methods before rendering to say otherwise, and pushes events
- * with `emit`.
+ * fine, the Store is online, there are no Connections or Slot Bindings, detection finds nothing,
+ * and changing Connections answers `not_implemented`; a test changes `app.status`,
+ * `diagnostics.get`, the `connectivity`, `connections` or `bindings` methods before rendering to
+ * say otherwise, and pushes events with `emit`.
  */
 export function installFakeApi(
   osLocale: Locale = 'en',
@@ -117,16 +163,22 @@ export function installFakeApi(
       detectLocal: vi.fn((): Promise<IpcResult<readonly LocalProvider[]>> =>
         Promise.resolve({ ok: true, data: [] }),
       ),
+      list: vi.fn((): Promise<IpcResult<readonly ConnectionSummary[]>> =>
+        Promise.resolve({ ok: true, data: [] }),
+      ),
       add: vi.fn((draft: ConnectionDraft): Promise<IpcResult<ConnectionSummary>> =>
-        Promise.resolve({
-          ok: false,
-          error: {
-            code: 'not_implemented',
-            messageKey: 'error.not_implemented',
-            params: { method: 'connections.add', providerId: draft.providerId },
-            message: 'This is not available in this version of Harness Store yet.',
-          },
-        }),
+        notImplemented('connections.add', draft.providerId),
+      ),
+      update: vi.fn((update: ConnectionUpdate): Promise<IpcResult<ConnectionSummary>> =>
+        notImplemented('connections.update', update.id),
+      ),
+      remove: vi.fn((id: string): Promise<IpcResult<null>> =>
+        notImplemented('connections.remove', id),
+      ),
+    },
+    bindings: {
+      getGlobal: vi.fn((): Promise<IpcResult<readonly GlobalBinding[]>> =>
+        Promise.resolve({ ok: true, data: [] }),
       ),
     },
     on: vi.fn((event: string, listener: (payload: unknown) => void) => {
@@ -144,6 +196,18 @@ export function installFakeApi(
   };
   Object.defineProperty(window, 'api', { value: api, configurable: true });
   return api;
+}
+
+function notImplemented(method: string, subject: string) {
+  return Promise.resolve({
+    ok: false as const,
+    error: {
+      code: 'not_implemented' as const,
+      messageKey: 'error.not_implemented' as const,
+      params: { method, subject },
+      message: 'This is not available in this version of Harness Store yet.',
+    },
+  });
 }
 
 /**

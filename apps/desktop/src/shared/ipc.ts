@@ -10,7 +10,7 @@
 import type { Locale } from './i18n/locale.js';
 
 /**
- * Error codes the Runtime returns over IPC: its own three, then every Model Gateway code
+ * Error codes the Runtime returns over IPC: its own four, then every Model Gateway code
  * (`GATEWAY_ERROR_STATUS` in @harness-store/gateway; a test keeps the two lists in step). Each has
  * an `error.<code>` entry in both message catalogs.
  */
@@ -18,6 +18,11 @@ export type IpcErrorCode =
   | 'internal_error'
   | 'invalid_input'
   | 'not_implemented'
+  /**
+   * The OS offers no encryption for secrets (Electron `safeStorage`; on Linux, no keyring), so a
+   * key cannot be stored. It is never stored in plaintext instead.
+   */
+  | 'encryption_unavailable'
   | 'invalid_request'
   | 'invalid_token'
   | 'invalid_host'
@@ -63,21 +68,37 @@ export interface IpcMethods {
    * of starting a second one.
    */
   'connectivity.check': { input: undefined; output: Connectivity };
-  /**
-   * The Providers a User can add a Connection for by hand, in the Gateway's order: every Provider
-   * except the local ones (Ollama, LM Studio), which detection finds instead.
-   */
+  /** Every Provider of the Gateway's table, in its order, local ones (Ollama, LM Studio) included. */
   'providers.list': { input: undefined; output: readonly ProviderPreset[] };
   /**
    * Looks for local Providers (Ollama, LM Studio) running on their default ports. A stub that
-   * finds none until P0-03 adds detection.
+   * finds none until P0-03.3 adds detection.
    */
   'connections.detectLocal': { input: undefined; output: readonly LocalProvider[] };
   /**
-   * Tests the Connection and saves it when the test succeeds. A stub that answers
-   * `not_implemented` until P0-03 adds Connections.
+   * Every saved Connection: in the order of the Provider table, custom endpoints by name. Keys
+   * appear only as `keyHint`.
+   */
+  'connections.list': { input: undefined; output: readonly ConnectionSummary[] };
+  /**
+   * Checks the draft, tests the Connection and saves it when the test passes; a failed test stores
+   * nothing and answers `provider_error`. Adding a Provider that allows one Connection and already
+   * has it edits that Connection in place (and enables it). A key is stored only encrypted:
+   * without OS encryption, a draft with a key answers `encryption_unavailable`.
    */
   'connections.add': { input: ConnectionDraft; output: ConnectionSummary };
+  /**
+   * Changes a saved Connection. A new key or base URL is tested first and saved only when the test
+   * passes; a change of `enabled` or `displayName` alone is saved without a test.
+   */
+  'connections.update': { input: ConnectionUpdate; output: ConnectionSummary };
+  /**
+   * Deletes the Connection with this id, its secret and every Slot Binding that uses it, at once.
+   * An unknown id is `invalid_input`.
+   */
+  'connections.remove': { input: string; output: null };
+  /** The global Slot Bindings (the Default Models), `default` first, then by Slot name. */
+  'bindings.getGlobal': { input: undefined; output: readonly GlobalBinding[] };
 }
 
 /** The Runtime's startup steps, in order: open and migrate SQLite, then start the Model Gateway. */
@@ -123,18 +144,27 @@ export interface SettingsPatch {
   readonly onboardingDone?: boolean;
 }
 
-/** A Provider the User can add a Connection for by hand: one row of the Gateway's table. */
+/** A Provider the User can add a Connection for: one row of the Gateway's table. */
 export interface ProviderPreset {
   /** The Provider id (`anthropic`, `openai-compatible`, …). */
   readonly id: string;
+  /** The Gateway's English name; the UI shows the `provider.<id>` catalog entry instead. */
   readonly displayName: string;
   /** Whether a Connection needs an API key. */
   readonly requiresKey: boolean;
   /**
    * The custom OpenAI-compatible endpoint: the User names it and gives its base URL, since the
-   * Provider has none of its own.
+   * Provider has none of its own. It may have many Connections; every other Provider has one.
    */
   readonly custom: boolean;
+  /** Whether the Provider runs on the User's machine (Ollama, LM Studio). */
+  readonly local: boolean;
+  /** Where requests go unless the Connection names another base URL; null for the custom one. */
+  readonly baseUrl: string | null;
+  /** The Provider's API documentation. */
+  readonly docsUrl: string;
+  /** Whether the Provider lists its models (`GET /models`). */
+  readonly supportsModelList: boolean;
   /** What the Provider's keys look like, for the key field's placeholder; `''` when unknown. */
   readonly keyPlaceholder: string;
 }
@@ -153,23 +183,59 @@ export interface LocalProvider {
 /** What the User entered to add a Connection. */
 export interface ConnectionDraft {
   readonly providerId: string;
+  /** Required where the Provider needs a key, optional for the custom endpoint, else absent. */
   readonly apiKey?: string;
-  /** The custom endpoint's name; other Providers use their own display name. */
+  /** The custom endpoint's name (required for it); other Providers use their own name. */
   readonly displayName?: string;
-  /** Required for the custom endpoint; a local Provider passes where it was found. */
+  /** Required for the custom endpoint; absent or empty means the Provider's default. */
   readonly baseUrl?: string;
+}
+
+/** A change to a saved Connection; absent fields keep their value. */
+export interface ConnectionUpdate {
+  readonly id: string;
+  /** A new name; only a custom endpoint has its own. */
+  readonly displayName?: string;
+  /** A new key; the stored one cannot be cleared, only replaced. */
+  readonly apiKey?: string;
+  /** A new base URL; empty means the Provider's default (the custom endpoint has none). */
+  readonly baseUrl?: string;
+  readonly enabled?: boolean;
 }
 
 /** A saved Connection as the renderer sees it; its secret never leaves the Runtime. */
 export interface ConnectionSummary {
-  /** The Connection id: the Provider id, or `openai-compatible:<name>` for a custom endpoint. */
+  /** The Connection id: the Provider id, or `openai-compatible:<slug>` for a custom endpoint. */
   readonly id: string;
   readonly providerId: string;
+  /** The custom endpoint's name, else the Provider's English name. */
   readonly displayName: string;
   /** Whether the Provider runs on this machine (Ollama, LM Studio). */
   readonly local: boolean;
+  /** A disabled Connection is kept, but nothing resolves to it and the Gateway cannot use it. */
+  readonly enabled: boolean;
+  /** Where its requests go: its own base URL, else the Provider's default. */
+  readonly baseUrl: string;
+  /**
+   * The last 4 characters of the stored key (`''` for a key too short to show any); null when the
+   * Connection has no key.
+   */
+  readonly keyHint: string | null;
+  /** When the Connection was last tested, ISO-8601 UTC; null when never. */
+  readonly lastTestedAt: string | null;
+  readonly lastTestOk: boolean | null;
+  /** The Provider's own error text from the last failed test. */
+  readonly lastTestError: string | null;
   /** The models the Provider lists; empty when it does not list them. */
   readonly models: readonly string[];
+}
+
+/** A global Slot Binding: the Default Model for one Slot name. */
+export interface GlobalBinding {
+  readonly slot: string;
+  readonly connectionId: string;
+  /** The model name at that Connection's Provider, without the Provider prefix. */
+  readonly model: string;
 }
 
 export type IpcMethodName = keyof IpcMethods;
@@ -189,7 +255,11 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'connectivity.check': true,
   'providers.list': true,
   'connections.detectLocal': true,
+  'connections.list': true,
   'connections.add': true,
+  'connections.update': true,
+  'connections.remove': true,
+  'bindings.getGlobal': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */

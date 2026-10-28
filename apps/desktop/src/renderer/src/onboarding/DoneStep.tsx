@@ -1,6 +1,7 @@
 import type { ConnectionSummary, IpcError } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
+import { connectionName } from '../models/names.js';
 import type { DefaultModelChoice } from './DefaultModelStep.js';
 import { WizardActions, type WizardNav } from './WizardActions.js';
 
@@ -29,8 +30,8 @@ export function DoneStep({ nav, added, defaultModel, error }: DoneStepProps) {
             : added
                 .map((connection) =>
                   connection.local
-                    ? t('onboarding.done.local', { name: connection.displayName })
-                    : connection.displayName,
+                    ? t('onboarding.done.local', { name: connectionName(t, connection) })
+                    : connectionName(t, connection),
                 )
                 .join(t('onboarding.done.separator'))}
         </dd>
@@ -40,7 +41,7 @@ export function DoneStep({ nav, added, defaultModel, error }: DoneStepProps) {
             ? none
             : t('onboarding.done.model_on', {
                 model: defaultModel.model,
-                connection: defaultModel.connection.displayName,
+                connection: connectionName(t, defaultModel.connection),
               })}
         </dd>
       </dl>

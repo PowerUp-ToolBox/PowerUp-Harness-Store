@@ -9,6 +9,7 @@ import { parseConnectionDraft, providerPresets } from '../../src/main/runtime/co
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { parseSettingsPatch } from '../../src/main/runtime/settings.js';
+import { createFakeCipher } from '../support/fake-cipher.js';
 
 const MAIN_WINDOW = {};
 
@@ -33,6 +34,7 @@ async function launch(): Promise<Runtime> {
     quit: () => undefined,
     logError: () => undefined,
     fetch: () => Promise.reject(new TypeError('fetch failed')),
+    secretCipher: createFakeCipher(),
   });
   started.push(runtime);
   return runtime;
@@ -118,24 +120,15 @@ describe('onboarding_done across launches', () => {
 });
 
 describe('providers.list', () => {
-  it("lists the Gateway's Providers in order, without the local ones, the custom endpoint last", async () => {
+  it("lists every Provider of the Gateway's table in order, marking the local and custom ones", async () => {
     const runtime = await launch();
     const result = await call(runtime, 'providers.list');
     expect(result.ok).toBe(true);
     const presets = result.ok ? (result.data as ReturnType<typeof providerPresets>) : [];
-    expect(presets.map((preset) => preset.id)).toEqual([
-      'anthropic',
-      'openai',
-      'google',
-      'openrouter',
-      'deepseek',
-      'qwen',
-      'moonshot',
-      'zhipu',
-      'minimax',
-      'doubao',
-      'groq',
-      'openai-compatible',
+    expect(presets.map((preset) => preset.id)).toEqual(PROVIDERS.map((provider) => provider.id));
+    expect(presets.filter((preset) => preset.local).map((preset) => preset.id)).toEqual([
+      'ollama',
+      'lmstudio',
     ]);
     expect(presets.filter((preset) => preset.custom).map((preset) => preset.id)).toEqual([
       'openai-compatible',
@@ -145,28 +138,43 @@ describe('providers.list', () => {
       displayName: 'Anthropic',
       requiresKey: true,
       custom: false,
+      local: false,
+      baseUrl: 'https://api.anthropic.com/v1',
+      docsUrl: 'https://docs.claude.com/en/api/overview',
+      supportsModelList: false,
       keyPlaceholder: 'sk-ant-...',
     });
+    expect(presets.find((preset) => preset.custom)).toMatchObject({ baseUrl: null });
   });
 
   it('follows the table it is given', () => {
-    expect(providerPresets(PROVIDERS.filter((provider) => provider.id === 'ollama'))).toEqual([]);
+    expect(
+      providerPresets(PROVIDERS.filter((provider) => provider.id === 'ollama')).map(
+        (preset) => preset.id,
+      ),
+    ).toEqual(['ollama']);
   });
 });
 
-describe('connections before P0-03', () => {
-  it('connections.detectLocal finds nothing', async () => {
+describe('connections for the wizard', () => {
+  it('connections.detectLocal finds nothing until P0-03.3', async () => {
     const runtime = await launch();
     await expect(call(runtime, 'connections.detectLocal')).resolves.toEqual({ ok: true, data: [] });
   });
 
-  it('connections.add answers not_implemented for a well-formed draft', async () => {
-    const runtime = await launch();
+  it('connections.add saves what the Remote Provider step sends, and the Connection stays after a relaunch', async () => {
+    const first = await launch();
     await expect(
-      call(runtime, 'connections.add', { providerId: 'anthropic', apiKey: 'sk-ant-test' }),
+      call(first, 'connections.add', { providerId: 'anthropic', apiKey: 'sk-ant-test-0123456789' }),
     ).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'not_implemented', messageKey: 'error.not_implemented' },
+      ok: true,
+      data: { id: 'anthropic', providerId: 'anthropic', keyHint: '6789', enabled: true },
+    });
+    await first.shutdown();
+    const second = await launch();
+    await expect(call(second, 'connections.list')).resolves.toMatchObject({
+      ok: true,
+      data: [{ id: 'anthropic', keyHint: '6789' }],
     });
   });
 
