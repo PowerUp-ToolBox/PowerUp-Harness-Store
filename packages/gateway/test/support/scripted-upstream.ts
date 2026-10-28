@@ -1,6 +1,6 @@
 /**
  * A one-off OpenAI-compatible upstream for wire behaviours the fake Provider has no scenario for
- * (an in-stream error frame, argument JSON with whitespace, a tool call without arguments): each
+ * (an in-stream error frame, argument JSON with whitespace, a tool call with empty or whitespace-only arguments): each
  * test scripts the exact bytes the "Provider" answers.
  */
 import { serveLoopback } from '../../src/serve.js';

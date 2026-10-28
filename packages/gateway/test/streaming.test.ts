@@ -382,22 +382,79 @@ describe('tool calls', () => {
     );
   });
 
-  it('streams {} for a tool call the Provider sent without argument text', async () => {
-    const { url, token } = await startScripted(() => ({
-      sse: [
-        chunk({
-          tool_calls: [
-            {
-              index: 0,
-              id: 'call_a',
-              type: 'function',
-              function: { name: 'lookup', arguments: '' },
+  /**
+   * An upstream that answers one `lookup` call (id `call_a`) whose argument text is `fragments`:
+   * streamed as one tool-call delta per fragment, or joined in a non-streaming response.
+   */
+  function startToolCallUpstream(fragments: string[]) {
+    return startScripted((body) =>
+      body.stream === true
+        ? {
+            sse: [
+              chunk({
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: 'call_a',
+                    type: 'function',
+                    function: { name: 'lookup', arguments: '' },
+                  },
+                ],
+              }),
+              ...fragments.map((text) =>
+                chunk({ tool_calls: [{ index: 0, function: { arguments: text } }] }),
+              ),
+              chunk({}, 'tool_calls'),
+            ],
+          }
+        : {
+            json: {
+              ...chunk({}),
+              object: 'chat.completion',
+              choices: [
+                {
+                  index: 0,
+                  message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'call_a',
+                        type: 'function',
+                        function: { name: 'lookup', arguments: fragments.join('') },
+                      },
+                    ],
+                  },
+                  finish_reason: 'tool_calls',
+                },
+              ],
             },
-          ],
-        }),
-        chunk({}, 'tool_calls'),
-      ],
-    }));
+          },
+    );
+  }
+
+  it.each([
+    ['no argument text', []],
+    ['whitespace-only argument text', [' ']],
+    ['whitespace-only argument text in fragments', [' ', '\n\t ']],
+  ])('streams {} for a tool call the Provider sent with %s', async (_, fragments: string[]) => {
+    const { url, token } = await startToolCallUpstream(fragments);
+    const request = { model: `${SCRIPTED}/m`, messages: hello, tools: [lookup] };
+    const body = await readSse(await complete(url, token, { ...request, stream: true }));
+    expect(body.done).toBe(true);
+    expect(accumulateToolCalls(body)).toEqual([
+      { id: 'call_a', type: 'function', function: { name: 'lookup', arguments: '{}' } },
+    ]);
+    expect(finishReasons(body)).toEqual(['tool_calls']);
+    // The same answer without streaming holds the same arguments.
+    const whole = (await (await complete(url, token, request)).json()) as {
+      choices: { message: { tool_calls: ToolCall[] } }[];
+    };
+    expect(whole.choices[0]?.message.tool_calls).toEqual(accumulateToolCalls(body));
+  });
+
+  it('streams leading whitespace once argument JSON follows it', async () => {
+    const { url, token } = await startToolCallUpstream([' ', '\n', '{"input":', ' "cats"}']);
     const body = await readSse(
       await complete(url, token, {
         model: `${SCRIPTED}/m`,
@@ -406,11 +463,9 @@ describe('tool calls', () => {
         stream: true,
       }),
     );
-    expect(body.done).toBe(true);
-    expect(accumulateToolCalls(body)).toEqual([
-      { id: 'call_a', type: 'function', function: { name: 'lookup', arguments: '{}' } },
-    ]);
-    expect(finishReasons(body)).toEqual(['tool_calls']);
+    const [call] = accumulateToolCalls(body);
+    expect(call?.function.arguments).toBe(' \n{"input": "cats"}');
+    expect(JSON.parse(call?.function.arguments ?? '')).toEqual({ input: 'cats' });
   });
 
   it('streams the text answer to a tool result', async () => {

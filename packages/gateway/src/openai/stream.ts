@@ -60,8 +60,13 @@ export class ChunkTranslator {
   readonly #includeUsage: boolean;
   /** The `index` of each tool call by its id, in order of first appearance. */
   readonly #toolIndex = new Map<string, number>();
-  /** The tool calls some argument text was streamed for. */
+  /** The tool calls some non-whitespace argument text was streamed for. */
   readonly #argumentsStreamed = new Set<string>();
+  /**
+   * Argument text held back per tool call while it is only whitespace: whitespace alone is not
+   * JSON, so it is sent only once real argument text follows it.
+   */
+  readonly #heldArguments = new Map<string, string>();
 
   /**
    * @param id The response id, `chatcmpl_<uuid>`.
@@ -89,8 +94,17 @@ export class ChunkTranslator {
       case 'tool-input-delta': {
         const index = this.#toolIndex.get(part.id);
         if (index === undefined || part.delta === '') return [];
-        this.#argumentsStreamed.add(part.id);
-        return [this.#chunk({ tool_calls: [{ index, function: { arguments: part.delta } }] })];
+        let text = part.delta;
+        if (!this.#argumentsStreamed.has(part.id)) {
+          text = (this.#heldArguments.get(part.id) ?? '') + text;
+          if (text.trim() === '') {
+            this.#heldArguments.set(part.id, text);
+            return [];
+          }
+          this.#heldArguments.delete(part.id);
+          this.#argumentsStreamed.add(part.id);
+        }
+        return [this.#chunk({ tool_calls: [{ index, function: { arguments: text } }] })];
       }
       case 'tool-call': {
         const args = typeof part.input === 'string' ? part.input : JSON.stringify(part.input);
@@ -99,8 +113,9 @@ export class ChunkTranslator {
         if (index === undefined) return [this.#toolCall(part.toolCallId, part.toolName, args)];
         // Already streamed as fragments.
         if (this.#argumentsStreamed.has(part.toolCallId)) return [];
-        // Opened but no argument text arrived (a call without arguments, sent as `""`): send
-        // the arguments the non-streaming response would hold (`{}`), so they always parse.
+        // Opened but no argument text, or only whitespace, arrived (a call without arguments):
+        // send the arguments the non-streaming response would hold (`{}`), so they always parse.
+        this.#heldArguments.delete(part.toolCallId);
         return [this.#chunk({ tool_calls: [{ index, function: { arguments: args } }] })];
       }
       case 'finish': {
