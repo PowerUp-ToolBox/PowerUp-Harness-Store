@@ -11,6 +11,7 @@ import { IPC_METHODS } from '../src/shared/ipc.js';
 
 const MAIN_WINDOW = { id: 'main window webContents' };
 const quit = vi.fn();
+const stopWatching = vi.fn();
 const fakeServices: Services = {
   app: {
     version: '1.2.3',
@@ -77,6 +78,10 @@ const fakeServices: Services = {
       Promise.resolve(harnessId === 'acme/hello' ? ok(null) : fail('not_installed')),
     openDataFolder: (harnessId) =>
       Promise.resolve(harnessId === 'acme/hello' ? ok(null) : fail('not_installed')),
+  },
+  publish: {
+    validateFolder: (path) => Promise.resolve(fail('file_unreadable', { path })),
+    stopWatching,
   },
 };
 const en = translatorFor('en');
@@ -264,12 +269,31 @@ describe('IPC handlers against a fake service container', () => {
     ['launch.openLogs', { harnessId: 'acme/hello' }],
     ['launch.openDataFolder', ''],
     ['launch.openDataFolder', 'a'.repeat(257)],
+    ['publish.validateFolder', undefined],
+    ['publish.validateFolder', 'relative/folder'],
+    ['publish.validateFolder', { path: '/folder' }],
+    ['publish.stopWatching', '/folder'],
   ])('%s rejects %j as invalid_input', async (method, input) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
       ok: false,
       error: { code: 'invalid_input', params: { method } },
     });
+  });
+
+  it('publish.validateFolder passes an absolute path on; publish.stopWatching stops', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'publish.validateFolder', input: '/Users/me/hello' }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'file_unreadable', params: { path: '/Users/me/hello' } },
+    });
+    await expect(dispatch(MAIN_WINDOW, { method: 'publish.stopWatching' })).resolves.toEqual({
+      ok: true,
+      data: null,
+    });
+    expect(stopWatching).toHaveBeenCalledOnce();
   });
 
   it('launch.start starts the Harness named and answers the launch', async () => {

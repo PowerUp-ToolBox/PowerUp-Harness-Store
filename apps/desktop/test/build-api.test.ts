@@ -3,7 +3,7 @@ import { buildApi, type Invoke, type Listen } from '../src/preload/build-api.js'
 import type { IpcRequest } from '../src/shared/ipc.js';
 
 describe('buildApi (window.api)', () => {
-  it('exposes one function per method, nested by domain, plus on()', () => {
+  it('exposes one function per method, nested by domain, plus on() and pathForFile()', () => {
     const api = buildApi(vi.fn<Invoke>(), vi.fn<Listen>());
     expect(Object.keys(api).sort()).toEqual([
       'app',
@@ -15,7 +15,9 @@ describe('buildApi (window.api)', () => {
       'installs',
       'launch',
       'on',
+      'pathForFile',
       'providers',
+      'publish',
       'settings',
     ]);
     expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit']);
@@ -55,6 +57,7 @@ describe('buildApi (window.api)', () => {
       'openDataFolder',
     ]);
     expect(Object.keys(api.providers)).toEqual(['list']);
+    expect(Object.keys(api.publish)).toEqual(['validateFolder', 'stopWatching']);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
     expect(Object.isFrozen(api)).toBe(true);
     expect(Object.isFrozen(api.app)).toBe(true);
@@ -82,16 +85,26 @@ describe('buildApi (window.api)', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
-  it.each(['connectivity.changed', 'auth.changed', 'installs.changed'] as const)(
-    'subscribes to %s',
-    (event) => {
-      const listen = vi.fn<Listen>(() => () => undefined);
-      const api = buildApi(vi.fn<Invoke>(), listen);
-      const listener = vi.fn();
-      api.on(event, listener);
-      expect(listen).toHaveBeenCalledWith(event, listener);
-    },
-  );
+  it('pathForFile is the preload’s, called without a request to main', () => {
+    const invoke = vi.fn<Invoke>();
+    const pathForFile = vi.fn((file: File) => `/dropped/${file.name}`);
+    const api = buildApi(invoke, vi.fn<Listen>(), pathForFile);
+    expect(api.pathForFile(new File([], 'my-harness'))).toBe('/dropped/my-harness');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'connectivity.changed',
+    'auth.changed',
+    'installs.changed',
+    'publish.folderChanged',
+  ] as const)('subscribes to %s', (event) => {
+    const listen = vi.fn<Listen>(() => () => undefined);
+    const api = buildApi(vi.fn<Invoke>(), listen);
+    const listener = vi.fn();
+    api.on(event, listener);
+    expect(listen).toHaveBeenCalledWith(event, listener);
+  });
 
   it('refuses an event name outside the contract', () => {
     const api = buildApi(vi.fn<Invoke>(), vi.fn<Listen>());

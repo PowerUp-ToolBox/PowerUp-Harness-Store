@@ -8,6 +8,7 @@ import { openDatabase } from '../../src/main/runtime/database.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createInstallsStub } from '../../src/main/runtime/installer.js';
+import { fail } from '../../src/main/runtime/ipc-result.js';
 import { createConnectionsStub, providerPresets } from '../../src/main/runtime/connections.js';
 import type { Services } from '../../src/main/runtime/services.js';
 import { createSqliteSettingsStore } from '../../src/main/runtime/settings-store.js';
@@ -67,6 +68,10 @@ function launch(osLocale: string) {
     },
     installs: createInstallsStub(),
     launch: createSupervisorStub(),
+    publish: {
+      validateFolder: () => Promise.resolve(fail('not_implemented')),
+      stopWatching: () => undefined,
+    },
   };
   const dispatch = createDispatcher({
     handlers: createHandlers(services),

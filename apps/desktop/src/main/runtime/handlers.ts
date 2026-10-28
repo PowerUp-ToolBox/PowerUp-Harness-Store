@@ -201,6 +201,17 @@ export function createHandlers(services: Services): IpcHandlers {
       }
       return services.launch.openDataFolder(input);
     },
+    'publish.validateFolder': (input) => {
+      if (!isAbsolutePath(input)) {
+        return fail('invalid_input', { method: 'publish.validateFolder' });
+      }
+      return services.publish.validateFolder(input);
+    },
+    'publish.stopWatching': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'publish.stopWatching' });
+      services.publish.stopWatching();
+      return ok(null);
+    },
   };
 }
 

@@ -206,23 +206,385 @@ code {
   color: var(--color-text-muted);
 }
 
-/* The Publish placeholder's sign-in block (P0-07.2); P0-08.1 replaces it with the sign-in card. */
+/* The Publish screen (P0-08): account cards, then "New version" and its review. */
 .publish {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 720px;
+  max-width: 860px;
 }
 
-.publish-account {
+.publish-card {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-subtle);
+}
+
+.publish-card-text {
+  margin: 0;
+}
+
+.publish-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+
+.button-github {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
 }
 
-.publish-account p {
+.avatar {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+.avatar.monogram {
+  border-radius: 50%;
+}
+
+.avatar-small {
+  flex-basis: 20px;
+  width: 20px;
+  height: 20px;
+}
+
+.publish-account-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.publish-account-name {
+  font-weight: 600;
+}
+
+.publish-new {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 16px;
+  border: 2px dashed var(--color-border-strong);
+  border-radius: 12px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.drop-zone svg {
+  width: 40px;
+  height: 40px;
+}
+
+.drop-zone-title {
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.publish-folder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.publish-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.publish-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.publish-clean {
   margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-success-bg);
+  color: var(--color-text);
+}
+
+.problem-code {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.publish-version-badge {
+  align-self: flex-start;
+  margin: 0;
+}
+
+.publish-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.publish-review {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.publish-review-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.publish-review-section h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.publish-review-section h3 {
+  margin: 6px 0 0;
+  font-size: 14px;
+}
+
+.publish-review-section > p {
+  margin: 0;
+}
+
+.publish-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.publish-facts > div {
+  display: contents;
+}
+
+.publish-facts dt {
+  color: var(--color-text-muted);
+}
+
+.publish-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.publish-excluded {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* README and changelogs, as plain text until P0-09 renders them as Markdown. */
+.listing-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* The Store's listing: its card and detail page (shared with P0-09). */
+.listing-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 420px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg);
+}
+
+.listing-card-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.listing-card-name {
+  margin: 0;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.listing-card-summary,
+.listing-card-meta {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.listing-card-meta {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.platform-badges,
+.tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.platform-badges li {
+  padding: 2px 7px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.tag-chips li {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+  font-size: 12px;
+}
+
+.listing-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg);
+}
+
+.listing-detail-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.listing-detail-icon {
+  flex: 0 0 72px;
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+}
+
+.listing-detail-icon.monogram {
+  font-size: 24px;
+}
+
+.listing-detail-heading {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.listing-detail-name {
+  margin: 0;
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+.listing-detail-publisher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.listing-detail-summary {
+  margin: 0;
+}
+
+.listing-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.listing-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.listing-section h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.listing-slots,
+.listing-versions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.listing-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+.listing-slot-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.listing-slot-note {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.listing-version {
+  font-weight: 600;
+}
+
+.listing-detail-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 13px;
 }
 
 .settings {
@@ -1791,7 +2153,13 @@ input[aria-invalid='true'] {
   overflow-wrap: anywhere;
 }
 
-/* The install consent dialog (shared with P0-10). */
+/* The trust block: the consent dialog's body, the listing preview's and the Store detail page's. */
+.trust-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .permission-list {
   display: flex;
   flex-direction: column;
@@ -1874,7 +2242,8 @@ input[aria-invalid='true'] {
   font-size: 13px;
 }
 
-.modal .no-sandbox {
+.trust-block .no-sandbox {
+  margin: 0;
   padding: 10px 12px;
   border: 1px solid var(--color-border-strong);
   border-radius: 10px;

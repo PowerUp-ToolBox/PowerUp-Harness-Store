@@ -274,6 +274,19 @@ export interface IpcMethods {
    * open it.
    */
   'launch.openDataFolder': { input: string; output: null };
+  /**
+   * Builds the Harness Package of the folder at this absolute path, exactly as the Publish flow
+   * uploads it (a deterministic zip of what the exclusion rules keep), and validates that zip
+   * with `validatePackage`, passing the signed-in Publisher's login and, when the Harness ID is
+   * theirs, every version of it the Store has (any status). Starts watching the folder
+   * (`publish.folderChanged`), replacing the folder watched before. Only the latest run's zip is
+   * kept; a run that a newer one replaced answers `package_invalid`. `invalid_input` for a path
+   * that is not a folder (a dropped file); `package_invalid` for a folder that cannot be read;
+   * `file_unreadable` for a file in it that the User's account cannot open.
+   */
+  'publish.validateFolder': { input: string; output: FolderValidation };
+  /** Stops watching the folder `publish.validateFolder` watches; nothing to stop is fine. */
+  'publish.stopWatching': { input: undefined; output: null };
 }
 
 /** Which installed Harness to launch, and with which Workspace. */
@@ -381,6 +394,44 @@ export interface FolderInspection {
   readonly problems: readonly Problem[];
   /** Findings that do not block installing, such as an ignored key. */
   readonly warnings: readonly Problem[];
+}
+
+/**
+ * Whether the Store was asked for the Publisher's earlier versions of the Harness: `checked`;
+ * `skipped` when nobody is signed in, the Manifest has no Harness ID or the ID is another
+ * Publisher's; `failed` when the Store did not answer (it checks again on upload).
+ */
+export type VersionCheck = 'checked' | 'skipped' | 'failed';
+
+/** A folder's Harness Package as the Publish flow built and validated it. */
+export interface FolderValidation {
+  /** Names the zip main keeps for the upload; null when none could be built (too large). */
+  readonly archiveId: string | null;
+  /** Every problem, ordered by path: shown by `manifest.<messageKey>`. Publishing needs none. */
+  readonly problems: readonly Problem[];
+  /** Findings that never block publishing. */
+  readonly warnings: readonly Problem[];
+  /** The Manifest, present exactly when there is no problem. */
+  readonly manifest: Manifest | null;
+  /** `assets/icon.png` of the zip as a `data:` URL, null when it has none that can be read. */
+  readonly iconDataUrl: string | null;
+  /** README.md of the zip (its first 1 MiB), null when it has none. */
+  readonly readme: string | null;
+  /** What the zip leaves out, topmost only: a folder as `dir/`, a file by its path. */
+  readonly excluded: readonly string[];
+  /** The zip's size in bytes. */
+  readonly archiveSize: number;
+  readonly versionCheck: VersionCheck;
+  /** The highest version the Store has of this Harness (any status); null when none or unchecked. */
+  readonly lastPublishedVersion: string | null;
+  /** The Store has no version of this Harness yet; false when unchecked. */
+  readonly isNew: boolean;
+}
+
+/** The watched Harness folder changed on disk (outside what the Publish flow leaves out). */
+export interface PublishFolderChanged {
+  /** Absolute, as given to `publish.validateFolder`. */
+  readonly path: string;
 }
 
 /** The Harness and version an install put in place. */
@@ -764,6 +815,8 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'launch.status': true,
   'launch.openLogs': true,
   'launch.openDataFolder': true,
+  'publish.validateFolder': true,
+  'publish.stopWatching': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */
@@ -788,6 +841,11 @@ export interface IpcEvents {
    * at that Harness's card.
    */
   'app.navigate': AppNavigate;
+  /**
+   * The folder `publish.validateFolder` watches changed (500 ms after the last change); the
+   * Publish screen validates it again.
+   */
+  'publish.folderChanged': PublishFolderChanged;
   [event: `progress:${string}`]: unknown;
 }
 
@@ -815,6 +873,7 @@ export function isIpcEventName(name: string): name is IpcEventName {
     name === 'installs.changed' ||
     name === 'launch.state' ||
     name === 'app.navigate' ||
+    name === 'publish.folderChanged' ||
     /^progress:.+$/.test(name)
   );
 }
@@ -847,5 +906,17 @@ export type IpcSubscribe = <E extends IpcEventName>(
   listener: (payload: IpcEvents[E]) => void,
 ) => () => void;
 
-/** The only object the renderer sees: `window.api.<domain>.<verb>(input)` plus `on`. */
-export type DesktopApi = BridgeCalls<IpcMethods> & { readonly on: IpcSubscribe };
+/**
+ * The absolute path of a file or folder dropped on the page (Electron's
+ * `webUtils.getPathForFile`); `''` for one that has no path on disk.
+ */
+export type PathForFile = (file: File) => string;
+
+/**
+ * The only object the renderer sees: `window.api.<domain>.<verb>(input)`, plus `on` and
+ * `pathForFile`, which run in the preload without a call to main.
+ */
+export type DesktopApi = BridgeCalls<IpcMethods> & {
+  readonly on: IpcSubscribe;
+  readonly pathForFile: PathForFile;
+};
