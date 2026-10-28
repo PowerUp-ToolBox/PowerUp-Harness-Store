@@ -83,6 +83,7 @@ const responseFormat = z.discriminatedUnion('type', [
       name: z.string().min(1),
       description: z.string().nullish(),
       schema: z.record(z.string(), z.unknown()).nullish(),
+      strict: z.boolean().nullish(),
     }),
   }),
 ]);

@@ -5,10 +5,13 @@
 import {
   APICallError,
   EmptyResponseBodyError,
+  InvalidArgumentError,
+  InvalidPromptError,
   InvalidResponseDataError,
   JSONParseError,
   StreamProviderError,
   TypeValidationError,
+  UnsupportedFunctionalityError,
 } from 'ai';
 import type { GatewayErrorCode } from './errors.js';
 
@@ -48,6 +51,20 @@ export function isProviderFailure(error: unknown): boolean {
     // An error the Provider sent inside a 200 stream (`data: {"error": {...}}`).
     StreamProviderError.isInstance(error)
   );
+}
+
+/**
+ * The message of an error an adapter raised while building the Provider request because the
+ * request asks for something that adapter cannot express (Google takes system messages only at
+ * the start of the conversation, for one), or `undefined` for any other error. The request is
+ * well-formed, so the Harness gets `400 invalid_request` with this message, not a 500.
+ */
+export function adapterRejection(error: unknown): string | undefined {
+  return UnsupportedFunctionalityError.isInstance(error) ||
+    InvalidPromptError.isInstance(error) ||
+    InvalidArgumentError.isInstance(error)
+    ? error.message
+    : undefined;
 }
 
 /**

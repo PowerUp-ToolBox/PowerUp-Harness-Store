@@ -26,6 +26,11 @@ export interface AdapterInput {
   model: string;
   connection: ConnectionSecret;
   fetch: typeof globalThis.fetch;
+  /**
+   * The `strict` of the request's `json_schema` response format, `false` when absent (OpenAI's
+   * default). The OpenAI-wire SDKs would otherwise always send `strict: true`.
+   */
+  strictJsonSchema?: boolean;
 }
 
 /**
@@ -37,6 +42,7 @@ interface AdapterSettings {
   baseUrl: string;
   apiKey: string | undefined;
   fetch: typeof globalThis.fetch;
+  strictJsonSchema: boolean;
 }
 
 const ADAPTERS: Record<AdapterKind, (settings: AdapterSettings) => Model> = {
@@ -50,14 +56,14 @@ const ADAPTERS: Record<AdapterKind, (settings: AdapterSettings) => Model> = {
       model,
     ),
   // The model name is OpenRouter's own (`anthropic/claude-sonnet-4-5`), passed through as is.
-  // `strict` asks for usage on streams (`stream_options.include_usage`).
-  openrouter: ({ model, baseUrl, apiKey, fetch }) =>
+  // `compatibility: 'strict'` asks for usage on streams (`stream_options.include_usage`).
+  openrouter: ({ model, baseUrl, apiKey, fetch, strictJsonSchema }) =>
     createOpenRouter({
       baseURL: baseUrl,
       ...(apiKey !== undefined && { apiKey }),
       fetch,
       compatibility: 'strict',
-    }).chat(model),
+    }).chat(model, { structuredOutputs: { strict: strictJsonSchema } }),
   'openai-compatible': ({ model, baseUrl, apiKey, fetch }) =>
     createOpenAICompatible({
       name: 'openai-compatible',
@@ -93,7 +99,7 @@ const nonEmpty = (value: string | undefined) => (value === '' ? undefined : valu
  * their own.
  */
 export function createLanguageModel(
-  { providerId, model, connection, fetch }: AdapterInput,
+  { providerId, model, connection, fetch, strictJsonSchema = false }: AdapterInput,
   providers: readonly ProviderInfo[] = PROVIDERS,
 ): Model {
   const provider = findProvider(providerId, providers);
@@ -105,7 +111,19 @@ export function createLanguageModel(
     throw new Error(`The Connection for ${providerId} has no API key.`);
   }
   return wrapLanguageModel({
-    model: ADAPTERS[provider.adapter]({ model, baseUrl, apiKey, fetch }),
-    middleware: { overrideSupportedUrls: ({ model }) => withProviderFetchedImages(model) },
+    model: ADAPTERS[provider.adapter]({ model, baseUrl, apiKey, fetch, strictJsonSchema }),
+    middleware: {
+      overrideSupportedUrls: ({ model }) => withProviderFetchedImages(model),
+      // The call-time setting of the `openai` and `openai-compatible` adapters; others ignore it.
+      transformParams: ({ params }) =>
+        Promise.resolve({
+          ...params,
+          providerOptions: {
+            ...params.providerOptions,
+            openai: { ...params.providerOptions?.openai, strictJsonSchema },
+            openaiCompatible: { ...params.providerOptions?.openaiCompatible, strictJsonSchema },
+          },
+        }),
+    },
   });
 }

@@ -156,6 +156,30 @@ describe.each(PROVIDER_IDS_ON_FAKE)('conformance: %s', (providerId) => {
     expect(finish.choices[0]).toMatchObject({ delta: {}, finish_reason: 'stop' });
   });
 
+  it('sends a json_schema response format with the request’s strict (false when absent)', async () => {
+    const { url, token } = await start(providerId);
+    const schema = { type: 'object', properties: { a: { type: 'string' } } };
+    for (const [strict, upstream] of [
+      [false, false],
+      [true, true],
+      [undefined, false],
+    ] as const) {
+      fake.reset();
+      const response = await complete(url, token, {
+        model: model('fake/echo'),
+        messages: hello,
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'r', schema, ...(strict !== undefined && { strict }) },
+        },
+      });
+      expect(response.status).toBe(200);
+      expect(fake.requests[0]?.body).toMatchObject({
+        response_format: { type: 'json_schema', json_schema: { name: 'r', strict: upstream } },
+      });
+    }
+  });
+
   it('returns a tool call', async () => {
     const { url, token } = await start(providerId);
     const response = await complete(url, token, {

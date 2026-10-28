@@ -18,8 +18,12 @@ import { ChunkTranslator, SSE_DONE, sseError, sseEvent } from './openai/stream.j
 import { newCompletionId, toCallSettings, toChatCompletion } from './openai/translate.js';
 import type { CallSettings } from './openai/translate.js';
 import { parseModelRef } from './providers.js';
-import { isProviderFailure, providerError, providerTimeout } from './provider-errors.js';
-import type { MappedProviderError } from './provider-errors.js';
+import {
+  adapterRejection,
+  isProviderFailure,
+  providerError,
+  providerTimeout,
+} from './provider-errors.js';
 import { resolveSlot } from './slots.js';
 import type { SlotUnboundEvent } from './slots.js';
 import type { ConnectionSecret, GatewayOptions } from './types.js';
@@ -149,7 +153,7 @@ interface UpstreamCall {
   model: string;
   languageModel: Exclude<LanguageModel, string>;
   upstream: UpstreamFetch;
-  callSettings: Omit<CallSettings, 'toolChoice'>;
+  callSettings: Omit<CallSettings, 'toolChoice' | 'strictJsonSchema'>;
 }
 
 function prepareCall(
@@ -158,13 +162,14 @@ function prepareCall(
   deps: CompletionDeps,
 ): UpstreamCall {
   const upstream = createUpstreamFetch(deps.timeouts);
-  const { toolChoice, ...callSettings } = settings;
+  const { toolChoice, strictJsonSchema, ...callSettings } = settings;
   const languageModel = withProviderToolChoice(
     createLanguageModel({
       providerId: resolved.providerId,
       model: resolved.model,
       connection: resolved.connection,
       fetch: upstream.fetch,
+      ...(strictJsonSchema !== undefined && { strictJsonSchema }),
     }),
     toolChoice,
   );
@@ -176,21 +181,31 @@ function prepareCall(
   };
 }
 
+/** A documented error for a failed upstream call. */
+interface CallFailure {
+  code: GatewayErrorCode;
+  message: string;
+  fields: Record<string, unknown>;
+}
+
 /**
  * The documented error for a failed upstream call: `provider_timeout` when one of the Gateway's
- * timeouts aborted it, else `provider_error`. `undefined` for an error the Provider did not cause
- * (a Gateway bug), which the caller reports as `internal_error`.
+ * timeouts aborted it, `invalid_request` when the adapter could not express the request for its
+ * Provider, else `provider_error`. `undefined` for an error neither the request nor the Provider
+ * caused (a Gateway bug), which the caller reports as `internal_error`.
  */
 function upstreamFailure(
   error: unknown,
   upstream: UpstreamFetch,
   resolved: ResolvedModel,
   timeouts: UpstreamTimeouts,
-): MappedProviderError | undefined {
+): CallFailure | undefined {
   if (upstream.timedOut) {
     const firstByte = upstream.status === undefined;
     return providerTimeout(firstByte ? timeouts.firstByteMs : timeouts.idleMs, firstByte);
   }
+  const rejection = adapterRejection(error);
+  if (rejection !== undefined) return { code: 'invalid_request', message: rejection, fields: {} };
   return isProviderFailure(error) ? providerError(error, resolved.connection.apiKey) : undefined;
 }
 

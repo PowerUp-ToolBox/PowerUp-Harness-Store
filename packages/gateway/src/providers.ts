@@ -137,7 +137,7 @@ const TABLE = [
     baseUrl: 'https://api.minimax.cn/v1',
     requiresKey: true,
     supportsModelList: false,
-    docsUrl: 'https://platform.minimaxi.com/docs/guides/text-generation',
+    docsUrl: 'https://platform.minimax.cn/docs/guides/text-generation',
     keyPlaceholder: '',
   },
   {
@@ -206,6 +206,29 @@ export function isProviderId(id: string): boolean {
   return (PROVIDER_IDS as readonly string[]).includes(id) || NAMED_OPENAI_COMPATIBLE.test(id);
 }
 
+/**
+ * A Gemini model name: a bare name, or one under `models/` or `tunedModels/`. The Google adapter
+ * puts the name into the request URL unencoded (`.../models/<name>:generateContent`), so anything
+ * else could move the request to another path of the Google API with the User's key.
+ */
+const GOOGLE_MODEL_NAME = /^(?:(?:models|tunedModels)\/)?[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Whether `model` is a model name the Gateway sends to `providerId`: non-empty, without
+ * whitespace, `?`, `#`, `%` or `\`, and without an empty, `.` or `..` path segment, so no adapter
+ * can turn it into another URL. A Google model name must also be a Gemini model name. A Provider
+ * no row serves accepts nothing.
+ */
+export function isModelName(providerId: string, model: string): boolean {
+  const provider = findProvider(providerId);
+  if (provider === undefined) return false;
+  if (provider.adapter === 'google') return GOOGLE_MODEL_NAME.test(model);
+  return (
+    /^[^\s?#%\\]+$/.test(model) &&
+    model.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..')
+  );
+}
+
 /** What a request's `model` asks for. */
 export type ModelRef =
   /** An explicit `provider/model` id. */
@@ -215,8 +238,9 @@ export type ModelRef =
 
 /**
  * Reads a request's `model`. A value containing `/` is an explicit id, split at the first `/`:
- * the Provider part must be a Provider id and the model part non-empty without whitespace
- * (`openrouter/anthropic/claude-sonnet-4-5` keeps `anthropic/claude-sonnet-4-5` as the model).
+ * the Provider part must be a Provider id and the model part a model name for it ({@link
+ * isModelName}; `openrouter/anthropic/claude-sonnet-4-5` keeps `anthropic/claude-sonnet-4-5` as
+ * the model).
  * Anything else is a Slot name; Slot names never contain `/`, so the two forms cannot overlap.
  * Returns `null` for a malformed explicit id.
  */
@@ -225,6 +249,6 @@ export function parseModelRef(model: string): ModelRef | null {
   if (slash === -1) return { kind: 'slot', slot: model };
   const providerId = model.slice(0, slash);
   const name = model.slice(slash + 1);
-  if (!isProviderId(providerId) || !/^\S+$/.test(name)) return null;
+  if (!isProviderId(providerId) || !isModelName(providerId, name)) return null;
   return { kind: 'explicit', providerId, model: name };
 }

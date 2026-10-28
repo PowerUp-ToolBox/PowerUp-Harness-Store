@@ -7,7 +7,7 @@
  */
 import type { Manifest } from '@harness-store/manifest';
 import { unlessAborted } from './in-flight.js';
-import { isProviderId } from './providers.js';
+import { isModelName, isProviderId } from './providers.js';
 import type { Binding, GatewayOptions } from './types.js';
 
 type SlotOptions = Pick<GatewayOptions, 'getManifest' | 'resolveBinding'>;
@@ -64,7 +64,7 @@ function checkBinding(
     typeof binding?.providerId !== 'string' ||
     !isProviderId(binding.providerId) ||
     typeof binding.model !== 'string' ||
-    !/^\S+$/.test(binding.model)
+    !isModelName(binding.providerId, binding.model)
   ) {
     throw new Error(`resolveBinding returned an invalid Slot Binding for the Slot ${slot}.`);
   }

@@ -365,6 +365,77 @@ describe.each([
     expect(provider.image(requests[0]?.body)).toEqual(provider.expectedImage);
   });
 
+  /** A conversation with a system message after its first user message, as agent loops send. */
+  const midSystem = [
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: 'Hello.' },
+    { role: 'developer', content: 'Answer in French from now on.' },
+    { role: 'user', content: 'how are you?' },
+  ];
+
+  it.runIf(provider.providerId === 'anthropic')(
+    'accepts a system message mid-conversation',
+    async () => {
+      const response = await complete({
+        model: `${provider.providerId}/${model}`,
+        messages: midSystem,
+      });
+      expect(response.status).toBe(200);
+      expect(requests).toHaveLength(1);
+    },
+  );
+
+  it.runIf(provider.providerId === 'google')(
+    'answers 400 invalid_request, not 500, for a system message the adapter cannot place',
+    async () => {
+      for (const stream of [false, true]) {
+        const response = await complete({
+          model: `${provider.providerId}/${model}`,
+          messages: midSystem,
+          stream,
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: {
+            code: 'invalid_request',
+            message: expect.stringContaining('system messages') as string,
+            type: 'harness_store',
+          },
+        });
+      }
+      expect(requests).toEqual([]);
+    },
+  );
+
+  it.runIf(provider.providerId === 'google')(
+    'rejects a model name that would rewrite the request URL with 404 unknown_slot',
+    async () => {
+      for (const name of [
+        '../../admin/anything?key=x#',
+        'gemini-2.5-flash:countTokens#',
+        'm?x#',
+        '../x',
+      ]) {
+        const response = await complete({
+          model: `google/${name}`,
+          messages: [{ role: 'user', content: 'hi' }],
+        });
+        expect(response.status).toBe(404);
+        expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+          'unknown_slot',
+        );
+      }
+      expect(requests).toEqual([]);
+      // A model under `models/` is still a Gemini model name.
+      const response = await complete({
+        model: `google/models/${model}`,
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(response.status).toBe(200);
+      expect(requests[0]?.path).toBe(provider.path);
+    },
+  );
+
   it('maps an upstream 401 to 502 provider_error', async () => {
     status = 401;
     const response = await complete({

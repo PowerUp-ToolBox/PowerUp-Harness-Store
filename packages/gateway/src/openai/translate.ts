@@ -35,6 +35,11 @@ export interface CallSettings {
   seed?: number;
   /** Set for a JSON `response_format`; the reply text is returned as is, never parsed. */
   output?: OutputInterface<string, string, never>;
+  /**
+   * For the adapter only: whether a `json_schema` response format is strict. OpenAI's default,
+   * `false`, when the request does not say.
+   */
+  strictJsonSchema?: boolean;
 }
 
 export type TranslateResult =
@@ -244,6 +249,9 @@ export function toCallSettings(request: ChatCompletionRequest): TranslateResult 
   if (request.seed != null) settings.seed = request.seed;
   const format = request.response_format;
   if (format != null && format.type !== 'text') settings.output = rawJsonOutput(format);
+  if (format?.type === 'json_schema') {
+    settings.strictJsonSchema = format.json_schema.strict === true;
+  }
   return { ok: true, settings };
 }
 

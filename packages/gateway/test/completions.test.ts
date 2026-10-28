@@ -570,6 +570,14 @@ describe('request validation', () => {
       'an unknown response_format',
       { model: `${FAKE}/fake/echo`, messages: hello, response_format: { type: 'yaml' } },
     ],
+    [
+      'a json_schema strict that is not a boolean',
+      {
+        model: `${FAKE}/fake/echo`,
+        messages: hello,
+        response_format: { type: 'json_schema', json_schema: { name: 'r', strict: 'yes' } },
+      },
+    ],
     ['a JSON array', [1, 2]],
     ['not JSON', '{"model":'],
   ])('rejects a body with %s as 400 invalid_request', async (_name, body) => {
@@ -629,6 +637,8 @@ describe('model resolution', () => {
     ['a malformed openai-compatible name', 'openai-compatible:Fake_1/fake/echo'],
     ['an empty model name', `${FAKE}/`],
     ['whitespace in the model name', `${FAKE}/fake echo`],
+    ['a dot segment in the model name', `${FAKE}/../fake/echo`],
+    ['a query in the model name', `${FAKE}/fake/echo?x=1`],
     ['a leading slash', '/fake/echo'],
   ])('rejects %s with 404 unknown_slot', async (_name, model) => {
     const getConnection = fakeConnections();

@@ -65,16 +65,17 @@ Validation (`400 invalid_request`, details in `message`):
 - Content parts are `text` everywhere, plus `image_url` in `user` messages with an `http(s)` URL (fetched by the Provider, never by the Gateway) or a base64 data URL of an image (`data:image/<type>[;...];base64,<data>`). Any other data URL (a PDF, audio, text, data that is not valid base64), any other part type, or an image outside a `user` message, is rejected.
 - A `tool` message's `tool_call_id` must match a `tool_calls` entry of an earlier `assistant` message, and every `tool_calls` entry must get its `tool` message before the next `system`, `developer` or `user` message and before the end of `messages` (as OpenAI requires).
 - A `tool_choice` naming a function must name one in `tools`, and `tool_choice: "required"` needs at least one tool.
+- A request the Provider's adapter cannot express for that Provider is rejected too, with the adapter's own message, before anything is sent upstream. Google, for one, takes system messages only before the first `user` or `assistant` message, so a `system` or `developer` message later in the conversation is rejected for a `google` model and accepted for the others.
 
 `tool_choice` is sent to the Provider, never enforced by the Gateway: a reply that ignores it (plain text for `required`, a tool call for `none`) is returned as the Provider sent it.
 
-`response_format` `json_object` and `json_schema` are passed to the Provider as structured-output requests, but the reply is returned as raw text: output that is not valid JSON is never an error. Tools are only described to the Provider; the Gateway never runs one, so each request is a single model call.
+`response_format` `json_object` and `json_schema` are passed to the Provider as structured-output requests, but the reply is returned as raw text: output that is not valid JSON is never an error. A `json_schema`'s `strict` (a boolean) reaches Providers that take it (`openai`, `openrouter` and the OpenAI-compatible rows) as sent, and as `false` when absent, OpenAI's own default. Tools are only described to the Provider; the Gateway never runs one, so each request is a single model call.
 
 `model` is one of:
 - a **Slot name** declared in the Harness Manifest (`default`, `fast`, ...), the normal case;
 - an explicit **`provider/model`** id (see §6), for advanced Harnesses; allowed only if the User has a Connection for that Provider.
 
-A `model` containing `/` is an explicit id, split at the first `/` (`openrouter/anthropic/claude-sonnet-4-5` is the model `anthropic/claude-sonnet-4-5` at `openrouter`). The Provider part must be a Provider id of §6, or `openai-compatible:<name>` with `<name>` matching `^[a-z0-9][a-z0-9-]*$`, and the model part must be non-empty without whitespace; otherwise the request gets `404 unknown_slot`. A `model` without `/` is a Slot name (Slot names never contain `/`). An explicit id never consults the Slot Bindings; it needs a Connection for its Provider, else `403 provider_not_connected`.
+A `model` containing `/` is an explicit id, split at the first `/` (`openrouter/anthropic/claude-sonnet-4-5` is the model `anthropic/claude-sonnet-4-5` at `openrouter`). The Provider part must be a Provider id of §6, or `openai-compatible:<name>` with `<name>` matching `^[a-z0-9][a-z0-9-]*$`, and the model part must be a valid model name for it; otherwise the request gets `404 unknown_slot`. A model name is non-empty, has no whitespace, `?`, `#`, `%` or `\`, and no empty, `.` or `..` segment between its `/`s, so no adapter can turn it into another request URL. A `google` model name, which the adapter puts into the request path, must also be a Gemini model name: `^(?:(?:models|tunedModels)/)?[A-Za-z0-9][A-Za-z0-9._-]*$`. A `model` without `/` is a Slot name (Slot names never contain `/`). An explicit id never consults the Slot Bindings; it needs a Connection for its Provider, else `403 provider_not_connected`.
 
 A request is checked in this order: body validation (`400`), then model resolution (`404`, `409`, `403`), then the upstream call (`502`, `504`). Only a request that gets as far as the upstream call reaches a Provider.
 
@@ -108,7 +109,7 @@ The order above is implemented by the Gateway's host (the desktop app's binding 
 - answers `409 slot_unbound` (with the `slot` field) when the host finds no binding, and tells the Runtime so it can raise the notification of step 5;
 - otherwise uses the binding's `provider/model` exactly like an explicit id (§3): the Provider needs a Connection, else `403 provider_not_connected`, and the response's `model` is the bound `provider/model`.
 
-A binding whose Provider id is not one of §6 or whose model name is empty or contains whitespace is a host bug and gets `500 internal_error`.
+A binding whose Provider id is not one of §6 or whose model name is not a valid model name for that Provider (§3) is a host bug and gets `500 internal_error`.
 
 ## 5. Errors
 
@@ -116,7 +117,7 @@ All errors use `{ "error": { "code", "message", "type": "harness_store" | "provi
 
 | HTTP | code | Meaning |
 |---|---|---|
-| 400 | `invalid_request` | Body fails validation (details in `message`), is not a JSON object or is larger than 20 MB |
+| 400 | `invalid_request` | Body fails validation (details in `message`), is not a JSON object or is larger than 20 MB, or asks for something the Provider's adapter cannot express (§3) |
 | 401 | `invalid_token` | Missing, unknown or revoked Gateway Token |
 | 403 | `invalid_host` | `Host` header is not the Gateway on loopback (§1) |
 | 403 | `provider_not_connected` | The Provider of an explicit `provider/model`, or of a Slot's binding, has no Connection |
@@ -165,7 +166,7 @@ A **Provider id** is a fixed string; a **Connection** is the User's credential/e
 
 Presets are data (id, display name, base URL, docs link, key placeholder, whether `/models` listing works). Adding a preset must never require code changes outside the preset table.
 
-The base URL in the table is the Provider's default; a Connection's own base URL replaces it (an international account of a Chinese vendor, such as `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`, or Ollama on another port). Where a vendor has a mainland-China and an international endpoint, the default is the mainland-China one. `openai-compatible` has no default: its Connections must name a base URL. Every Provider except `ollama`, `lmstudio` and `openai-compatible` needs an API key; the Gateway never falls back to an SDK's environment variables (`OPENAI_API_KEY` and the like). Model names are passed to the Provider exactly as written after the Provider id.
+The base URL in the table is the Provider's default; a Connection's own base URL replaces it (an international account of a Chinese vendor, such as `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`, or Ollama on another port). Where a vendor has a mainland-China and an international endpoint, the default is the mainland-China one. `openai-compatible` has no default: its Connections must name a base URL. Every Provider except `ollama`, `lmstudio` and `openai-compatible` needs an API key; the Gateway never falls back to an SDK's environment variables (`OPENAI_API_KEY` and the like). Model names are passed to the Provider exactly as written after the Provider id, once they pass the model name check of §3.
 
 Model listing: for each Connection the app calls the Provider's model list where available (`/v1/models` for OpenAI-compatible endpoints and OpenAI; Anthropic and Google use a static list shipped with the app, refreshed with app updates) and lets the User type a model name manually when listing is unavailable.
 

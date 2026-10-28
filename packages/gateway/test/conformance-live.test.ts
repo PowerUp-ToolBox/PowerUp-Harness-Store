@@ -155,7 +155,9 @@ describe.each(LIVE)('live conformance: $providerId', ({ providerId, model, conne
     });
     expect(response.status, await response.clone().text()).toBe(200);
     const [choice] = ((await response.json()) as Completion).choices;
-    expect(choice?.finish_reason).toBe('tool_calls');
+    // OpenAI (and Providers copying it) finishes a call forced by name with `stop`, not
+    // `tool_calls`, and the Gateway passes the Provider's reason through.
+    expect(['tool_calls', 'stop']).toContain(choice?.finish_reason);
     const [call] = choice?.message.tool_calls ?? [];
     expect(call?.function.name).toBe('get_weather');
     expect(JSON.parse(call?.function.arguments ?? '{}')).toHaveProperty('city');

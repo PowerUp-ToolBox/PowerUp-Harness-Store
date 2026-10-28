@@ -298,6 +298,11 @@ describe('a resolveBinding that breaks its contract', () => {
     ],
     ['returns an empty model', () => Promise.resolve(bound(''))],
     ['returns a model with whitespace', () => Promise.resolve(bound('fake echo'))],
+    ['returns a model with a dot segment', () => Promise.resolve(bound('../fake/echo'))],
+    [
+      'returns a Google model that is not a Gemini model name',
+      () => Promise.resolve({ ...bound('gemini-2.5-flash?alt=sse#'), providerId: 'google' }),
+    ],
   ])('fails the request with 500 internal_error when it %s', async (_name, answer) => {
     const error = vi.fn<Logger['error']>();
     const resolveBinding = answer as ResolveBinding;

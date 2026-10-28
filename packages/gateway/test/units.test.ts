@@ -161,12 +161,39 @@ describe('parseModelRef', () => {
   });
 
   it.each([
+    'google/gemini-2.5-flash',
+    'google/models/gemini-2.5-flash',
+    'google/tunedModels/my-model-1',
+    'ollama/qwen3:8b',
+    'openai/ft:gpt-4o-mini:acme::abc123',
+    'openai-compatible:vllm/meta-llama/Llama-3.1-8B-Instruct',
+    'openrouter/qwen/qwen3-8b:free',
+  ])('accepts the model name of %s', (model) => {
+    expect(parseModelRef(model)).toMatchObject({ kind: 'explicit' });
+  });
+
+  it.each([
     'acme/m',
     'openai-compatible:/m',
     'openai-compatible:-x/m',
     'OpenAI/m',
     'openai/',
     'openai/a b',
+    // Model names that would rewrite a request URL (the Google adapter puts the name in its path).
+    'google/../../admin/anything?key=x#',
+    'google/gemini-2.5-flash:countTokens#',
+    'google/m?x#',
+    'google/../x',
+    'google/files/abc',
+    'google/models/../x',
+    'openai/a?b',
+    'openai/a#b',
+    'openai/a%2Fb',
+    'openai/a\\b',
+    'openrouter/../x',
+    'openrouter/a/./b',
+    'openrouter/a//b',
+    'openrouter/a/',
   ])('rejects %s', (model) => {
     expect(parseModelRef(model)).toBeNull();
   });
