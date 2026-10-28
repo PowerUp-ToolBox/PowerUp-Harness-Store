@@ -52,12 +52,26 @@ export interface BuiltPackage {
   readonly rules: ExclusionRules;
 }
 
+/** A folder listed to the end, within {@link BuildOptions.maxListed}. */
+export interface Listing {
+  /** The folders the listing entered, relative and `/`-separated: `''` (the folder) first. */
+  readonly folders: readonly string[];
+  /** The folder's rules, `.harnessignore` included. */
+  readonly rules: ExclusionRules;
+}
+
 export interface BuildOptions {
   /**
-   * Asked between files: false stops the build with {@link BuildSupersededError}, for a run a
-   * newer one replaced.
+   * Asked as each folder is entered, between files and between a file's 64 KiB chunks: false
+   * stops the build with {@link BuildSupersededError}, for a run a newer one replaced.
    */
   readonly isCurrent?: () => boolean;
+  /**
+   * Called once the folder is listed to the end, before any file is read (the Publish flow
+   * watches the folders listed from then on). A folder with more than `maxListed` files is never
+   * listed to the end, and this is not called.
+   */
+  readonly onListed?: (listing: Listing) => void;
   /** Default: `PACKAGE_LIMITS.maxArchiveBytes`. Tests lower it. */
   readonly maxBytes?: number;
   /**
@@ -152,7 +166,8 @@ interface Entry {
  * an `archive_too_many_files` one, without being read, so no ZIP64 record is ever needed. Listing
  * stops after `PACKAGE_LIMITS.maxListedEntries` files, as `validatePackage` stops listing a zip
  * (`archive_too_many_files.not_counted`), so a folder picked by mistake (a project root with its
- * `node_modules`, a home folder) is not walked to the end on every run.
+ * `node_modules`, a home folder) is not walked to the end on every run. A build that a newer one
+ * replaced stops at the next folder, file or chunk.
  *
  * @throws {FolderUnreadableError} when `folder` cannot be listed, {@link EntryUnreadableError}
  *   for a file or folder in it the User may not open, {@link FolderChangedError} when something
@@ -168,8 +183,9 @@ export async function buildPackage(
   const rules = exclusionRules(await readHarnessIgnore(folder));
   const items: Item[] = [];
   const excluded: string[] = [];
+  const folders: string[] = [];
   try {
-    await walk(folder, '', { rules, items, excluded, isCurrent, maxListed });
+    await walk(folder, '', { rules, items, excluded, folders, isCurrent, maxListed });
   } catch (error) {
     if (!(error instanceof TooManyFilesError)) throw error;
     excluded.sort(compare);
@@ -181,6 +197,7 @@ export async function buildPackage(
   }
   items.sort((a, b) => compare(a.path, b.path));
   excluded.sort(compare);
+  options.onListed?.({ folders, rules });
 
   if (items.length > PACKAGE_LIMITS.maxFiles) {
     const problem = packageProblem('archive_too_many_files', {
@@ -196,7 +213,7 @@ export async function buildPackage(
     if (!isCurrent()) throw new BuildSupersededError();
     const entry =
       item.kind === 'file'
-        ? await deflateFile(folder, item, maxBytes - size)
+        ? await deflateFile(folder, item, maxBytes - size, isCurrent)
         : emptyEntry(item.path, await modeOf(folder, item.path));
     size += localHeaderSize(entry) + entry.compressedSize + centralHeaderSize(entry);
     if (entry.size > MAX_ZIP32 || size + END_RECORD_SIZE > maxBytes) {
@@ -251,6 +268,8 @@ interface Walk {
   readonly items: Item[];
   /** What is left out. */
   readonly excluded: string[];
+  /** The folders entered, the root (`''`) first. */
+  readonly folders: string[];
   readonly isCurrent: () => boolean;
   /** More items than this stop the walk with {@link TooManyFilesError}. */
   readonly maxListed: number;
@@ -267,6 +286,7 @@ async function walk(root: string, relative: string, state: Walk): Promise<void> 
     if (relative === '') throw new FolderUnreadableError({ cause: error });
     throw unreadable(relative, error);
   }
+  state.folders.push(relative);
   for (const child of children) {
     const path = relative === '' ? child.name : `${relative}/${child.name}`;
     if (child.isDirectory()) {
@@ -306,9 +326,16 @@ function unreadable(path: string, error: unknown): Error {
 
 /**
  * Reads and deflates one regular file, without following a link that replaced it since it was
- * listed. Stops reading once its compressed data alone passes `budget` bytes.
+ * listed. Stops reading once its compressed data alone passes `budget` bytes, and between chunks
+ * once `isCurrent` says a newer build replaced this one ({@link BuildSupersededError}), so a
+ * replaced run does not hold a large file's compressed data to its end.
  */
-async function deflateFile(root: string, item: Item, budget: number): Promise<Entry> {
+async function deflateFile(
+  root: string,
+  item: Item,
+  budget: number,
+  isCurrent: () => boolean,
+): Promise<Entry> {
   const noFollow = (constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
   let handle: FileHandle;
   try {
@@ -340,6 +367,7 @@ async function deflateFile(root: string, item: Item, budget: number): Promise<En
       if (last) break;
       // Lets the Model Gateway and IPC run between chunks.
       await new Promise((resolve) => setImmediate(resolve));
+      if (!isCurrent()) throw new BuildSupersededError();
     }
     const name = new TextEncoder().encode(item.path);
     return {

@@ -98,7 +98,8 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
 
   const validate = useCallback(
     (path: string) => {
-      const run = async (target: string): Promise<void> => {
+      /** Validates `target`; false when a newer run replaced this one and its answer was dropped. */
+      const run = async (target: string): Promise<boolean> => {
         runs.current += 1;
         const at = runs.current;
         const before = flowRef.current;
@@ -118,17 +119,17 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
           dropRefused: false,
         });
         const result = await window.api.publish.validateFolder(target);
-        if (!mounted.current || at !== runs.current) return;
+        if (!mounted.current || at !== runs.current) return false;
         const notFolder = !result.ok && result.error.code === 'invalid_input';
         if (notFolder && !same) {
           // A dropped file: the folder chosen before stays, as it was, and a run of it this one
           // replaced runs again (a run of that folder never comes back here).
           setFlow({ ...before, dropRefused: true });
+          // The refusal stays shown unless a newer action replaced that run meanwhile.
           if (before.folder !== null && before.check?.kind === 'checking') {
-            await run(before.folder);
-            setFlow((current) => ({ ...current, dropRefused: true }));
+            if (await run(before.folder)) setFlow((current) => ({ ...current, dropRefused: true }));
           }
-          return;
+          return true;
         }
         setFlow((current) => ({
           ...current,
@@ -138,6 +139,7 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
               { kind: 'error', error: notFolder ? FOLDER_GONE : result.error },
           reviewing: current.reviewing && result.ok && result.data.problems.length === 0,
         }));
+        return true;
       };
       return run(path);
     },

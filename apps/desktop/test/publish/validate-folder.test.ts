@@ -37,6 +37,8 @@ let requests: Recorded[];
 /** What the fake Store answers to the "Own versions" read: rows, or a status with no rows. */
 let versionsAnswer: { status: number; rows: { version: string; status: string }[] };
 let login: string | null;
+/** Called as a run asks who is signed in, once its zip is built. */
+let onLogin: (() => void) | null;
 let sessionRejected: ReturnType<typeof vi.fn<(accessToken: string) => Promise<void>>>;
 let changes: string[];
 let service: PublishService;
@@ -49,6 +51,7 @@ beforeEach(async () => {
   requests = [];
   versionsAnswer = { status: 200, rows: [] };
   login = 'octo-cat';
+  onLogin = null;
   sessionRejected = vi.fn<(accessToken: string) => Promise<void>>(() => Promise.resolve());
   changes = [];
   server = createServer((request, response) => {
@@ -73,7 +76,10 @@ beforeEach(async () => {
     storeBaseUrl: () => baseUrl,
     anonKey: ANON_KEY,
     auth: {
-      login: () => Promise.resolve(login),
+      login: () => {
+        onLogin?.();
+        return Promise.resolve(login);
+      },
       accessToken: () => Promise.resolve(login === null ? null : TOKEN),
       sessionRejected,
     },
@@ -267,6 +273,21 @@ describe('publish.validateFolder', () => {
     const [older, newer] = await Promise.all([validate(), validate()]);
     expect(older).toMatchObject({ ok: false, error: { code: 'package_invalid' } });
     expect(newer.ok).toBe(true);
+  });
+
+  it('a run replaced once its zip is built does not ask the Store, nor end the session', async () => {
+    versionsAnswer = { status: 401, rows: [] };
+    let newer: Promise<IpcResult<FolderValidation>> | undefined;
+    onLogin = () => {
+      onLogin = null;
+      versionsAnswer = { status: 200, rows: [] };
+      newer = service.validateFolder(folder);
+    };
+    const older = await service.validateFolder(folder);
+    expect(older).toMatchObject({ ok: false, error: { code: 'package_invalid' } });
+    await expect(newer).resolves.toMatchObject({ ok: true, data: { versionCheck: 'checked' } });
+    expect(requests).toHaveLength(1);
+    expect(sessionRejected).not.toHaveBeenCalled();
   });
 
   it('keeps only the latest run’s zip', async () => {

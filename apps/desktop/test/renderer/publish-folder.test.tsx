@@ -192,6 +192,35 @@ describe('choosing and validating a folder', () => {
     expect(screen.getByText('No problems found.')).toBeDefined();
   });
 
+  it('a refused drop is not shown on a folder dropped while the previous folder was re-checked', async () => {
+    const api = signedIn();
+    const held: ((value: { ok: true; data: FolderValidation }) => void)[] = [];
+    api.publish.validateFolder.mockImplementation((path: string) => {
+      if (path === '/dropped/notes.txt') return Promise.resolve(NOT_A_FOLDER);
+      if (path === '/dropped/other-web') {
+        return Promise.resolve({ ok: true, data: validation({ archiveId: 'archive-other' }) });
+      }
+      return new Promise((resolve) => held.push(resolve));
+    });
+    await renderApp('#/publish');
+    await chooseFolder();
+    const zone = await screen.findByRole('region', { name: 'Drop a Harness folder here' });
+    // The file is refused while the chosen folder is still being checked: it is checked again.
+    fireEvent.drop(zone, { dataTransfer: { files: [new File(['x'], 'notes.txt')] } });
+    await waitFor(() => {
+      expect(held).toHaveLength(2);
+    });
+    // A folder dropped before that check ends replaces it.
+    fireEvent.drop(zone, { dataTransfer: { files: [new File([], 'other-web')] } });
+    expect(await screen.findByText('No problems found.')).toBeDefined();
+    await act(async () => {
+      for (const resolve of held) resolve({ ok: true, data: validation() });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(screen.getByText('/dropped/other-web')).toBeDefined();
+    expect(screen.queryByText('Drop a folder, not a file.')).toBeNull();
+  });
+
   it('the chosen folder, now a file, is an error rather than a refused drop', async () => {
     const api = signedIn();
     api.publish.validateFolder.mockResolvedValueOnce({ ok: true, data: validation() });

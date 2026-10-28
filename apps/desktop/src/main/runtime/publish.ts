@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { sep } from 'node:path';
+import { join, sep } from 'node:path';
 import {
   ArchiveSource,
   PackageReadError,
@@ -17,8 +17,9 @@ import {
   EntryUnreadableError,
   FolderChangedError,
   FolderUnreadableError,
+  type Listing,
 } from './package-archive.js';
-import { exclusionRules, HARNESS_IGNORE_FILE, type ExclusionRules } from './package-exclusions.js';
+import { HARNESS_IGNORE_FILE, type ExclusionRules } from './package-exclusions.js';
 import type { StoreAuth, StoreFetch } from './store-auth.js';
 
 /** The watcher reports a change once the folder has been quiet this long. */
@@ -48,8 +49,17 @@ export interface PublishServiceOptions {
   readonly debounceMs?: number;
   /** The archive size limit; default `PACKAGE_LIMITS.maxArchiveBytes`. Tests lower it. */
   readonly maxArchiveBytes?: number;
+  /** Files listed before a folder counts as too large; default `PACKAGE_LIMITS.maxListedEntries`. */
+  readonly maxListedEntries?: number;
   /** Watches the folder; default `fs.watch`. Tests drive its events. */
   readonly watch?: typeof watch;
+  /**
+   * Whether one recursive `fs.watch` covers the folder. Default: everywhere but Linux, where Node
+   * has no native recursive watch and emulates it by listing and watching the whole tree,
+   * excluded folders included, synchronously inside the call. Otherwise every folder the build
+   * listed gets a watch of its own.
+   */
+  readonly recursiveWatch?: boolean;
 }
 
 /** The Publish flow's Runtime side (P0-08), as the IPC handlers use it. */
@@ -74,18 +84,25 @@ export interface PublishService {
  * read that fails leaves `publishedVersions` out (`versionCheck: 'failed'`): the Store checks
  * again on upload. A 401 ends the session (`session_expired`).
  *
- * Runs are numbered: the newest wins, and an older one still going is stopped between files. Only
- * the newest run's zip is kept, for the upload.
+ * Runs are numbered: the newest wins, and an older one still going is stopped between folders,
+ * files and a file's chunks, and before it opens its zip or asks the Store. Only the newest run's
+ * zip is kept, for the upload.
  *
- * The folder of the latest run is watched (`fs.watch`, recursive, one folder at a time): a change
- * outside what the exclusion rules leave out, `.harnessignore` itself included, is reported once
- * the folder has been quiet for {@link FOLDER_CHANGE_DEBOUNCE_MS}. A watcher that could not start,
- * that failed, or whose folder itself was deleted or moved is dropped, after one last report: the
- * next validation of the folder (that report's, a Re-check, a new pick) watches it afresh.
+ * The folder of the latest run is watched (`fs.watch`, one folder at a time), from the moment its
+ * build has listed it, before any file is read: a change outside what the exclusion rules leave
+ * out, `.harnessignore` itself included, is reported once the folder has been quiet for
+ * {@link FOLDER_CHANGE_DEBOUNCE_MS}. One recursive watch covers it, except on Linux, where each
+ * folder the build listed is watched on its own, so excluded folders are never entered, and every
+ * listing replaces those watches (a folder made since is listed by the validation its change
+ * brings). A folder with too many files to list is not watched: Re-check validates it again. A
+ * watcher that could not start, that failed, or whose folder itself was deleted or moved is
+ * dropped, after one last report: the next validation of the folder (that report's, a Re-check, a
+ * new pick) watches it afresh.
  */
 export function createPublishService(options: PublishServiceOptions): PublishService {
   const debounceMs = options.debounceMs ?? FOLDER_CHANGE_DEBOUNCE_MS;
   const watchFolder = options.watch ?? watch;
+  const recursive = options.recursiveWatch ?? process.platform !== 'linux';
   let runs = 0;
   let latest: { readonly id: string; readonly bytes: Uint8Array } | null = null;
   let watched: Watched | null = null;
@@ -93,14 +110,17 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
   const stopWatching = () => {
     if (watched === null) return;
     if (watched.timer !== null) clearTimeout(watched.timer);
-    watched.watcher?.close();
+    for (const watcher of watched.watchers) watcher.close();
     watched = null;
   };
 
-  const startWatching = (path: string) => {
-    if (watched?.path === path && watched.watcher !== null) return;
-    stopWatching();
-    const entry: Watched = { path, rules: exclusionRules(null), watcher: null, timer: null };
+  /** Watches `path`, as its build listed it. */
+  const startWatching = (path: string, listing: Listing) => {
+    if (recursive && watched?.path === path && watched.watchers.length > 0) {
+      watched.rules = listing.rules;
+      return;
+    }
+    const entry: Watched = { path, rules: listing.rules, watchers: [], timer: null };
     const changed = () => {
       if (entry.timer !== null) clearTimeout(entry.timer);
       entry.timer = setTimeout(() => {
@@ -110,12 +130,15 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
     };
     /** The watcher is dead: the next validation of the folder starts a new one. */
     const drop = () => {
-      entry.watcher?.close();
-      entry.watcher = null;
+      for (const watcher of entry.watchers) watcher.close();
+      entry.watchers = [];
     };
-    try {
-      entry.watcher = watchFolder(path, { recursive: true }, (event, filename) => {
-        const relative = filename === null ? '' : filename.split(sep).join('/');
+    /** Watches `folder` (relative to `path`), recursively or not. */
+    const watchOne = (folder: string) => {
+      const target = folder === '' ? path : join(path, ...folder.split('/'));
+      const watcher = watchFolder(target, { recursive }, (event, filename) => {
+        const name = filename === null ? '' : filename.split(sep).join('/');
+        const relative = folder === '' || name === '' ? folder || name : `${folder}/${name}`;
         if (relative === '') {
           // The folder itself. Linux reports its deletion or move as a 'rename' of '' (and the
           // rules cannot be asked about '').
@@ -125,15 +148,26 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
         }
         changed();
       });
+      entry.watchers.push(watcher);
       // The folder was deleted or moved: one more report, whose validation says so.
-      entry.watcher.on('error', () => {
+      watcher.on('error', () => {
         drop();
         changed();
       });
+    };
+    try {
+      if (recursive) watchOne('');
+      else for (const folder of listing.folders) watchOne(folder);
     } catch {
       // Too many watches, or a file system that cannot be watched: Re-check tries again.
+      drop();
     }
+    // The new watches are up before the old ones close, so no change falls in between, and a
+    // change the old ones were about to report is still reported.
+    const pending = watched?.path === path && watched.timer !== null;
+    stopWatching();
     watched = entry;
+    if (pending) changed();
   };
 
   /** The Publisher's versions of `harnessId`, any status, or why there are none to pass. */
@@ -184,15 +218,20 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
       } catch {
         return fail('package_invalid');
       }
-      // A newer run may already watch its own folder: this one must not take the watch back.
-      if (!isCurrent()) return fail('package_invalid');
-      startWatching(path);
 
       let built;
       try {
         built = await buildPackage(path, {
           isCurrent,
+          // Watched once listed within the limit, so a folder too large to list (a home folder
+          // dropped by mistake) is never walked by a watcher; a newer run keeps its own watch.
+          onListed: (listing) => {
+            if (isCurrent()) startWatching(path, listing);
+          },
           ...(options.maxArchiveBytes === undefined ? {} : { maxBytes: options.maxArchiveBytes }),
+          ...(options.maxListedEntries === undefined
+            ? {}
+            : { maxListed: options.maxListedEntries }),
         });
       } catch (error) {
         if (error instanceof EntryUnreadableError) {
@@ -207,7 +246,9 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
         }
         throw error;
       }
-      if (isCurrent() && watched?.path === path) watched.rules = built.rules;
+      if (!isCurrent()) return fail('package_invalid');
+      // Too many files to list: it was not watched, and is no longer.
+      if (built.problem?.messageKey === 'archive_too_many_files.not_counted') stopWatching();
 
       const empty = {
         warnings: [],
@@ -221,7 +262,7 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
         isNew: false,
       } as const;
       if (built.bytes === null) {
-        if (isCurrent()) latest = null;
+        latest = null;
         return ok({
           ...empty,
           archiveId: null,
@@ -234,6 +275,8 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
       const harnessId = await readHarnessId(source);
       let check: VersionCheck = 'skipped';
       let versions: string[] | undefined;
+      // A run replaced meanwhile does not ask the Store (nor end the session on a 401).
+      if (!isCurrent()) return fail('package_invalid');
       if (login !== null && harnessId !== null && publisherOf(harnessId) === login.toLowerCase()) {
         ({ check, versions } = await preflight(harnessId));
       }
@@ -280,7 +323,8 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
 interface Watched {
   readonly path: string;
   rules: ExclusionRules;
-  watcher: FSWatcher | null;
+  /** One recursive watch, or one per folder listed; none once dropped. */
+  watchers: FSWatcher[];
   timer: ReturnType<typeof setTimeout> | null;
 }
 

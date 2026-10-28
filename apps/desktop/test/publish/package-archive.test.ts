@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { ArchiveSource, validatePackage } from '@harness-store/manifest';
 import { unzipSync } from 'fflate';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildPackage } from '../../src/main/runtime/package-archive.js';
+import { buildPackage, BuildSupersededError } from '../../src/main/runtime/package-archive.js';
 
 const FIXTURE = join(import.meta.dirname, '../fixtures/harnesses/fixture-web');
 
@@ -160,6 +160,37 @@ describe('buildPackage', () => {
     },
   );
 
+  it('a build a newer one replaced stops inside a large file, between its chunks', async () => {
+    rmSync(folder, { recursive: true });
+    write('model.bin', new Uint8Array(1024 * 1024).fill(7));
+    let asked = 0;
+    const isCurrent = () => {
+      asked += 1;
+      // The root folder, the one file, then its first chunk: replaced from the second chunk on.
+      return asked <= 3;
+    };
+    await expect(buildPackage(folder, { isCurrent })).rejects.toBeInstanceOf(BuildSupersededError);
+    expect(asked).toBe(4);
+  });
+
+  it('reports the folders it listed, before any file is read; excluded ones are not entered', async () => {
+    write('src/lib/util.mjs');
+    write('vendor/deep/a.js');
+    write('.git/objects/x');
+    write('.harnessignore', 'vendor/\n');
+    const listings: (readonly string[])[] = [];
+    let readBefore = true;
+    await buildPackage(folder, {
+      isCurrent: () => {
+        if (listings.length > 0) readBefore = false;
+        return true;
+      },
+      onListed: ({ folders }) => listings.push(folders),
+    });
+    expect(listings).toEqual([['', 'assets', 'src', 'src/lib']]);
+    expect(readBefore).toBe(false);
+  });
+
   it('stops with one archive_too_large problem once the zip passes the limit', async () => {
     write('big.bin', crypto.getRandomValues(new Uint8Array(60_000)));
     const built = await buildPackage(folder, { maxBytes: 20_000 });
@@ -181,8 +212,12 @@ describe('buildPackage', () => {
       for (let file = 0; file < 5; file++) write(`d${String(index)}/f${String(file)}.txt`);
     }
     let directoriesEntered = 0;
+    let listed = false;
     const built = await buildPackage(folder, {
       maxListed: 3,
+      onListed: () => {
+        listed = true;
+      },
       isCurrent: () => {
         directoriesEntered += 1;
         return true;
@@ -200,5 +235,6 @@ describe('buildPackage', () => {
     );
     // The root and the first folder, whose fourth file stopped the walk: no other folder.
     expect(directoriesEntered).toBe(2);
+    expect(listed).toBe(false);
   });
 });
