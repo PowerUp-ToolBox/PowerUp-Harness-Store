@@ -53,6 +53,7 @@ import {
   type Supervisor,
 } from './supervisor.js';
 import { createUpdateChecker, type UpdateChecker } from './update-check.js';
+import { createUsageService, createUsageStub } from './usage.js';
 import { createUsageRecordStore, type UsageRecordStore } from './usage-records.js';
 import { parseWindowState, type WindowState } from './window-state.js';
 
@@ -106,6 +107,11 @@ export interface RuntimeOptions {
    * Default: always cancelled.
    */
   readonly pickFolder?: (defaultPath?: string | null) => Promise<string | null>;
+  /**
+   * Opens the OS save dialog (Electron's `dialog`) with this file name and resolves the chosen
+   * path, or null when the User cancels: the Usage page's CSV export. Default: always cancelled.
+   */
+  readonly pickSaveFile?: (defaultName: string) => Promise<string | null>;
   /**
    * This machine's platform as `<process.platform>-<process.arch>`, which decides whether an
    * installed Harness can run here. Default: this process's.
@@ -266,6 +272,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       }),
       onUsage: (record) => {
         usageRecords.insert(record);
+        options.emit?.('usage.recorded', { harnessId: record.harnessId });
         return Promise.resolve();
       },
     });
@@ -457,6 +464,15 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       installs,
       launch: supervisor,
       publish,
+      usage:
+        sqlite === null
+          ? createUsageStub()
+          : createUsageService({
+              store: sqlite.usageRecords,
+              pickSaveFile: options.pickSaveFile ?? (() => Promise.resolve(null)),
+              logError,
+              ...(options.now === undefined ? {} : { now: options.now }),
+            }),
     },
     windowState: {
       read() {

@@ -17,6 +17,7 @@ import {
   session,
   shell,
   type OpenDialogOptions,
+  type SaveDialogOptions,
 } from 'electron';
 import { HARNESS_INVOKE_CHANNEL } from '../shared/harness-ipc.js';
 import {
@@ -211,8 +212,20 @@ async function start(): Promise<void> {
           : await dialog.showOpenDialog(mainWindow, options);
       return result.canceled ? null : (result.filePaths[0] ?? null);
     },
-    // `launch.state` and `installs.changed` go to the main window only, which shows every
-    // Harness. A Harness window hears about its own launch alone, as `window.state` on its own
+    // The Usage page's CSV export: the native save dialog, as a sheet of the main window.
+    pickSaveFile: async (defaultName) => {
+      const options: SaveDialogOptions = {
+        defaultPath: defaultName,
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+      };
+      const result =
+        mainWindow === null
+          ? await dialog.showSaveDialog(options)
+          : await dialog.showSaveDialog(mainWindow, options);
+      return result.canceled || result.filePath === '' ? null : result.filePath;
+    },
+    // `launch.state`, `installs.changed` and `usage.recorded` go to the main window only, which
+    // shows every Harness. A Harness window hears about its own launch alone, as `window.state` on its own
     // channel (./harness-windows.ts); its page has no use for other launches.
     emit: emitToMainWindow,
     // Every Harness runs in a window of its own (./harness-windows.ts).

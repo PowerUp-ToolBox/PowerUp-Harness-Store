@@ -26,6 +26,7 @@
     "test:install": "vitest run install",
     "test:launch": "vitest run launch",
     "test:publish": "vitest run publish",
+    "test:usage": "vitest run usage",
     "test:store-browsing": "vitest run store-home store-assets store-search store-detail store-publisher render-markdown primary-action tags"
   },
   "devDependencies": {

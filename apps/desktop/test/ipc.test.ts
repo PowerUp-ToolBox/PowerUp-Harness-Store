@@ -6,6 +6,7 @@ import { createInstallsStub } from '../src/main/runtime/installer.js';
 import { fail, ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { StoreAuthError } from '../src/main/runtime/store-auth.js';
+import { createUsageStub } from '../src/main/runtime/usage.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
 import {
   IPC_METHODS,
@@ -14,6 +15,8 @@ import {
   type StoreHomeRequest,
   type StorePublisherPage,
   type StoreSearchRequest,
+  type UsageQuery,
+  type UsageRow,
 } from '../src/shared/ipc.js';
 
 const MAIN_WINDOW = { id: 'main window webContents' };
@@ -41,6 +44,7 @@ const publisher = vi.fn<(login: string) => Promise<IpcResult<StorePublisherPage>
   Promise.resolve(ok({ platform: 'darwin-arm64', publisher: null })),
 );
 const resolveManifest = vi.fn(() => ok([{ slot: 'default', binding: null }]));
+const query = vi.fn<(query: UsageQuery) => readonly UsageRow[]>(() => []);
 const fakeServices: Services = {
   app: {
     version: '1.2.3',
@@ -122,6 +126,7 @@ const fakeServices: Services = {
     unpublish: ({ harnessId, version }) =>
       Promise.resolve(ok({ harnessId, version, latestVersion: null })),
   },
+  usage: { ...createUsageStub(), query },
 };
 const en = translatorFor('en');
 
@@ -334,6 +339,7 @@ describe('IPC handlers against a fake service container', () => {
     'installs.chooseFolder',
     'installs.list',
     'launch.status',
+    'usage.clear',
   ])('%s rejects any input as invalid_input', async (method) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input: {} })).resolves.toMatchObject({
@@ -341,6 +347,70 @@ describe('IPC handlers against a fake service container', () => {
       error: { code: 'invalid_input', params: { method } },
     });
   });
+
+  it('usage.query passes a valid query on with its bounds as toISOString writes them', async () => {
+    const { dispatch } = dispatcherFor();
+    query.mockClear();
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'usage.query',
+        input: {
+          from: '2026-10-22T04:00:00Z',
+          to: '2026-10-29T00:00:00.5-04:00',
+          harnessId: 'acme/hello',
+          providerId: 'openai-compatible:vllm',
+          groupBy: ['harness', 'model'],
+        },
+      }),
+    ).resolves.toEqual({ ok: true, data: [] });
+    expect(query).toHaveBeenCalledWith({
+      from: '2026-10-22T04:00:00.000Z',
+      to: '2026-10-29T04:00:00.500Z',
+      harnessId: 'acme/hello',
+      providerId: 'openai-compatible:vllm',
+      groupBy: ['harness', 'model'],
+    });
+  });
+
+  it.each([
+    undefined,
+    null,
+    [],
+    { from: null, to: null },
+    { from: null, to: null, groupBy: 'harness' },
+    { from: null, to: null, groupBy: ['harness', 'harness'] },
+    { from: null, to: null, groupBy: ['status'] },
+    { from: null, to: null, groupBy: ['harness_id; DROP TABLE usage_records'] },
+    { from: '2026-10-22', to: null, groupBy: [] },
+    { from: 'yesterday', to: null, groupBy: [] },
+    { from: '2026-13-40T00:00:00Z', to: null, groupBy: [] },
+    { from: 0, to: null, groupBy: [] },
+    { to: null, groupBy: [] },
+    { from: null, to: null, harnessId: '', groupBy: [] },
+    { from: null, to: null, providerId: 7, groupBy: [] },
+    { from: null, to: null, groupBy: [], extra: true },
+  ])('usage.query rejects %j as invalid_input', async (input) => {
+    const { dispatch } = dispatcherFor();
+    query.mockClear();
+    await expect(dispatch(MAIN_WINDOW, { method: 'usage.query', input })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input', params: { method: 'usage.query' } },
+    });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, { from: null, to: null, groupBy: [] }, { from: 'today', to: null }])(
+    'usage.export rejects %j as invalid_input',
+    async (input) => {
+      const { dispatch } = dispatcherFor();
+      await expect(dispatch(MAIN_WINDOW, { method: 'usage.export', input })).resolves.toMatchObject(
+        {
+          ok: false,
+          error: { code: 'invalid_input', params: { method: 'usage.export' } },
+        },
+      );
+    },
+  );
 
   it.each([undefined, 42, { id: 'anthropic' }])(
     'connections.remove rejects %j as invalid_input',

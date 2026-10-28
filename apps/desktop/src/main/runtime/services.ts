@@ -8,6 +8,7 @@ import type { SettingsService } from './settings.js';
 import type { StoreAuth } from './store-auth.js';
 import type { StoreCatalogue } from './store-catalogue.js';
 import type { Supervisor } from './supervisor.js';
+import type { UsageService } from './usage.js';
 
 /**
  * The service container: everything an IPC handler may use, created once by
@@ -55,4 +56,6 @@ export interface Services {
     PublishService,
     'validateFolder' | 'stopWatching' | 'publish' | 'cancel' | 'myHarnesses' | 'unpublish'
   >;
+  /** The Usage page: the Model Gateway's Usage Records, aggregated, exported and cleared. */
+  readonly usage: UsageService;
 }

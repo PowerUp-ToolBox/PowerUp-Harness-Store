@@ -31,6 +31,7 @@ import { fail, ok } from './ipc-result.js';
 import type { Services } from './services.js';
 import { parseSettingsPatch } from './settings.js';
 import { StoreAuthError } from './store-auth.js';
+import { parseUsageFilter, parseUsageQuery } from './usage.js';
 
 /**
  * One handler per IPC method. The input arrives as `unknown` because it crossed a process
@@ -297,6 +298,21 @@ export function createHandlers(services: Services): IpcHandlers {
       const request = parseUnpublishRequest(input);
       if (request === null) return fail('invalid_input', { method: 'publish.unpublish' });
       return services.publish.unpublish(request);
+    },
+    'usage.query': (input) => {
+      const query = parseUsageQuery(input);
+      if (query === null) return fail('invalid_input', { method: 'usage.query' });
+      return ok(services.usage.query(query));
+    },
+    'usage.export': (input) => {
+      const filter = parseUsageFilter(input);
+      if (filter === null) return fail('invalid_input', { method: 'usage.export' });
+      return services.usage.export(filter);
+    },
+    'usage.clear': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'usage.clear' });
+      services.usage.clear();
+      return ok(null);
     },
   };
 }

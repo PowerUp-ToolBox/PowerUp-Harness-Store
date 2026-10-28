@@ -480,6 +480,22 @@ export interface IpcMethods {
    * `not_found`, `harness_taken_down` (a taken-down Harness or version); `store_unreachable`.
    */
   'publish.unpublish': { input: UnpublishRequest; output: UnpublishedVersion };
+  /**
+   * Aggregates the local Usage Records (P0-11.1) in SQL, never in the renderer: the records whose
+   * `timestamp` is in `[from, to)` and that match the filters, grouped by `groupBy`, most recently
+   * used group first. Token sums count only `ok` records that have both token counts; an `ok`
+   * record without them is counted in `unknownCount`, and every other status in `errors`. `[]`
+   * answers one total row, even over no records.
+   */
+  'usage.query': { input: UsageQuery; output: readonly UsageRow[] };
+  /**
+   * Writes the Usage Records of this period and these filters as CSV, grouped by Harness,
+   * Provider and model, and local day, to the file the User picks in the OS save dialog. The
+   * file's path, or null when the User cancelled. `internal_error` when it cannot be written.
+   */
+  'usage.export': { input: UsageFilter; output: UsageExported | null };
+  /** Deletes every Usage Record on this machine (the User confirmed it). */
+  'usage.clear': { input: undefined; output: null };
 }
 
 /** Which Harness Package to upload, and the job its progress events are named after. */
@@ -820,6 +836,63 @@ export interface Diagnostics {
   readonly gateway: { readonly running: true; readonly port: number } | { readonly running: false };
   /** The absolute path of the local SQLite database file. */
   readonly databasePath: string;
+}
+
+/** What Usage Records can be grouped by. `model` always groups by its Provider too. */
+export type UsageDimension = 'harness' | 'provider' | 'model' | 'day';
+
+/** Which Usage Records to count: a period and optional filters. */
+export interface UsageFilter {
+  /**
+   * The period's start, an ISO-8601 instant (included); null for no start. The renderer computes
+   * it from the User's local midnight.
+   */
+  readonly from: string | null;
+  /** The period's end, an ISO-8601 instant (excluded); null for no end. */
+  readonly to: string | null;
+  /** Only this Harness's records. */
+  readonly harnessId?: string;
+  /** Only this Provider's records: its full id, `openai-compatible:vllm` for a custom endpoint. */
+  readonly providerId?: string;
+}
+
+/** A `usage.query`: the records to count and how to group them. */
+export interface UsageQuery extends UsageFilter {
+  /** Distinct dimensions, in order; `[]` answers one total row. */
+  readonly groupBy: readonly UsageDimension[];
+}
+
+/**
+ * One group of Usage Records, as SQL summed it. The dimensions grouped by are present, the others
+ * absent. `requests` counts every record, `errors` among them; the token sums cover the `ok`
+ * records that reported both counts, and `unknownCount` the `ok` ones that did not.
+ */
+export interface UsageRow {
+  readonly harnessId?: string;
+  /** The full Provider id; present when grouped by `provider` or `model`. */
+  readonly provider?: string;
+  readonly model?: string;
+  /** The User's local day, `YYYY-MM-DD`. */
+  readonly day?: string;
+  readonly requests: number;
+  /** Records whose status is not `ok` (`provider_error`, `timeout`, `aborted`). */
+  readonly errors: number;
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  /** `ok` records the Provider reported no token counts for. */
+  readonly unknownCount: number;
+  /** The latest record's time, ISO-8601 UTC; null for a total over no records. */
+  readonly lastUsedAt: string | null;
+}
+
+/** Where `usage.export` wrote the CSV file. */
+export interface UsageExported {
+  readonly path: string;
+}
+
+/** Which Harness a new Usage Record is about. */
+export interface UsageRecorded {
+  readonly harnessId: string;
 }
 
 /**
@@ -1297,6 +1370,9 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'publish.cancel': true,
   'publish.myHarnesses': true,
   'publish.unpublish': true,
+  'usage.query': true,
+  'usage.export': true,
+  'usage.clear': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */
@@ -1330,6 +1406,11 @@ export interface IpcEvents {
    * Publish screen validates it again.
    */
   'publish.folderChanged': PublishFolderChanged;
+  /**
+   * The Model Gateway wrote a Usage Record; the Usage page, while it is shown, queries again (at
+   * most once every 2 seconds).
+   */
+  'usage.recorded': UsageRecorded;
   [event: `progress:${string}`]: unknown;
 }
 
@@ -1358,6 +1439,7 @@ export function isIpcEventName(name: string): name is IpcEventName {
     name === 'launch.state' ||
     name === 'app.navigate' ||
     name === 'publish.folderChanged' ||
+    name === 'usage.recorded' ||
     /^progress:.+$/.test(name)
   );
 }

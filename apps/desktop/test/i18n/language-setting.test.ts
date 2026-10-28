@@ -14,6 +14,7 @@ import type { Services } from '../../src/main/runtime/services.js';
 import { createSqliteSettingsStore } from '../../src/main/runtime/settings-store.js';
 import { createSettingsService, parseSettingsPatch } from '../../src/main/runtime/settings.js';
 import { createSupervisorStub } from '../../src/main/runtime/supervisor.js';
+import { createUsageStub } from '../../src/main/runtime/usage.js';
 
 const MAIN_WINDOW = {};
 
@@ -82,6 +83,7 @@ function launch(osLocale: string) {
       myHarnesses: () => Promise.resolve(fail('not_implemented')),
       unpublish: () => Promise.resolve(fail('not_implemented')),
     },
+    usage: createUsageStub(),
   };
   const dispatch = createDispatcher({
     handlers: createHandlers(services),

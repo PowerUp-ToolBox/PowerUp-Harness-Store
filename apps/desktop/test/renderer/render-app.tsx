@@ -51,6 +51,10 @@ import type {
   StoreUpdateRequest,
   UnpublishedVersion,
   UnpublishRequest,
+  UsageExported,
+  UsageFilter,
+  UsageQuery,
+  UsageRow,
 } from '../../src/shared/ipc.js';
 
 /** What `connectivity.get` and `connectivity.check` answer when the Store is in `state`. */
@@ -62,6 +66,16 @@ export const FAKE_DIAGNOSTICS: Diagnostics = {
   version: '4.5.6',
   gateway: { running: true, port: 51234 },
   databasePath: '/profile/harness-store.sqlite',
+};
+
+/** `usage.query`'s total over no Usage Records. */
+export const NO_USAGE: UsageRow = {
+  requests: 0,
+  errors: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  unknownCount: 0,
+  lastUsedAt: null,
 };
 
 /** The Publisher `auth.signIn` signs in as. */
@@ -198,9 +212,11 @@ export interface FakeApiOptions {
  * nothing was launched, launching answers `not_implemented`, no Harness has a last Workspace and
  * the Workspace picker is cancelled; validating a folder to publish and publishing answer
  * `not_implemented`, cancelling an upload does nothing, the Publisher has no Harnesses and
- * Unpublishing answers `not_implemented`, and a dropped file's path is `/dropped/<name>`; a test
- * changes `app.status`, `diagnostics.get`, the `connectivity`, `connections`, `bindings` or
- * `installs` methods before rendering to say otherwise, and pushes events with `emit`.
+ * Unpublishing answers `not_implemented`; there are no Usage Records (a total of zeros, no
+ * groups), the export's save dialog is cancelled and clearing succeeds; and a dropped file's path
+ * is `/dropped/<name>`; a test changes `app.status`, `diagnostics.get`, the `connectivity`,
+ * `connections`, `bindings`, `installs` or `usage` methods before rendering to say otherwise, and
+ * pushes events with `emit`.
  */
 export function installFakeApi(
   osLocale: Locale = 'en',
@@ -425,6 +441,15 @@ export function installFakeApi(
       unpublish: vi.fn((request: UnpublishRequest): Promise<IpcResult<UnpublishedVersion>> =>
         notImplemented('publish.unpublish', request.harnessId),
       ),
+    },
+    usage: {
+      query: vi.fn((query: UsageQuery): Promise<IpcResult<readonly UsageRow[]>> =>
+        Promise.resolve({ ok: true, data: query.groupBy.length === 0 ? [NO_USAGE] : [] }),
+      ),
+      export: vi.fn<(filter: UsageFilter) => Promise<IpcResult<UsageExported | null>>>(() =>
+        Promise.resolve({ ok: true, data: null }),
+      ),
+      clear: vi.fn((): Promise<IpcResult<null>> => Promise.resolve({ ok: true, data: null })),
     },
     pathForFile: vi.fn((file: File) => `/dropped/${file.name}`),
     on: vi.fn((event: string, listener: (payload: unknown) => void) => {

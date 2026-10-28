@@ -20,6 +20,7 @@ describe('buildApi (window.api)', () => {
       'publish',
       'settings',
       'store',
+      'usage',
     ]);
     expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit']);
     expect(Object.keys(api.auth)).toEqual(['signIn', 'signOut', 'whoami']);
@@ -75,6 +76,7 @@ describe('buildApi (window.api)', () => {
     ]);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
     expect(Object.keys(api.store)).toEqual(['home', 'search', 'detail', 'publisher']);
+    expect(Object.keys(api.usage)).toEqual(['query', 'export', 'clear']);
     expect(Object.isFrozen(api)).toBe(true);
     expect(Object.isFrozen(api.app)).toBe(true);
     expect(Object.isFrozen(api.settings)).toBe(true);
@@ -114,6 +116,7 @@ describe('buildApi (window.api)', () => {
     'auth.changed',
     'installs.changed',
     'publish.folderChanged',
+    'usage.recorded',
   ] as const)('subscribes to %s', (event) => {
     const listen = vi.fn<Listen>(() => () => undefined);
     const api = buildApi(vi.fn<Invoke>(), listen);
