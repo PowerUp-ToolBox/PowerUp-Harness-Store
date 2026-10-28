@@ -31,7 +31,7 @@ Screenshots are the files directly in `assets/` other than `icon.png` (hidden fi
 | `homepage` | url | no | Absolute `http://` or `https://` URL, without a user name or password before the host (`https://user:pass@host/` is rejected). |
 | `sourceRepo` | url | no | Absolute `http://` or `https://` URL, without a user name or password before the host. Shown as "Source" on the detail page. |
 | `channel` | `"stable"` | no | Default `stable`. `beta` is reserved for P1; P0 rejects any other value. |
-| `platforms` | string[] | yes | Non-empty subset of `darwin-arm64`, `darwin-x64`, `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, without duplicates. |
+| `platforms` | string[] | yes | Non-empty subset of `darwin-arm64`, `darwin-x64`, `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, without duplicates. The Runtime launches a Harness, of any runtime kind, only on a listed platform. |
 | `runtime` | object | yes | See §3. |
 | `entry` | string \| object | yes | See §3. |
 | `ui` | object | yes | See §4. |
@@ -54,8 +54,8 @@ Some keys are ignored in some configurations (for example `ui.path` for a `termi
 // P0.5 adds: { "kind": "python", "python": "3.12" } with pyproject.toml / requirements.txt
 ```
 
-- `kind: node`: `runtime.node` is required and must be `"22"` (the only Node the Runtime bundles in P0). `entry` is a path to a `.js`/`.mjs`/`.cjs` file relative to the archive root. The Runtime executes it with its bundled Node; `node_modules` must be included in the archive (no install step in P0). Same entry on all platforms, so `entry` is a string.
-- `kind: binary`: `entry` is an object mapping each declared platform to a relative path of an executable inside the archive. Every declared platform must have an entry. An entry for a platform that is not in `platforms`, and a `runtime.node`, are ignored (a warning, not a problem).
+- `kind: node`: `runtime.node` is required and must be `"22"` (the only Node line accepted in P0). `entry` is a path to a `.js`/`.mjs`/`.cjs` file relative to the archive root. The Runtime executes it with its own Node (in P0 Electron's Node, version 24, until a separately bundled Node 22 LTS ships; architecture §4); `node_modules` must be included in the archive (no install step in P0). Same entry on all platforms, so `entry` is a string.
+- `kind: binary`: `entry` is an object mapping each declared platform to a relative path of an executable inside the archive. Every declared platform must have an entry. An entry for a platform that is not in `platforms`, and a `runtime.node`, are ignored (a warning, not a problem); the Runtime never launches such an entry. On macOS/Linux the Runtime sets the executable bit on every declared platform's entry at install.
 - Every `entry` path is relative to the archive root and uses `/` separators: no leading `/`, no `.` or `..` segments (so `./dist/index.js` is written `dist/index.js`), no backslashes and no colons.
 
 ```jsonc
@@ -72,7 +72,7 @@ Only the Runtime-provided environment (see architecture §4) is guaranteed. Harn
 "ui": { "kind": "terminal" }
 ```
 
-- `web`: the Harness must listen on `127.0.0.1:$HARNESS_PORT`. The Runtime opens a window once the port accepts connections. `path` default `/`, and must start with a single `/` (no `//`, backslashes or spaces); `readyTimeoutSeconds` an integer 5–120, default 30; `window` optional hints (`width`, `height`: positive integers, in pixels).
+- `web`: the Harness must listen on `127.0.0.1:$HARNESS_PORT` (the Runtime probes only `127.0.0.1`, so a server bound to `localhost` that resolves to `::1` times out). The Runtime opens the window at once on a Starting state and shows the Harness's page once the port accepts connections. `path` default `/`, and must start with a single `/` (no `//`, backslashes or spaces); `readyTimeoutSeconds` an integer 5–120, default 30; `window` optional hints (`width`, `height`: positive integers, in pixels).
 - `terminal`: the Runtime runs the process in a pty inside an embedded terminal window. stdin/stdout are the UI. `path`, `readyTimeoutSeconds` and `window` are ignored (a warning, not a problem).
 
 ## 5. `models`

@@ -67,7 +67,7 @@ The Store tab of the desktop app: a home page (Featured, tag chips, Most downloa
 
   Install/Update/Launch actions are delegated to P0-10 and P0-05; this spec only renders state and routes the click.
 - **Publisher page** reads `profiles` with nested `harnesses` (api.md); row-level security already limits them to `status = active` with a latest version, so the client adds no filter.
-- **Copy**: all strings in `en` and `zh-CN`; permission sentences are generated from Manifest fields by a shared function also used by the consent dialog (P0-10) and Publish preview (P0-08).
+- **Copy**: all strings in `en` and `zh-CN`; permission sentences are generated from Manifest fields by the shared module P0-05 introduced, also used by the consent dialog (P0-05, P0-10) and Publish preview (P0-08).
 - **Navigation**: Store routes are `/store`, `/store/search`, `/store/h/<publisher>/<slug>`, `/store/p/<login>`; the router preserves search state in the history entry.
 
 ## Testing Decisions
