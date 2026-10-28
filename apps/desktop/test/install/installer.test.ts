@@ -503,6 +503,18 @@ describe('platforms and Entries', () => {
     expect(entryFor(manifest, 'darwin-arm64')).toBeNull();
   });
 
+  // Validation never lets this through; the Runtime still refuses it (platform_unsupported).
+  it('has no binary Entry for a declared platform the entry map lacks', () => {
+    const manifest = {
+      ...manifestWith({ default: {} }),
+      platforms: ['linux-x64' as const, 'darwin-arm64' as const],
+      runtime: { kind: 'binary' as const },
+      entry: { 'linux-x64': 'bin/linux' },
+    };
+    expect(entryFor(manifest, 'linux-x64')).toBe('bin/linux');
+    expect(entryFor(manifest, 'darwin-arm64')).toBeNull();
+  });
+
   it('keeps every install path inside its folder', () => {
     const paths = harnessPaths('/data');
     expect(paths.installPath('acme/hello', '1.0.0')).toBe(join('/data/harnesses/acme/hello/1.0.0'));

@@ -266,8 +266,9 @@ interface Launch {
 /**
  * The Process Supervisor (P0-05): launches installed Harnesses following the launch contract of
  * docs/tech/architecture.md §4, one instance per Harness, and stops them with the shutdown
- * sequence. Both UI Kinds with the Node runtime kind for now; binary Harnesses (P0-05.5) come
- * next.
+ * sequence. Both UI Kinds, with either runtime kind: a Node Harness's Entry runs on the Runtime's
+ * Node (`nodeCommand`), a binary Harness's Entry for this platform is run directly, with the same
+ * environment and working directory.
  *
  * A launch goes `preparing` → `spawning` → `ready` → (`stopping` →) `stopped`, or `failed` with a
  * reason, and every change is pushed with `emit` and to the launch's window. Preparing runs the
@@ -442,9 +443,11 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       return;
     }
 
+    // A Node Entry runs on the Runtime's Node; a binary one is the program itself.
+    const node = manifest.runtime.kind === 'node';
     const command = {
-      file: options.nodeCommand.path,
-      args: [entryPath],
+      file: node ? options.nodeCommand.path : entryPath,
+      args: node ? [entryPath] : [],
       cwd: workspace ?? install.dataDir,
       env: {
         ...launchEnvironment(environment(), {
@@ -458,7 +461,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
           ...(workspace === null ? {} : { workspace }),
           ...(launch.port === null ? {} : { port: launch.port }),
         }),
-        ...options.nodeCommand.env,
+        ...(node ? options.nodeCommand.env : {}),
       },
     };
     launch.windowOpen = true;
@@ -674,9 +677,6 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     if (closing) return fail('internal_error', { method: 'launch.start' });
     // Its files are being replaced: it would run from a folder about to be deleted.
     if (options.isInstalling?.(harnessId) === true) return fail('harness_installing');
-    if (install.manifest.runtime.kind !== 'node') {
-      return fail('not_implemented', { method: 'launch.start' });
-    }
     if (!options.defaultSlotBound(harnessId)) return fail('slot_unbound', { slot: 'default' });
     // A reinstall while the folder was checked may have changed what the Manifest declares.
     const workspace =

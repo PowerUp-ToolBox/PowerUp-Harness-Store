@@ -240,7 +240,7 @@ export interface IpcMethods {
    * stopping is left to stop). `not_installed`; `slot_unbound` when no model can fill its
    * `default` Model Slot, and nothing starts; `invalid_input` when `workspace` is not an absolute
    * path, or, for a Harness that takes a Workspace and does not run, not an existing folder (any
-   * more); `not_implemented` for a binary runtime kind (P0-05.5).
+   * more).
    */
   'launch.start': { input: LaunchRequest; output: LaunchStarted };
   /**

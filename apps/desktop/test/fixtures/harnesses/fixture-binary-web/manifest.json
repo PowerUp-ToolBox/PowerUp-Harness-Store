@@ -1,0 +1,44 @@
+{
+  "manifestVersion": 1,
+  "id": "acme/fixture-binary-web",
+  "version": "1.0.0",
+  "name": "Fixture Binary Web",
+  "summary": "A binary web Harness for the Runtime's tests.",
+  "license": "MIT",
+  "platforms": ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"],
+  "runtime": {
+    "kind": "binary"
+  },
+  "entry": {
+    "darwin-arm64": "bin/fixture-binary-web",
+    "darwin-x64": "bin/fixture-binary-web",
+    "linux-x64": "bin/fixture-binary-web",
+    "linux-arm64": "bin/fixture-binary-web"
+  },
+  "ui": {
+    "kind": "web",
+    "path": "/",
+    "readyTimeoutSeconds": 10,
+    "window": {
+      "width": 900,
+      "height": 600
+    }
+  },
+  "workspace": "none",
+  "models": {
+    "slots": {
+      "default": {
+        "description": "Answers the test's messages."
+      }
+    }
+  },
+  "permissions": {
+    "filesystem": {
+      "scope": "none"
+    },
+    "shell": false,
+    "network": {
+      "domains": []
+    }
+  }
+}
