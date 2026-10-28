@@ -69,7 +69,8 @@ function localize() {
 function errorText(code, message) {
   if (code === 'slot_unbound') return t('slotUnbound');
   if (code === 'interrupted') return t('interrupted');
-  return t('gatewayError').replace('{message}', message);
+  // A function, so a $& or $' in the Provider's message is shown as written, not expanded.
+  return t('gatewayError').replace('{message}', () => message);
 }
 
 function bubble(role, text) {

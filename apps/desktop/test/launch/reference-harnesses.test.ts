@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { createRequire } from 'node:module';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -510,6 +511,24 @@ function serverRequest(
   });
 }
 
+/**
+ * Sends `head` (a request line and headers, without the blank line that ends them) to hello-web's
+ * server byte for byte, as no HTTP client would, and returns its status line.
+ */
+function rawRequest(port: number, head: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connect({ host: '127.0.0.1', port });
+    let received = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => (received += chunk));
+    socket.on('end', () => {
+      resolve(received.split('\r\n')[0] ?? '');
+    });
+    socket.on('error', reject);
+    socket.end(`${head}\r\nHost: 127.0.0.1:${String(port)}\r\nConnection: close\r\n\r\n`);
+  });
+}
+
 /** The events of a `/chat` response body, in order. */
 function sseEvents(body: string): { event: string; data: unknown }[] {
   return body
@@ -665,6 +684,24 @@ describe('hello-web (examples/hello-web/out)', () => {
     expect(rows('usage_records')).toHaveLength(3);
   });
 
+  it('shows a Gateway error with the Provider message as written, `$` patterns included', async () => {
+    const launchId = await launchHelloWeb('en');
+    // A model the fake Provider does not know: its 404 message names the model, `$&` and all.
+    await bindDefault("cost-$&-and-$'-or-$$");
+    const page = await openPage(launchId);
+    page.send('hi');
+    const message =
+      "502 The Provider returned an error: The model `cost-$&-and-$'-or-$$` does not exist or you do not have access to it.";
+    await expect(page.reply('could not answer')).resolves.toBe(
+      `The Model Gateway could not answer: ${message}`,
+    );
+
+    const menu = page.element('locale');
+    menu.value = 'zh-CN';
+    menu.dispatchEvent(new page.window.Event('change'));
+    expect(page.element('reply').textContent).toBe(`Model Gateway 无法回答：${message}`);
+  });
+
   it('answers /chat with Server-Sent Events ending in the model that wrote the answer, refuses other callers, and aborts the Gateway call when its page goes away', async () => {
     const launchId = await launchHelloWeb('en');
     const port = Number(shownUrl(launchId).port);
@@ -710,8 +747,40 @@ describe('hello-web (examples/hello-web/out)', () => {
     await expect(serverRequest(port, { method: 'GET', path: '/other' })).resolves.toMatchObject({
       status: 404,
     });
+    const tooLarge = await serverRequest(port, {
+      method: 'POST',
+      path: '/chat',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ role: 'user', content: 'x'.repeat(1024 * 1024) }],
+      }),
+    });
+    expect(tooLarge.status).toBe(413);
+    expect(JSON.parse(tooLarge.body)).toMatchObject({ error: { code: 'invalid_request' } });
+    // Request-targets Node's HTTP parser accepts but `new URL` does not: unknown routes, not a
+    // crash of the Harness.
+    for (const target of ['http://[', '//[/', 'http://a%zz/', 'http://x:99999/']) {
+      await expect(rawRequest(port, `GET ${target} HTTP/1.1`)).resolves.toBe(
+        'HTTP/1.1 404 Not Found',
+      );
+    }
     // The refused requests never reached the Gateway.
     expect(chatRequests()).toHaveLength(1);
+
+    // `localhost` on its port is its own Host too.
+    const viaLocalhost = await serverRequest(port, {
+      method: 'POST',
+      path: '/chat',
+      headers: { Host: `localhost:${String(port)}`, 'Content-Type': 'application/json' },
+      body: valid,
+    });
+    expect(viaLocalhost.status).toBe(200);
+    expect(sseEvents(viaLocalhost.body)).toEqual([
+      { event: 'token', data: { text: 'hi' } },
+      { event: 'done', data: { model: 'ollama/model-a' } },
+    ]);
+    expect(chatRequests()).toHaveLength(2);
+    expect(lastState(launchId)?.state).toBe('ready');
 
     await bindDefault(null);
     const unbound = await chat(port, [{ role: 'user', content: 'hi' }]);

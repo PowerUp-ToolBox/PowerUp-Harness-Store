@@ -48,7 +48,7 @@ function main(): void {
   const html = page(locale);
 
   const handler = (request: IncomingMessage, response: ServerResponse) => {
-    const { pathname } = new URL(request.url ?? '/', 'http://127.0.0.1');
+    const pathname = pathOf(request.url);
     if (request.method === 'GET' && pathname === '/') {
       response.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
@@ -76,6 +76,19 @@ function main(): void {
     process.stderr.write(`Could not serve on 127.0.0.1:${String(port)}: ${error.message}\n`);
     process.exit(1);
   });
+}
+
+/**
+ * The path of a request-target, `undefined` when it is not a URL. Node's HTTP parser lets through
+ * targets such as `http://[` that `new URL` rejects, and an error thrown in the request listener
+ * would end the whole Harness: such a request is answered as an unknown route instead.
+ */
+function pathOf(target: string | undefined): string | undefined {
+  try {
+    return new URL(target ?? '/', 'http://127.0.0.1').pathname;
+  } catch {
+    return undefined;
+  }
 }
 
 main();
