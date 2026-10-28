@@ -91,9 +91,11 @@ export function useLaunch(
  * to the front, as a second launch would); "Stopping…" after its window closed; "Set up a model
  * first", which opens the Models page at this Harness, when nothing can fill its `default` Model
  * Slot; "Not available for your platform", disabled. There is no Stop: closing the Harness's
- * window stops it with the shutdown sequence (flows.md F3 step 7). `secondary` follows Launch
- * (the detail page's Uninstall). `lead` takes the primary place while the Harness is not running
- * (the detail page's Update); Launch, or "Set up a model first", then follows it as a link.
+ * window stops it with the shutdown sequence (flows.md F3 step 7). `secondary` follows Launch,
+ * "Set up a model first" or "Not available for your platform" (the detail page's Uninstall, which
+ * an installed Harness offers whichever of them it shows). `lead` takes the primary place while
+ * the Harness is not running (the detail page's Update); Launch, or "Set up a model first", then
+ * follows it as a link.
  */
 export function LaunchAction({
   install,
@@ -111,9 +113,12 @@ export function LaunchAction({
   const { t } = useI18n();
   if (!install.platformSupported) {
     return (
-      <button type="button" className="button-primary" disabled>
-        {t('library.unsupported')}
-      </button>
+      <>
+        <button type="button" className="button-primary" disabled>
+          {t('library.unsupported')}
+        </button>
+        {secondary}
+      </>
     );
   }
   switch (state) {
@@ -150,6 +155,7 @@ export function LaunchAction({
           <button type="button" className={className} onClick={controls.openModels}>
             {t('library.needsModel')}
           </button>
+          {secondary}
         </>
       ) : (
         <>

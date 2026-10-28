@@ -81,3 +81,14 @@ export function primaryActionState(input: PrimaryActionInput): PrimaryActionStat
   }
   return 'install';
 }
+
+/**
+ * The update the update check found for an installed Harness, as the Library offers it (its card,
+ * its Updates available view and the nav badge): none for a local install, which is never updated
+ * from the Store, even should its row hold one.
+ */
+export function offeredUpdate(
+  install: Pick<InstalledHarness, 'source' | 'availableUpdate'>,
+): InstalledHarness['availableUpdate'] {
+  return install.source === 'store' ? install.availableUpdate : null;
+}

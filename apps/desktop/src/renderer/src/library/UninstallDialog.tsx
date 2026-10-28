@@ -4,6 +4,7 @@ import { ErrorMessage } from '../components/ErrorMessage.js';
 import { Modal } from '../components/Modal.js';
 import { useToast } from '../components/Toasts.js';
 import { useI18n } from '../i18n/I18nProvider.js';
+import { useInstallJobs } from '../install/InstallJobsProvider.js';
 
 export interface UninstallDialogProps {
   readonly install: InstalledHarness;
@@ -23,8 +24,9 @@ type DataSize =
  * (<size>). Files in your own folders are not touched."), and Cancel / Uninstall. The Data
  * Directory's size is read only now, when the dialog opens (`installs.dataSize`), never for every
  * card. Uninstall calls `installs.uninstall` once; once it is done the toast "Uninstalled <name>"
- * shows and the dialog closes, as the Harness leaves the Library (`installs.changed`). There is no
- * Undo: the deletion is immediate, which is why it is confirmed.
+ * shows and the dialog closes, as the Harness leaves the Library (`installs.changed`), and the
+ * failure of an update of it, if any, is dropped (`clearFailure`). There is no Undo: the deletion
+ * is immediate, which is why it is confirmed.
  *
  * While the Harness runs, or when the uninstall was refused because it started meanwhile, the
  * dialog says "Close the Harness first" with only Close, and nothing is deleted. Any other refusal
@@ -33,6 +35,7 @@ type DataSize =
 export function UninstallDialog({ install, running, onClose }: UninstallDialogProps) {
   const { t, formatBytes } = useI18n();
   const toast = useToast();
+  const { clearFailure } = useInstallJobs();
   const { harnessId, name } = install;
   /** Null when the size could not be read: the text then says it without one. */
   const [size, setSize] = useState<DataSize | null>({ status: 'loading' });
@@ -69,6 +72,8 @@ export function UninstallDialog({ install, running, onClose }: UninstallDialogPr
     sending.current = false;
     setWorking(false);
     if (result.ok) {
+      // A failed update of it would otherwise still show on its detail page, under Install.
+      clearFailure(harnessId);
       toast(t('toast.uninstalled', { name }));
       onClose();
     } else if (result.error.code === 'harness_running') {

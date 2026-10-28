@@ -5,6 +5,7 @@ import { useConnectivity } from '../connectivity/ConnectivityProvider.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { InstallJobsProvider } from '../install/InstallJobsProvider.js';
 import { PublishProvider } from '../publish/PublishProvider.js';
+import { offeredUpdate } from '../store/primary-action.js';
 import { StoreSearchProvider } from '../store/StoreSearchProvider.js';
 import { OfflineIcon } from './icons.js';
 import { SECTIONS, sectionFor } from './sections.js';
@@ -79,7 +80,7 @@ function useUpdateCount(): number {
     const load = () => {
       void window.api.installs.list().then((result) => {
         if (current && result.ok) {
-          setCount(result.data.filter((install) => install.availableUpdate !== null).length);
+          setCount(result.data.filter((install) => offeredUpdate(install) !== null).length);
         }
       });
     };

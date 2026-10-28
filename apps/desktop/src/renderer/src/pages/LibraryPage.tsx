@@ -15,6 +15,7 @@ import { isLaunchActive, LaunchAction, useLaunch } from '../library/LaunchAction
 import { UninstallDialog } from '../library/UninstallDialog.js';
 import { LibraryIcon, MoreIcon, SearchIcon } from '../shell/icons.js';
 import { ActionError, DownloadAction, UpdateButton } from '../store/DetailAction.js';
+import { offeredUpdate } from '../store/primary-action.js';
 
 /** The Library's views (docs/ux/screens.md): every install, or those of one kind. */
 const FILTERS = ['all', 'updates', 'running', 'local'] as const;
@@ -22,6 +23,9 @@ type LibraryFilter = (typeof FILTERS)[number];
 
 /** The Library's orders: last launched first (then by name), or by name. */
 type LibrarySort = 'recent' | 'name';
+
+/** The skeleton cards the Library shows while it loads. */
+const SKELETON_CARDS = 3;
 
 /**
  * The Library (docs/ux/screens.md): one card per installed Harness. It reloads on
@@ -36,7 +40,12 @@ type LibrarySort = 'recent' | 'name';
  * name filter that narrows as the User types (case-insensitive, anywhere in the name), the views
  * All, Updates available, Running and Local installs, and the order Recently used (last launched
  * first, the never-launched after them, then by name) or Name. A view with no card says "No
- * Harnesses in this view", with Clear filters.
+ * Harnesses in this view", with Clear filters. Until `installs.list` answers (it waits for the
+ * startup recovery), the page shows skeleton cards.
+ *
+ * The uninstall confirmation a card's menu opens is the page's, not the card's: it stays open
+ * when the view hides its card meanwhile (the Harness it asked to close stops, so it leaves the
+ * Running view), and closes by itself once the Harness is no longer installed.
  */
 export function LibraryPage() {
   const { t } = useI18n();
@@ -78,6 +87,16 @@ export function LibraryPage() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [sort, setSort] = useState<LibrarySort>('recent');
+  /** The Harness whose uninstall confirmation is open; null when none is. */
+  const [uninstalling, setUninstalling] = useState<string | null>(null);
+  const uninstallTarget =
+    uninstalling === null ? undefined : installs?.find((each) => each.harnessId === uninstalling);
+  useEffect(() => {
+    // Uninstalled (here or from its detail page): nothing is left to confirm.
+    if (installs !== null && uninstalling !== null && uninstallTarget === undefined) {
+      setUninstalling(null);
+    }
+  }, [installs, uninstalling, uninstallTarget]);
   const sorted = useMemo(
     () => (installs === null ? [] : [...installs].sort(sort === 'name' ? byName : byRecentUse)),
     [installs, sort],
@@ -91,7 +110,7 @@ export function LibraryPage() {
         case 'all':
           return true;
         case 'updates':
-          return install.availableUpdate !== null;
+          return offeredUpdate(install) !== null;
         case 'running':
           return isLaunchActive(launches.get(install.harnessId));
         case 'local':
@@ -101,7 +120,15 @@ export function LibraryPage() {
     return new Set(sorted.filter(passes).map((install) => install.harnessId));
   }, [sorted, launches, query, filter]);
 
-  if (installs === null) return null;
+  if (installs === null) {
+    return (
+      <ul className="library-grid" role="status" aria-busy="true" aria-label={t('library.loading')}>
+        {Array.from({ length: SKELETON_CARDS }, (_, index) => (
+          <li key={index} className="skeleton-card library-skeleton" />
+        ))}
+      </ul>
+    );
+  }
   if (installs.length === 0) {
     return (
       <div className="empty-panel library-empty">
@@ -177,10 +204,25 @@ export function LibraryPage() {
       <ul className="library-grid" hidden={shown.size === 0}>
         {sorted.map((install) => (
           <li key={install.harnessId} hidden={!shown.has(install.harnessId)}>
-            <HarnessCard install={install} launch={launches.get(install.harnessId)} />
+            <HarnessCard
+              install={install}
+              launch={launches.get(install.harnessId)}
+              onUninstall={() => {
+                setUninstalling(install.harnessId);
+              }}
+            />
           </li>
         ))}
       </ul>
+      {uninstallTarget === undefined ? null : (
+        <UninstallDialog
+          install={uninstallTarget}
+          running={isLaunchActive(launches.get(uninstallTarget.harnessId))}
+          onClose={() => {
+            setUninstalling(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -231,7 +273,7 @@ const dismissedFailures = new Set<string>();
  * One installed Harness: icon, name, Publisher, version, the Local badge, when it was last
  * launched (nothing when it never was), the primary button ({@link LaunchAction}, shared with the
  * Store detail page) and its overflow menu: View in Store, Model Overrides, Show logs, Open data
- * folder and Uninstall, which opens the {@link UninstallDialog}. A launch that
+ * folder and Uninstall, which opens the page's {@link UninstallDialog}. A launch that
  * failed shows why ("Exited with an error", "Did not start in time", "Could not start") with Show
  * logs and Dismiss, and Launch retries; the paths Show logs and Open data folder open are computed
  * in main. View in Store opens the Harness's Store detail page, which says so when the Store no
@@ -247,18 +289,21 @@ const dismissedFailures = new Set<string>();
 function HarnessCard({
   install,
   launch,
+  onUninstall,
 }: {
   readonly install: InstalledHarness;
   readonly launch: LaunchStatus | undefined;
+  /** Opens the uninstall confirmation. */
+  readonly onUninstall: () => void;
 }) {
   const { t, formatDate } = useI18n();
   const navigate = useNavigate();
   const [error, setError] = useState<IpcError | null>(null);
-  const [uninstalling, setUninstalling] = useState(false);
   const controls = useLaunch(install, setError);
   const [, dismissed] = useReducer((count: number) => count + 1, 0);
   const installJobs = useInstallJobs();
-  const { harnessId, availableUpdate } = install;
+  const { harnessId } = install;
+  const availableUpdate = offeredUpdate(install);
   const job = installJobs.jobs.get(harnessId);
   const running = isLaunchActive(launch);
   const noLongerInStore =
@@ -336,7 +381,7 @@ function HarnessCard({
               danger: true,
               onSelect: () => {
                 setError(null);
-                setUninstalling(true);
+                onUninstall();
               },
             },
           ]}
@@ -389,15 +434,6 @@ function HarnessCard({
       {job?.kind === 'failed' ? <ActionError error={job.error} /> : null}
       {error === null ? null : <ErrorMessage error={error} />}
       {controls.sheet}
-      {uninstalling ? (
-        <UninstallDialog
-          install={install}
-          running={running}
-          onClose={() => {
-            setUninstalling(false);
-          }}
-        />
-      ) : null}
     </article>
   );
 }

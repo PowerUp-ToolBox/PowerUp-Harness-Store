@@ -8,7 +8,12 @@
 import type { Manifest } from '@harness-store/manifest';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
-import type { InstalledHarness, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
+import type {
+  InstalledHarness,
+  IpcResult,
+  LaunchStatus,
+  StoreDetail,
+} from '../../src/shared/ipc.js';
 import { installFakeApi, renderApp } from './render-app.js';
 
 afterEach(() => {
@@ -111,6 +116,37 @@ function actions(name: string): string[] {
     });
 }
 
+/** What `store.detail` answers for `install`, whose latest version the Store offers is `manifest`. */
+function detailOf(
+  install: InstalledHarness,
+  manifest: Manifest = install.manifest,
+): IpcResult<StoreDetail> {
+  return {
+    ok: true,
+    data: {
+      platform: 'darwin-arm64',
+      storeStatus: 'available',
+      harness: {
+        harnessId: install.harnessId,
+        publisher: { login: 'acme', displayName: 'Acme', avatarUrl: null },
+        iconUrl: null,
+        downloadCount: 3,
+        manifest,
+        readme: null,
+        screenshotUrls: [],
+        versions: [
+          {
+            version: manifest.version,
+            publishedAt: '2026-10-01T09:00:00.000000+00:00',
+            changelog: null,
+            permissionsChanged: false,
+          },
+        ],
+      },
+    },
+  };
+}
+
 async function openMenu(name: string) {
   const card = within(await screen.findByRole('article', { name }));
   fireEvent.click(card.getByRole('button', { name: `More actions for ${name}` }));
@@ -170,21 +206,57 @@ describe('the Library cards', () => {
         source: 'local',
         storeStatus: null,
         // A local install is never checked; a stray value must not make an Update button.
-        availableUpdate: null,
+        availableUpdate: { version: '1.1.0', manifest: { ...MANIFEST, version: '1.1.0' } },
       }),
     ]);
     await renderApp('#/library');
     await screen.findByRole('article', { name: 'Local Copy' });
-    expect(screen.queryByRole('button', { name: 'Update' })).toBeNull();
+    expect(actions('Local Copy')).toEqual(['Launch']);
+    // Nor does it count as an update: no nav badge, and the view of updates has nothing.
+    expect(screen.queryByRole('img', { name: /update/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Updates available' }));
+    expect(screen.getByText('No Harnesses in this view')).toBeDefined();
   });
 
   it('shows when each Harness was last launched, nothing for one never launched', async () => {
     setup();
     await renderApp('#/library');
     const running = await screen.findByRole('article', { name: 'Running Now' });
-    expect(within(running).getByText('Last launched Oct 27, 2026')).toBeDefined();
+    // The date is local time: 09:00 UTC is the day before west of UTC-9.
+    expect(within(running).getByText(/^Last launched Oct 2[67], 2026$/)).toBeDefined();
     const never = screen.getByRole('article', { name: 'Installed' });
     expect(within(never).queryByText(/Last launched/)).toBeNull();
+  });
+});
+
+describe('loading', () => {
+  it('shows skeleton cards until the list answers', async () => {
+    const api = setup();
+    // The nav badge reads the list too: every call waits for the one answer.
+    const waiting: ((result: IpcResult<readonly InstalledHarness[]>) => void)[] = [];
+    api.installs.list.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          waiting.push(resolve);
+        }),
+    );
+    await renderApp('#/library');
+    const loading = await screen.findByRole('status', { name: 'Loading your Library' });
+    expect(loading.querySelectorAll('.skeleton-card').length).toBeGreaterThan(0);
+    expect(screen.queryAllByRole('article')).toEqual([]);
+    await act(async () => {
+      for (const answer of waiting) answer({ ok: true, data: ALL });
+      await Promise.resolve();
+    });
+    expect(await screen.findByRole('article', { name: 'Installed' })).toBeDefined();
+    expect(screen.queryByRole('status', { name: 'Loading your Library' })).toBeNull();
+  });
+
+  it('reads in zh-CN', async () => {
+    const api = setup('zh-CN');
+    api.installs.list.mockImplementation(() => new Promise(() => undefined));
+    await renderApp('#/library');
+    expect(await screen.findByRole('status', { name: '正在加载资源库' })).toBeDefined();
   });
 });
 
@@ -447,30 +519,7 @@ describe('Uninstall', () => {
 
   it('is on the detail page beside Launch, and the page offers Install once it is done', async () => {
     const api = setup('en', [INSTALLED]);
-    api.store.detail.mockResolvedValue({
-      ok: true,
-      data: {
-        platform: 'darwin-arm64',
-        storeStatus: 'available',
-        harness: {
-          harnessId: INSTALLED.harnessId,
-          publisher: { login: 'acme', displayName: 'Acme', avatarUrl: null },
-          iconUrl: null,
-          downloadCount: 3,
-          manifest: INSTALLED.manifest,
-          readme: null,
-          screenshotUrls: [],
-          versions: [
-            {
-              version: '1.0.0',
-              publishedAt: '2026-10-01T09:00:00.000000+00:00',
-              changelog: null,
-              permissionsChanged: false,
-            },
-          ],
-        },
-      },
-    });
+    api.store.detail.mockResolvedValue(detailOf(INSTALLED));
     api.installs.dataSize.mockResolvedValue({ ok: true, data: 1_500_000 });
     api.installs.uninstall.mockImplementation((harnessId: string) => {
       api.installs.list.mockResolvedValue({ ok: true, data: [] });
@@ -498,5 +547,101 @@ describe('Uninstall', () => {
     });
     expect(await screen.findByRole('button', { name: 'Running…' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Uninstall' })).toBeNull();
+  });
+
+  it('is on the detail page beside "Set up a model first" too', async () => {
+    const api = setup('en', [INSTALLED]);
+    api.launch.status.mockResolvedValue({ ok: true, data: [] });
+    api.bindings.resolveAll.mockResolvedValue({
+      ok: true,
+      data: [{ slot: 'default', binding: null }],
+    });
+    api.store.detail.mockResolvedValue(detailOf(INSTALLED));
+    api.installs.dataSize.mockResolvedValue({ ok: true, data: 0 });
+    await renderApp('#/store/h/acme/installed');
+    expect(await screen.findByRole('button', { name: 'Set up a model first' })).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Uninstall' }));
+    expect(await screen.findByRole('dialog', { name: 'Uninstall Installed?' })).toBeDefined();
+  });
+
+  it('is on the detail page beside "Not available for your platform" too', async () => {
+    const elsewhere = installed('installed', 'Installed', { platformSupported: false });
+    const api = setup('en', [elsewhere]);
+    api.launch.status.mockResolvedValue({ ok: true, data: [] });
+    api.store.detail.mockResolvedValue(detailOf(elsewhere));
+    await renderApp('#/store/h/acme/installed');
+    const unsupported = await screen.findByRole('button', {
+      name: 'Not available for your platform',
+    });
+    expect((unsupported as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Uninstall' })).toBeDefined();
+  });
+
+  it('stays open when the Running view hides its card, as the Harness it asked to close stops', async () => {
+    const api = setup();
+    api.installs.dataSize.mockResolvedValue({ ok: true, data: 1_500_000 });
+    await renderApp('#/library');
+    await screen.findByRole('button', { name: 'Running…' });
+    fireEvent.click(screen.getByRole('button', { name: 'Running' }));
+    fireEvent.click(
+      within(await openMenu('Running Now')).getByRole('menuitem', { name: 'Uninstall' }),
+    );
+    expect(await screen.findByText('Close the Harness first')).toBeDefined();
+
+    act(() => {
+      api.emit('launch.state', launchStatus(RUNNING.harnessId, { state: 'stopped', exitCode: 0 }));
+    });
+    // The card left the view; the dialog did not, and now asks to confirm.
+    expect(screen.queryAllByRole('article')).toEqual([]);
+    const dialog = await screen.findByRole('dialog', { name: 'Uninstall Running Now?' });
+    expect(dialog.closest('[hidden]')).toBeNull();
+    expect(await within(dialog).findByText(/\(1\.5 MB\)/)).toBeDefined();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    // Showing the card again does not bring the dialog back.
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.getByRole('article', { name: 'Running Now' })).toBeDefined();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.installs.uninstall).not.toHaveBeenCalled();
+  });
+
+  it('drops a failed update, so the detail page then offers Install with no stale error', async () => {
+    const api = setup('en', [UPDATE]);
+    api.launch.status.mockResolvedValue({ ok: true, data: [] });
+    api.installs.update.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'harness_running',
+        messageKey: 'error.harness_running',
+        message: 'This Harness is running.',
+      },
+    });
+    api.installs.dataSize.mockResolvedValue({ ok: true, data: 0 });
+    api.installs.uninstall.mockImplementation((harnessId: string) => {
+      api.installs.list.mockResolvedValue({ ok: true, data: [] });
+      api.emit('installs.changed', { harnessId });
+      return Promise.resolve({ ok: true, data: null } as IpcResult<null>);
+    });
+    api.store.detail.mockResolvedValue(detailOf(UPDATE, UPDATE.availableUpdate?.manifest));
+    await renderApp('#/library');
+    const card = within(await screen.findByRole('article', { name: 'Update Available' }));
+    fireEvent.click(card.getByRole('button', { name: 'Update' }));
+    expect(await card.findByText('Close the Harness to update')).toBeDefined();
+
+    fireEvent.click(
+      within(await openMenu('Update Available')).getByRole('menuitem', { name: 'Uninstall' }),
+    );
+    const dialog = within(await screen.findByRole('dialog'));
+    await dialog.findByText(/\(0 byte/);
+    fireEvent.click(dialog.getByRole('button', { name: 'Uninstall' }));
+    await screen.findByText('Nothing installed yet');
+
+    act(() => {
+      window.location.hash = '#/store/h/acme/update';
+    });
+    expect(await screen.findByRole('button', { name: 'Install' })).toBeDefined();
+    expect(screen.queryByText('Close the Harness to update')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

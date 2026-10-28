@@ -40,6 +40,7 @@
   "library.sort.name": "Name",
   "library.emptyView": "No Harnesses in this view",
   "library.clearFilters": "Clear filters",
+  "library.loading": "Loading your Library",
   "uninstall.title": "Uninstall {name}?",
   "uninstall.body": "This deletes its data directory ({size}). Files in your own folders are not touched.",
   "uninstall.bodyNoSize": "This deletes its data directory. Files in your own folders are not touched.",

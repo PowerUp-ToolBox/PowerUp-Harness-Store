@@ -40,6 +40,7 @@
   "library.sort.name": "名称",
   "library.emptyView": "此视图中没有 Harness",
   "library.clearFilters": "清除筛选",
+  "library.loading": "正在加载资源库",
   "uninstall.title": "卸载 {name}？",
   "uninstall.body": "这会删除它的数据目录（{size}）。你自己目录中的文件不受影响。",
   "uninstall.bodyNoSize": "这会删除它的数据目录。你自己目录中的文件不受影响。",

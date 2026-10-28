@@ -2527,6 +2527,11 @@ input[aria-invalid='true'] {
   min-width: 0;
 }
 
+/* A Library card while the Library loads: about the height of a card. */
+.library-skeleton {
+  height: 150px;
+}
+
 /* Cards the controls leave out stay mounted, hidden. */
 .library-grid[hidden],
 .library-grid > li[hidden] {

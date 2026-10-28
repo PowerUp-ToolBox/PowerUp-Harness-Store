@@ -61,6 +61,11 @@ export interface InstallJobsValue {
    * update prompt opens first; otherwise the download starts at once.
    */
   readonly update: (install: InstalledHarness, target: Manifest) => void;
+  /**
+   * Drops the failure of the Harness's last install or update, if that is its job: once it is
+   * uninstalled, why its update failed no longer applies.
+   */
+  readonly clearFailure: (harnessId: string) => void;
 }
 
 const InstallJobsContext = createContext<InstallJobsValue | null>(null);
@@ -91,7 +96,8 @@ const UNANSWERED: IpcError = {
  * {@link UpdatePrompt} first, and its Update starts `installs.update` with `reconsented`; any other
  * update starts at once, with no dialog. Its progress and Cancel show on the button as an
  * install's do; once it is done, a toast says "Updated <name> to <version>". A failure stays on the
- * Harness's card and detail page until Update is pressed again.
+ * Harness's card and detail page until Update is pressed again, or until the Harness is
+ * uninstalled (`clearFailure`).
  *
  * Only this provider knows its job IDs, so nothing of a job outlives it: a download that is done
  * after the provider unmounted, or after Cancel was pressed (main finished verifying as the
@@ -327,9 +333,21 @@ export function InstallJobsProvider({ children }: { readonly children: ReactNode
     [closeDialog, mounted, t, toast, update],
   );
 
+  const clearFailure = useCallback(
+    (harnessId: string) => {
+      if (jobsRef.current.get(harnessId)?.kind !== 'failed') return;
+      setJobs((current) => {
+        const changed = new Map(current);
+        changed.delete(harnessId);
+        return changed;
+      });
+    },
+    [setJobs],
+  );
+
   const value = useMemo<InstallJobsValue>(
-    () => ({ jobs, install, cancel, review, update: requestUpdate }),
-    [jobs, install, cancel, review, requestUpdate],
+    () => ({ jobs, install, cancel, review, update: requestUpdate, clearFailure }),
+    [jobs, install, cancel, review, requestUpdate, clearFailure],
   );
   const dialogJob = shown === null ? undefined : jobs.get(shown);
   return (
