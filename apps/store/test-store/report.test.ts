@@ -6,8 +6,8 @@
  * The rate limit is tested through the per-install check (`client_info.install_id` against the
  * stored Reports), which is exact. The per-IP counter lives in each function worker's memory, so
  * whether a request meets the same counter is up to the edge runtime: its rules are unit tests
- * (test/moderation.test.ts), and each request here sends an IP address of its own unless the test is
- * about one IP, so that no counter of an earlier request gets in the way.
+ * (test/moderation.test.ts), and each request here sends an IP address of its own, so that no
+ * counter of an earlier request gets in the way and a 429 can only come from the per-install check.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -116,14 +116,15 @@ describe('report', () => {
     );
   });
 
-  it('rate-limits the 6th Report within an hour from one IP address and install; the first 5 succeed', async () => {
-    const from = ip();
+  it('rate-limits the 6th Report within an hour from one install, whatever its IP address; the first 5 succeed', async () => {
+    // A fresh address for every request, so the per-IP counter never refuses one and the 429 can
+    // only come from submit_report's per-install check against the stored Reports.
     const install = randomUUID();
     const statuses: number[] = [];
     for (let attempt = 0; attempt < 6; attempt += 1) {
       const reply = await report(
         valid({ client_info: { install_id: install, platform: 'darwin-arm64' } }),
-        from,
+        ip(),
       );
       statuses.push(reply.status);
       if (reply.status === 429) expect(reply.body.error?.code).toBe('rate_limited');
@@ -186,7 +187,7 @@ describe('report', () => {
     expect(reply.status).toBe(201);
   });
 
-  it('refuses details over 2000 characters, client_info fields that are not short strings, or a NUL anywhere (400)', async () => {
+  it('refuses details over 2000 characters, client_info fields that are not short strings, or a NUL or lone surrogate anywhere (400)', async () => {
     expect((await report(valid({ details: 'x'.repeat(2000) }))).status).toBe(201);
     expect((await report(valid({ details: undefined }))).status).toBe(201);
     for (const fields of [
@@ -201,6 +202,11 @@ describe('report', () => {
       { harness_id: `${harness.harness_id}\u0000` },
       { version: '1.0.0\u0000' },
       { client_info: { install_id: 'i\u0000' } },
+      // Nor a lone UTF-16 surrogate (JSON.stringify sends it as "\ud800"), which has no UTF-8 form.
+      { details: 'x\ud800y' },
+      { harness_id: 'does/not-exist', reason: 'spam', details: 'x\ud800y' },
+      { harness_id: `${harness.harness_id}\udc00` },
+      { client_info: { install_id: 'i\udbff' } },
     ]) {
       const reply = await report(valid(fields));
       expect(reply.status, JSON.stringify(fields).slice(0, 80)).toBe(400);

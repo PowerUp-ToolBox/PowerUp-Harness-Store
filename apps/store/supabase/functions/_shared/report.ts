@@ -64,7 +64,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * string of at most {@link MAX_DETAILS_LENGTH} characters; `client_info` absent, null or an object
  * whose `install_id`, `app_version` and `platform`, each optional, are non-empty strings of at
  * most {@link MAX_CLIENT_INFO_LENGTH} characters (its other fields are dropped). No string may
- * hold a NUL character (see isStorable). Other fields are ignored.
+ * hold a NUL character or a lone UTF-16 surrogate (see isStorable). Other fields are ignored.
  */
 export function reportRequest(body: unknown): ReportRequest | ApiError {
   if (!isObject(body)) return invalidRequest('The body must be a JSON object.');
@@ -84,7 +84,7 @@ export function reportRequest(body: unknown): ReportRequest | ApiError {
     (!isStorable(details) || details.length > MAX_DETAILS_LENGTH)
   ) {
     return invalidRequest(
-      `"details" must be a string of at most ${String(MAX_DETAILS_LENGTH)} characters, with no NUL character.`,
+      `"details" must be a string of at most ${String(MAX_DETAILS_LENGTH)} characters, with no NUL character or lone surrogate.`,
     );
   }
   if (client_info !== undefined && client_info !== null && !isObject(client_info)) {

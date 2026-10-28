@@ -9,8 +9,7 @@
  * transaction (404 for an unknown Harness or version).
  */
 import { createClient } from '@supabase/supabase-js';
-import { signedInUser } from '../_shared/caller.ts';
-import type { CallerLookups } from '../_shared/caller.ts';
+import { callerLookups, signedInUser } from '../_shared/caller.ts';
 import { errorResponse, failure, jsonBody, jsonResponse, raisedError } from '../_shared/http.ts';
 import {
   FORBIDDEN,
@@ -27,15 +26,7 @@ const admin = createClient(
   { auth: { persistSession: false, autoRefreshToken: false } },
 );
 
-const lookups: CallerLookups = {
-  getUser: (token) => admin.auth.getUser(token),
-  profile: (id) =>
-    admin
-      .from('profiles')
-      .select('github_login, is_admin')
-      .eq('id', id)
-      .maybeSingle<{ github_login: string | null; is_admin: boolean }>(),
-};
+const lookups = callerLookups(admin);
 
 function serverError(what: string, cause: unknown): Response {
   console.error(what, cause);

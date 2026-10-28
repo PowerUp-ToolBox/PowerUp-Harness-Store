@@ -46,7 +46,7 @@ describe('downloadRequest', () => {
     expect(downloadRequest({ ...VALID, app_version: appVersion }, PLATFORMS)).toMatchObject({
       app_version: appVersion,
     });
-    for (const app_version of [undefined, '', 1, `${appVersion}x`, '0.1.0\u0000']) {
+    for (const app_version of [undefined, '', 1, `${appVersion}x`, '0.1.0\u0000', '0.1.0\ud800']) {
       expect(downloadRequest({ ...VALID, app_version }, PLATFORMS)).toMatchObject({ status: 400 });
     }
   });
@@ -55,10 +55,17 @@ describe('downloadRequest', () => {
     for (const body of [undefined, null, 'text', [], 3]) {
       expect(downloadRequest(body, PLATFORMS)).toMatchObject({ status: 400 });
     }
-    for (const harness_id of [undefined, '', 3, 'x'.repeat(257), 'alice/a\u0000']) {
+    for (const harness_id of [
+      undefined,
+      '',
+      3,
+      'x'.repeat(257),
+      'alice/a\u0000',
+      'alice/a\udc00',
+    ]) {
       expect(downloadRequest({ ...VALID, harness_id }, PLATFORMS)).toMatchObject({ status: 400 });
     }
-    for (const version of ['', 1, ['1.0.0'], '1.0.0\u0000']) {
+    for (const version of ['', 1, ['1.0.0'], '1.0.0\u0000', '1.0.0\ud800']) {
       expect(downloadRequest({ ...VALID, version }, PLATFORMS)).toMatchObject({ status: 400 });
     }
   });

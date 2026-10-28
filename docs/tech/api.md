@@ -55,7 +55,7 @@ Every function answers an error with `{ "error": { "code", "message", ... } }`; 
 
 | Status | `code` | When |
 |---|---|---|
-| 400 | `invalid_request` | A body field is missing or malformed (a string holding a NUL character, U+0000, which Postgres cannot store, is malformed) |
+| 400 | `invalid_request` | A body field is missing or malformed (a string Postgres cannot store is malformed: one holding a NUL character, U+0000, or a lone UTF-16 surrogate such as the JSON escape `\ud800`) |
 | 401 | `unauthenticated` | No JWT, an invalid or expired one, or a user with no `profiles` row (no GitHub login) |
 | 403 | `forbidden` | Not the owner (`unpublish`), or not an administrator (`admin/takedown`) |
 | 404 | `not_found` | Unknown Harness or version, or one that is not visible |

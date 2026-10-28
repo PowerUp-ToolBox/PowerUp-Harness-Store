@@ -18,8 +18,8 @@ import {
   resolveVersion,
   signedUrlTtl,
 } from '../_shared/download.ts';
-import type { DownloadError, HarnessLookup } from '../_shared/download.ts';
-import { errorResponse, jsonResponse } from '../_shared/http.ts';
+import type { HarnessLookup } from '../_shared/download.ts';
+import { errorResponse, failure, jsonResponse } from '../_shared/http.ts';
 import { manifestSchema } from '../_shared/manifest.js';
 import { PACKAGES_BUCKET } from '../_shared/storage-paths.ts';
 
@@ -43,10 +43,6 @@ interface VersionLookup {
   package_size: number;
 }
 
-function fail(error: DownloadError): Response {
-  return errorResponse(error.status, error.code, error.message);
-}
-
 function serverError(what: string, cause: unknown): Response {
   console.error(what, cause);
   return errorResponse(500, 'internal_error', 'The Store could not prepare this download.');
@@ -63,7 +59,7 @@ async function download(request: Request): Promise<Response> {
     body = undefined;
   }
   const asked = downloadRequest(body, PLATFORMS);
-  if ('status' in asked) return fail(asked);
+  if ('status' in asked) return failure(asked);
 
   const harness = await admin
     .from('harnesses')
@@ -72,7 +68,7 @@ async function download(request: Request): Promise<Response> {
     .maybeSingle<HarnessLookup & { id: string }>();
   if (harness.error !== null) return serverError('harnesses', harness.error);
   const version = resolveVersion(harness.data, asked.version);
-  if (harness.data === null || version === undefined) return fail(NOT_FOUND);
+  if (harness.data === null || version === undefined) return failure(NOT_FOUND);
 
   const row = await admin
     .from('harness_versions')
@@ -81,8 +77,8 @@ async function download(request: Request): Promise<Response> {
     .eq('version', version)
     .maybeSingle<VersionLookup>();
   if (row.error !== null) return serverError('harness_versions', row.error);
-  if (row.data === null || row.data.status !== 'published') return fail(NOT_FOUND);
-  if (!row.data.platforms.includes(asked.platform)) return fail(PLATFORM_NOT_SUPPORTED);
+  if (row.data === null || row.data.status !== 'published') return failure(NOT_FOUND);
+  if (!row.data.platforms.includes(asked.platform)) return failure(PLATFORM_NOT_SUPPORTED);
 
   const signed = await admin.storage
     .from(PACKAGES_BUCKET)
@@ -95,7 +91,7 @@ async function download(request: Request): Promise<Response> {
     app_version: asked.app_version,
   });
   if (counted.error !== null) {
-    if (counted.error.code === 'PT404') return fail(NOT_FOUND);
+    if (counted.error.code === 'PT404') return failure(NOT_FOUND);
     return serverError('record_download', counted.error);
   }
 

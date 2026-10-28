@@ -13,8 +13,7 @@
  * the stored Reports (exact, but a client can leave the install id out or change it).
  */
 import { createClient } from '@supabase/supabase-js';
-import { signedInUser } from '../_shared/caller.ts';
-import type { CallerLookups } from '../_shared/caller.ts';
+import { callerLookups, signedInUser } from '../_shared/caller.ts';
 import { errorResponse, failure, jsonBody, jsonResponse, raisedError } from '../_shared/http.ts';
 import {
   clientIp,
@@ -30,15 +29,7 @@ const admin = createClient(
   { auth: { persistSession: false, autoRefreshToken: false } },
 );
 
-const lookups: CallerLookups = {
-  getUser: (token) => admin.auth.getUser(token),
-  profile: (id) =>
-    admin
-      .from('profiles')
-      .select('github_login, is_admin')
-      .eq('id', id)
-      .maybeSingle<{ github_login: string | null; is_admin: boolean }>(),
-};
+const lookups = callerLookups(admin);
 
 /** Reports per IP address in this worker (config.toml: `policy = "per_worker"` keeps it). */
 const perIp = new ReportCounter();

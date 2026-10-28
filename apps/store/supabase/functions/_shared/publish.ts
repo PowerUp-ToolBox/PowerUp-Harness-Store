@@ -3,9 +3,10 @@
  * bad token, the Content-Length check, which Harness a package is for, the HTTP answer to
  * validatePackage's problems and to publish_version's errors, whether a failed publish_version
  * call surely wrote nothing, and the in-app route of a published Harness. The validation itself is
- * validatePackage from @harness-store/manifest, never repeated here. Plain TypeScript with no
- * imports (see storage-paths.ts).
+ * validatePackage from @harness-store/manifest, never repeated here. Plain TypeScript with
+ * relative imports only (see storage-paths.ts).
  */
+import type { ApiError } from './http.ts';
 
 /**
  * A finding of validatePackage, as @harness-store/manifest's `Problem` type declares it (repeated
@@ -28,13 +29,6 @@ export const MAX_PACKAGE_BYTES = 500 * 1024 * 1024;
  * Content-Length check only refuses what cannot be within it, before the body is read.
  */
 export const MULTIPART_ALLOWANCE = 64 * 1024;
-
-/** An error answer: HTTP status, API error code and English message. */
-export interface ApiError {
-  status: number;
-  code: string;
-  message: string;
-}
 
 export const PUBLISHER_MISMATCH: ApiError = {
   status: 403,

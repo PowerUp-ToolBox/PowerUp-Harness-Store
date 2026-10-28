@@ -4,10 +4,11 @@
  * `admin/takedown` route and the mapping of the SQL functions' errors. The functions themselves
  * are tested over HTTP in test-store/unpublish.test.ts, report.test.ts and takedown.test.ts.
  */
+import { createClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
-import { signedInUser } from '../supabase/functions/_shared/caller.ts';
+import { callerLookups, signedInUser } from '../supabase/functions/_shared/caller.ts';
 import type { CallerLookups } from '../supabase/functions/_shared/caller.ts';
-import { raisedError } from '../supabase/functions/_shared/http.ts';
+import { isStorable, isText, raisedError } from '../supabase/functions/_shared/http.ts';
 import {
   clientIp,
   MAX_DETAILS_LENGTH,
@@ -100,6 +101,87 @@ describe('signedInUser', () => {
   });
 });
 
+describe('callerLookups', () => {
+  /**
+   * A real supabase-js client (the version the functions import) whose requests go to `answer`,
+   * which also proves the client fits the structural CallerClient type.
+   */
+  function client(answer: (url: URL, headers: Headers) => unknown) {
+    const requests: string[] = [];
+    const fetch = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      requests.push(`${init?.method ?? 'GET'} ${url.pathname}${url.search}`);
+      const body = answer(url, new Headers(init?.headers));
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    };
+    const supabase = createClient('http://store.test', 'service-role-key', {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch },
+    });
+    return { lookups: callerLookups(supabase), requests };
+  }
+
+  it("ask Auth for the token's user and read github_login and is_admin of their profile", async () => {
+    const { lookups, requests } = client((url, headers) => {
+      if (url.pathname !== '/auth/v1/user') return [{ github_login: 'alice', is_admin: true }];
+      expect(headers.get('authorization')).toBe('Bearer t0k');
+      return { id: 'u1', aud: 'authenticated' };
+    });
+    expect(await signedInUser('Bearer t0k', lookups)).toEqual({
+      id: 'u1',
+      login: 'alice',
+      isAdmin: true,
+    });
+    expect(requests).toEqual([
+      'GET /auth/v1/user',
+      'GET /rest/v1/profiles?select=github_login%2Cis_admin&id=eq.u1',
+    ]);
+  });
+
+  it('give no Publisher for a user with no profile row', async () => {
+    const { lookups } = client((url) => (url.pathname === '/auth/v1/user' ? { id: 'u2' } : []));
+    expect(await signedInUser('Bearer t0k', lookups)).toBeUndefined();
+  });
+});
+
+describe('isStorable and isText', () => {
+  it('accept any string Postgres can store, surrogate pairs included', () => {
+    for (const text of ['', 'alice/a', '插件 1.0', 'emoji \ud83d\ude00 pair', '\ufffd']) {
+      expect(isStorable(text), JSON.stringify(text)).toBe(true);
+    }
+    expect(isText('\ud83d\ude00', 2)).toBe(true);
+  });
+
+  it('refuse a NUL character, a lone surrogate, and anything not a string', () => {
+    for (const value of [
+      'a\u0000b',
+      '\ud800',
+      'x\ud800y',
+      'x\udc00',
+      '\udc00\ud800',
+      'pair cut \ud83d',
+      undefined,
+      null,
+      1,
+      ['a'],
+    ]) {
+      expect(isStorable(value), JSON.stringify(value)).toBe(false);
+      expect(isText(value, 100), JSON.stringify(value)).toBe(false);
+    }
+  });
+
+  it('isText also refuses the empty string and one over its length', () => {
+    expect(isText('', 5)).toBe(false);
+    expect(isText('abcdef', 5)).toBe(false);
+    expect(isText('abcde', 5)).toBe(true);
+  });
+});
+
 describe('raisedError', () => {
   it('maps a PT<status> SQLSTATE with the API code as message to that error', () => {
     expect(raisedError('PT404', 'not_found', UNPUBLISH_ERRORS)).toBe(NOT_FOUND);
@@ -136,6 +218,9 @@ describe('unpublishRequest', () => {
       // Postgres text cannot hold a NUL: a 400, not a failed database call.
       { harness_id: 'alice/a\u0000', version: '1.0.0' },
       { harness_id: 'alice/a', version: '1.0.0\u0000' },
+      // Nor a lone UTF-16 surrogate, which has no UTF-8 form.
+      { harness_id: 'alice/a\ud800', version: '1.0.0' },
+      { harness_id: 'alice/a', version: '1.0.0\udc00' },
     ]) {
       expect(unpublishRequest(body), JSON.stringify(body)).toMatchObject(INVALID);
     }
@@ -209,6 +294,13 @@ describe('reportRequest', () => {
       { details: 'x\u0000y' },
       { client_info: { install_id: 'i\u0000' } },
       { client_info: { platform: '\u0000' } },
+      // Nor a lone UTF-16 surrogate, which has no UTF-8 form.
+      { harness_id: 'alice/a\ud800' },
+      { version: '1.0.0\udfff' },
+      { details: 'x\ud800y' },
+      { details: 'x\udc00' },
+      { client_info: { install_id: 'i\udbff' } },
+      { client_info: { app_version: '\udc00\ud800' } },
     ]) {
       expect(reportRequest({ ...VALID, ...fields }), JSON.stringify(fields)).toMatchObject(INVALID);
     }
@@ -295,6 +387,9 @@ describe('admin/takedown', () => {
       { harness_id: 'alice/a\u0000', note: 'n' },
       { harness_id: 'alice/a', version: '1.0.0\u0000', note: 'n' },
       { harness_id: 'alice/a', note: 'Malware.\u0000' },
+      { harness_id: 'alice/a\ud800', note: 'n' },
+      { harness_id: 'alice/a', version: '1.0.0\udc00', note: 'n' },
+      { harness_id: 'alice/a', note: 'Malware.\ud800' },
     ]) {
       expect(takedownRequest(body), JSON.stringify(body).slice(0, 60)).toMatchObject(INVALID);
     }

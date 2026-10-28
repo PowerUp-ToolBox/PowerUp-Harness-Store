@@ -18,9 +18,9 @@
  * allow; the P0-07 spec records it.
  */
 import { createClient } from '@supabase/supabase-js';
-import { signedInUser } from '../_shared/caller.ts';
-import type { CallerLookups } from '../_shared/caller.ts';
-import { errorResponse, jsonResponse } from '../_shared/http.ts';
+import { callerLookups, signedInUser } from '../_shared/caller.ts';
+import { errorResponse, failure, jsonResponse } from '../_shared/http.ts';
+import type { ApiError } from '../_shared/http.ts';
 import {
   ArchiveSource,
   interpolate,
@@ -41,7 +41,7 @@ import {
   storeRoute,
   VERSION_NOT_GREATER,
 } from '../_shared/publish.ts';
-import type { ApiError, Problem } from '../_shared/publish.ts';
+import type { Problem } from '../_shared/publish.ts';
 import { README_MAX_BYTES, storedReadme } from '../_shared/readme.ts';
 import {
   ASSETS_BUCKET,
@@ -59,25 +59,13 @@ const admin = createClient(
   { auth: { persistSession: false, autoRefreshToken: false } },
 );
 
-const lookups: CallerLookups = {
-  getUser: (token) => admin.auth.getUser(token),
-  profile: (id) =>
-    admin
-      .from('profiles')
-      .select('github_login, is_admin')
-      .eq('id', id)
-      .maybeSingle<{ github_login: string | null; is_admin: boolean }>(),
-};
+const lookups = callerLookups(admin);
 
 const UNAUTHENTICATED: ApiError = {
   status: 401,
   code: 'unauthenticated',
   message: 'Sign in with GitHub to publish.',
 };
-
-function fail(error: ApiError, details?: Record<string, unknown>): Response {
-  return errorResponse(error.status, error.code, error.message, details);
-}
 
 function serverError(what: string, cause: unknown): Response {
   console.error(what, cause);
@@ -142,14 +130,14 @@ async function publish(request: Request): Promise<Response> {
     return errorResponse(405, 'method_not_allowed', 'Use POST.');
   }
   const publisher = await signedInUser(request.headers.get('authorization'), lookups);
-  if (publisher === undefined) return fail(UNAUTHENTICATED);
+  if (publisher === undefined) return failure(UNAUTHENTICATED);
 
   const lengthError = contentLengthError(request.headers.get('content-length'));
-  if (lengthError !== undefined) return fail(lengthError);
+  if (lengthError !== undefined) return failure(lengthError);
 
   const remaining = await admin.rpc('publishes_remaining', { publisher: publisher.id });
   if (remaining.error !== null) return serverError('publishes_remaining', remaining.error);
-  if (remaining.data === 0) return fail(RATE_LIMITED);
+  if (remaining.data === 0) return failure(RATE_LIMITED);
 
   let upload: unknown;
   try {
@@ -182,20 +170,20 @@ async function publish(request: Request): Promise<Response> {
   const publishedVersions = (harness?.harness_versions ?? []).map((row) => row.version);
 
   const result = await validatePackage(source, { publisher: publisher.login, publishedVersions });
-  if (!result.ok) return fail(rejection(result.problems), { problems: result.problems });
+  if (!result.ok) return failure(rejection(result.problems), { problems: result.problems });
   const { manifest } = result;
-  if (harness?.status === 'taken_down') return fail(HARNESS_TAKEN_DOWN);
+  if (harness?.status === 'taken_down') return failure(HARNESS_TAKEN_DOWN);
 
   // What the Store keeps besides the zip, read before anything is uploaded.
   const sizes = fileSizes(source.listEntries().entries);
-  if ((sizes.get(ICON_FILE) ?? 0) > MAX_ASSET_BYTES) return fail(ICON_TOO_LARGE);
+  if ((sizes.get(ICON_FILE) ?? 0) > MAX_ASSET_BYTES) return failure(ICON_TOO_LARGE);
   const assets = assetUploads(manifest.id, manifest.version, sizes);
   const read = await readInFull(source, [
     ...assets,
     // The 3 extra bytes complete a character cut at the limit, which storedReadme then drops.
     ...(sizes.has('README.md') ? [{ file: 'README.md', maxBytes: README_MAX_BYTES + 3 }] : []),
   ]);
-  if ('problems' in read) return fail(rejection(read.problems), { problems: read.problems });
+  if ('problems' in read) return failure(rejection(read.problems), { problems: read.problems });
   const assetBytes = read.contents.slice(0, assets.length);
   const readme = read.contents[assets.length] ?? new Uint8Array();
 
@@ -208,7 +196,7 @@ async function publish(request: Request): Promise<Response> {
       .upload(zipPath, zip, { contentType: 'application/zip', upsert: false });
     if (stored.error !== null) {
       // Another publish of this version got there first (or a crashed one left it): not ours.
-      if (alreadyExists(stored.error)) return fail(VERSION_NOT_GREATER);
+      if (alreadyExists(stored.error)) return failure(VERSION_NOT_GREATER);
       return serverError(`upload ${zipPath}`, stored.error);
     }
     created.push({ bucket: PACKAGES_BUCKET, path: zipPath });
@@ -221,7 +209,7 @@ async function publish(request: Request): Promise<Response> {
           upsert: false,
         });
       if (put.error !== null) {
-        if (alreadyExists(put.error)) return fail(VERSION_NOT_GREATER);
+        if (alreadyExists(put.error)) return failure(VERSION_NOT_GREATER);
         return serverError(`upload ${asset.path}`, put.error);
       }
       created.push({ bucket: ASSETS_BUCKET, path: asset.path });
@@ -239,7 +227,7 @@ async function publish(request: Request): Promise<Response> {
     });
     if (inserted.error !== null) {
       const known = publishVersionError(inserted.error.code, inserted.error.message);
-      if (known !== undefined) return fail(known);
+      if (known !== undefined) return failure(known);
       // Without an answer from PostgREST (a lost connection, the gateway timing out), the
       // transaction may still be waiting for the Publisher's lock and commit later; no read now
       // can tell. Its objects stay: deleting them could leave a published version without its

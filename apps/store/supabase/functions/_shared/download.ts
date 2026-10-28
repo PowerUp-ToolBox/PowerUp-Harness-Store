@@ -3,14 +3,8 @@
  * version a request asks for, the platform check, the signed URL's lifetime and the public URL the
  * desktop app can reach. Plain TypeScript with relative imports only (see storage-paths.ts).
  */
-import { isText } from './http.ts';
-
-/** An error answer: HTTP status, API error code and English message. */
-export interface DownloadError {
-  status: number;
-  code: string;
-  message: string;
-}
+import { invalidRequest, isText } from './http.ts';
+import type { ApiError } from './http.ts';
 
 /** A valid `download` request body (docs/tech/api.md). */
 export interface DownloadRequest {
@@ -30,21 +24,17 @@ const MAX_LOOKUP_LENGTH = 256;
 /** How long a signed package URL is valid, in seconds (P0-07: "a leaked URL is worthless within a minute"). */
 export const SIGNED_URL_TTL_SECONDS = 60;
 
-export const NOT_FOUND: DownloadError = {
+export const NOT_FOUND: ApiError = {
   status: 404,
   code: 'not_found',
   message: 'No published version of this Harness was found.',
 };
 
-export const PLATFORM_NOT_SUPPORTED: DownloadError = {
+export const PLATFORM_NOT_SUPPORTED: ApiError = {
   status: 422,
   code: 'platform_not_supported',
   message: 'This Harness Version does not run on the requested platform.',
 };
-
-function invalid(message: string): DownloadError {
-  return { status: 400, code: 'invalid_request', message };
-}
 
 /**
  * The request, or the 400 that refuses it: `harness_id` a non-empty string, `version` absent,
@@ -55,22 +45,24 @@ function invalid(message: string): DownloadError {
 export function downloadRequest(
   body: unknown,
   platforms: readonly string[],
-): DownloadRequest | DownloadError {
+): DownloadRequest | ApiError {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    return invalid('The body must be a JSON object.');
+    return invalidRequest('The body must be a JSON object.');
   }
   const { harness_id, version, platform, app_version } = body as Record<string, unknown>;
   if (!isText(harness_id, MAX_LOOKUP_LENGTH)) {
-    return invalid('"harness_id" must be a Harness ID.');
+    return invalidRequest('"harness_id" must be a Harness ID.');
   }
   if (version !== undefined && version !== null && !isText(version, MAX_LOOKUP_LENGTH)) {
-    return invalid('"version" must be a version, or left out for the latest published version.');
+    return invalidRequest(
+      '"version" must be a version, or left out for the latest published version.',
+    );
   }
   if (typeof platform !== 'string' || !platforms.includes(platform)) {
-    return invalid(`"platform" must be one of ${platforms.join(', ')}.`);
+    return invalidRequest(`"platform" must be one of ${platforms.join(', ')}.`);
   }
   if (!isText(app_version, MAX_APP_VERSION_LENGTH)) {
-    return invalid(
+    return invalidRequest(
       `"app_version" must be a string of 1 to ${String(MAX_APP_VERSION_LENGTH)} characters.`,
     );
   }

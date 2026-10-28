@@ -47,10 +47,12 @@ export function invalidRequest(message: string): ApiError {
 
 /**
  * Whether `value` is a string Postgres can store as text: no NUL character (U+0000), which `text`
- * and `jsonb` refuse, so a body carrying one is a bad request rather than a failed database call.
+ * and `jsonb` refuse, and no lone UTF-16 surrogate (JSON may encode one as `"\ud800"`), which has
+ * no UTF-8 form and fails the database call. A body carrying either is a bad request, not a
+ * server error. The same rule as @harness-store/manifest's `unstorable_character`.
  */
 export function isStorable(value: unknown): value is string {
-  return typeof value === 'string' && !value.includes('\u0000');
+  return typeof value === 'string' && !value.includes('\u0000') && value.isWellFormed();
 }
 
 /** Whether `value` is a non-empty storable string of at most `maxLength` characters. */
