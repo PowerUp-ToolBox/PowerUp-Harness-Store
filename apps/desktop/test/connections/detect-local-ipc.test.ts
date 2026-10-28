@@ -1,4 +1,6 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -9,6 +11,7 @@ import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import type { LocalProbeTarget } from '../../src/main/runtime/local-detection.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { REFUSED_BASE_URL } from '../support/refused-port.js';
 
 /**
  * Local Provider detection over IPC, as the wizard's Local Providers step and the Models page call
@@ -62,20 +65,45 @@ function call(method: string, input?: unknown) {
 }
 
 /** A fake Provider standing in for a local one, serving `model` too. */
-async function fakeLocal(model: string, port = 0): Promise<FakeProvider> {
-  const fake = await startFakeProvider({ port, aliases: { [model]: 'fake/echo' } });
+async function fakeLocal(model: string): Promise<FakeProvider> {
+  const fake = await startFakeProvider({ aliases: { [model]: 'fake/echo' } });
   closers.push(() => fake.close());
   return fake;
 }
 
-/** A free port: one the OS handed out, then closed. */
-async function freePort(): Promise<number> {
-  const fake = await startFakeProvider();
-  await fake.close();
-  return fake.port;
+/**
+ * A loopback server that answers GET /v1/models with 404 until `start()`, then as Ollama does.
+ * It listens for the whole test, so the port cannot change hands between two detections.
+ */
+async function ollamaStartedLater(): Promise<{ readonly url: string; start: () => void }> {
+  let running = false;
+  const server: Server = createServer((_request, response) => {
+    if (!running) {
+      response.writeHead(404).end('Not found');
+      return;
+    }
+    response
+      .writeHead(200, { 'content-type': 'application/json' })
+      .end(JSON.stringify({ object: 'list', data: [{ id: 'qwen3:8b', object: 'model' }] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  closers.push(
+    () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => {
+          resolve();
+        });
+      }),
+  );
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${String(port)}/v1`,
+    start: () => {
+      running = true;
+    },
+  };
 }
-
-const at = (port: number) => `http://127.0.0.1:${String(port)}/v1`;
 
 describe.each([
   { providerId: 'ollama', displayName: 'Ollama', model: 'qwen3:8b', other: 'lmstudio' },
@@ -85,7 +113,7 @@ describe.each([
     const fake = await fakeLocal(model);
     await launch([
       { providerId, baseUrl: fake.url },
-      { providerId: other, baseUrl: at(await freePort()) },
+      { providerId: other, baseUrl: REFUSED_BASE_URL },
     ]);
     const detected = await call('connections.detectLocal');
     expect(detected).toMatchObject({
@@ -126,8 +154,8 @@ describe.each([
 describe('detection', () => {
   it('answers with nothing, within the timeout, when neither runs', async () => {
     await launch([
-      { providerId: 'ollama', baseUrl: at(await freePort()) },
-      { providerId: 'lmstudio', baseUrl: at(await freePort()) },
+      { providerId: 'ollama', baseUrl: REFUSED_BASE_URL },
+      { providerId: 'lmstudio', baseUrl: REFUSED_BASE_URL },
     ]);
     const started = performance.now();
     await expect(call('connections.detectLocal')).resolves.toEqual({ ok: true, data: [] });
@@ -135,13 +163,21 @@ describe('detection', () => {
   });
 
   it('finds on a later call (Detect again) a Provider started after the first one', async () => {
-    const port = await freePort();
-    await launch([{ providerId: 'ollama', baseUrl: at(port) }]);
+    const ollama = await ollamaStartedLater();
+    await launch([{ providerId: 'ollama', baseUrl: ollama.url }]);
     await expect(call('connections.detectLocal')).resolves.toEqual({ ok: true, data: [] });
-    await fakeLocal('qwen3:8b', port);
-    await expect(call('connections.detectLocal')).resolves.toMatchObject({
+    ollama.start();
+    await expect(call('connections.detectLocal')).resolves.toEqual({
       ok: true,
-      data: [{ providerId: 'ollama', baseUrl: at(port), added: false }],
+      data: [
+        {
+          providerId: 'ollama',
+          displayName: 'Ollama',
+          baseUrl: ollama.url,
+          models: ['qwen3:8b'],
+          added: false,
+        },
+      ],
     });
   });
 

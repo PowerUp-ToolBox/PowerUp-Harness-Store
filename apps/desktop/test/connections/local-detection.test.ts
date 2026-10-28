@@ -8,6 +8,7 @@ import {
   DETECT_TIMEOUT_MS,
   localProbeTargets,
 } from '../../src/main/runtime/local-detection.js';
+import { REFUSED_BASE_URL } from '../support/refused-port.js';
 
 const fetch: typeof globalThis.fetch = (input, init) => globalThis.fetch(input, init);
 
@@ -22,13 +23,6 @@ async function fakeLocalProvider(models: Record<string, 'fake/echo'> = {}): Prom
   const fake = await startFakeProvider({ aliases: models });
   closers.push(() => fake.close());
   return fake;
-}
-
-/** A base URL where nothing listens: a port the OS handed out, then closed. */
-async function deadBaseUrl(): Promise<string> {
-  const fake = await startFakeProvider();
-  await fake.close();
-  return fake.url;
 }
 
 /** A loopback server that accepts every request and never answers it. */
@@ -89,7 +83,7 @@ describe('createLocalDetector', () => {
       fetch,
       targets: [
         { providerId: 'ollama', baseUrl: ollama.url },
-        { providerId: 'lmstudio', baseUrl: await deadBaseUrl() },
+        { providerId: 'lmstudio', baseUrl: REFUSED_BASE_URL },
       ],
     });
     const found = await detect();
@@ -107,7 +101,7 @@ describe('createLocalDetector', () => {
     const lmStudioOnly = createLocalDetector({
       fetch,
       targets: [
-        { providerId: 'ollama', baseUrl: await deadBaseUrl() },
+        { providerId: 'ollama', baseUrl: REFUSED_BASE_URL },
         { providerId: 'lmstudio', baseUrl: lmStudio.url },
       ],
     });
@@ -128,8 +122,8 @@ describe('createLocalDetector', () => {
     const detect = createLocalDetector({
       fetch,
       targets: [
-        { providerId: 'ollama', baseUrl: await deadBaseUrl() },
-        { providerId: 'lmstudio', baseUrl: await deadBaseUrl() },
+        { providerId: 'ollama', baseUrl: REFUSED_BASE_URL },
+        { providerId: 'lmstudio', baseUrl: REFUSED_BASE_URL },
       ],
     });
     await expect(detect()).resolves.toEqual([]);
@@ -205,6 +199,15 @@ describe('createLocalDetector', () => {
     });
     await expect(empty()).resolves.toEqual([
       { providerId: 'lmstudio', baseUrl: 'http://127.0.0.1:1234/v1', models: [] },
+    ]);
+  });
+  it('counts "data": null, Ollama\'s answer while no model is pulled, as running with no models', async () => {
+    const detect = createLocalDetector({
+      fetch: () => Promise.resolve(Response.json({ object: 'list', data: null })),
+      targets: [{ providerId: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1' }],
+    });
+    await expect(detect()).resolves.toEqual([
+      { providerId: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', models: [] },
     ]);
   });
 });

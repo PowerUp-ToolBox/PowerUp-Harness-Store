@@ -1,6 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -13,6 +12,7 @@ import { startRuntime, type Runtime } from '../../src/main/runtime/bootstrap.js'
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { REFUSED_BASE_URL } from '../support/refused-port.js';
 
 /**
  * Connection tests and model listing over IPC, as the Models page calls them, through the real
@@ -194,19 +194,9 @@ describe('testing a Connection', () => {
   it('adding against a port nothing listens on fails, with the cause', async () => {
     const result = await call('connections.add', {
       providerId: 'ollama',
-      baseUrl: `http://127.0.0.1:${String(await closedPort())}/v1`,
+      baseUrl: REFUSED_BASE_URL,
     });
     expect(result).toMatchObject({ ok: false, error: { code: 'provider_error' } });
     expect(result.ok ? '' : result.error.params?.detail).toMatch(/ECONNREFUSED/);
   });
 });
-
-/** A loopback port nothing listens on. */
-async function closedPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  await new Promise((resolve) => server.close(resolve));
-  if (typeof address !== 'object' || address === null) throw new Error('No port');
-  return address.port;
-}

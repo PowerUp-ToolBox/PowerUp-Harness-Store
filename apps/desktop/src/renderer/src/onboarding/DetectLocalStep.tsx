@@ -23,8 +23,9 @@ export interface DetectLocalStepProps {
  * Looks for Ollama and LM Studio (`connections.detectLocal`) each time the step opens, and again
  * on Detect again. Every Provider found gets an Add checkbox, on by default; Continue adds the
  * checked ones, which is the User's explicit action: nothing is added before it. A Provider that
- * already has its Connection (setup run again) is added without the detected base URL, so a
- * custom one it was saved with is kept. While the Runtime looks (at most about 1.5 seconds),
+ * already has its Connection (setup run again) shows Added with no checkbox and is not added
+ * again, so Continue neither re-enables a Connection the User disabled nor touches its saved base
+ * URL; the Models page edits it. While the Runtime looks (at most about 1.5 seconds),
  * Continue waits and Skip stays available. When nothing is found, the step says so, links to both
  * installers and offers Detect again, instead of showing an empty list. A failed search shows its
  * error above the same links and is treated like an empty one: Continue moves on.
@@ -73,6 +74,7 @@ export function DetectLocalStep({ nav, added, onAdded }: DetectLocalStepProps) {
     if (detection.state === 'detecting') return;
     const toAdd = found.filter(
       (provider) =>
+        !provider.added &&
         !unchecked.has(provider.providerId) &&
         !added.some((connection) => connection.providerId === provider.providerId),
     );
@@ -81,7 +83,7 @@ export function DetectLocalStep({ nav, added, onAdded }: DetectLocalStepProps) {
     for (const provider of toAdd) {
       const result = await window.api.connections.add({
         providerId: provider.providerId,
-        ...(provider.added ? {} : { baseUrl: provider.baseUrl }),
+        baseUrl: provider.baseUrl,
       });
       // A Connection added while the User skipped ahead still counts; the wizard does not move.
       if (result.ok) onAdded(result.data);
@@ -120,17 +122,23 @@ export function DetectLocalStep({ nav, added, onAdded }: DetectLocalStepProps) {
                       {[provider.baseUrl, ...provider.models].join(' · ')}
                     </code>
                   </div>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={!unchecked.has(provider.providerId)}
-                      onChange={() => {
-                        toggle(provider.providerId);
-                      }}
-                      aria-label={t('onboarding.detect.add_named', { name })}
-                    />
-                    <span aria-hidden="true">{t('onboarding.detect.add')}</span>
-                  </label>
+                  {provider.added ? (
+                    <span className="status-chip" data-status="connected">
+                      {t('onboarding.detect.added')}
+                    </span>
+                  ) : (
+                    <label className="checkbox">
+                      <input
+                        type="checkbox"
+                        checked={!unchecked.has(provider.providerId)}
+                        onChange={() => {
+                          toggle(provider.providerId);
+                        }}
+                        aria-label={t('onboarding.detect.add_named', { name })}
+                      />
+                      <span aria-hidden="true">{t('onboarding.detect.add')}</span>
+                    </label>
+                  )}
                 </li>
               );
             })}

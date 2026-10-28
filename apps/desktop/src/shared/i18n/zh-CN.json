@@ -123,6 +123,7 @@
   "onboarding.detect.looking": "正在查找 Ollama 和 LM Studio…",
   "onboarding.detect.found_hint": "选择要添加为模型连接的 Provider。",
   "onboarding.detect.add": "添加",
+  "onboarding.detect.added": "已添加",
   "onboarding.detect.add_named": "添加 {name}",
   "onboarding.detect.none": "在这台电脑上没有找到 Ollama 或 LM Studio。安装其中一个即可在本地运行模型，也可以继续添加远程 Provider。",
   "onboarding.detect.install_ollama": "安装 Ollama",

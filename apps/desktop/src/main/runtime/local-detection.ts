@@ -46,7 +46,7 @@ export interface LocalDetectorOptions {
  * Looks for local Providers: `GET {baseUrl}/models` on every target at once, each bounded by the
  * timeout (the response body included), so one detection takes at most about that long. A target
  * counts as running only when it answers HTTP 200 with a JSON `data` array, as Ollama's and LM
- * Studio's OpenAI-compatible APIs do; a refused connection, a timeout, another status or another
+ * Studio's OpenAI-compatible APIs do (or `data: null`, Ollama's empty list); a refused connection, a timeout, another status or another
  * body means it is not. Detection only reports: it never adds a Connection.
  */
 export function createLocalDetector(options: LocalDetectorOptions): LocalDetector {
@@ -75,10 +75,14 @@ export function createLocalDetector(options: LocalDetectorOptions): LocalDetecto
     );
 }
 
-/** The `data[].id` of an OpenAI-shaped model list, else undefined when `data` is not an array. */
+/**
+ * The `data[].id` of an OpenAI-shaped model list, else undefined when `data` is neither an array
+ * nor null. Ollama answers `"data": null` while no model is pulled yet, an empty list.
+ */
 function modelIds(body: unknown): string[] | undefined {
   if (typeof body !== 'object' || body === null || !('data' in body)) return undefined;
   const { data } = body;
+  if (data === null) return [];
   if (!Array.isArray(data)) return undefined;
   const ids = data
     .map((entry: unknown) =>

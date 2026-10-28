@@ -221,10 +221,14 @@ function redact(text: string, apiKey: string | undefined): string {
   return apiKey === undefined || apiKey === '' ? text : text.replaceAll(apiKey, '[redacted]');
 }
 
-/** The `data[].id` of an OpenAI-shaped model list, else undefined. */
+/**
+ * The `data[].id` of an OpenAI-shaped model list, else undefined. `data: null` is an empty list:
+ * Ollama answers that way while no model is pulled yet.
+ */
 function modelIds(body: unknown): string[] | undefined {
   if (typeof body !== 'object' || body === null || !('data' in body)) return undefined;
   const { data } = body;
+  if (data === null) return [];
   if (!Array.isArray(data)) return undefined;
   const ids = data
     .map((entry: unknown) =>

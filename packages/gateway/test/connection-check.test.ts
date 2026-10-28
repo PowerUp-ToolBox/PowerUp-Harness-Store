@@ -3,7 +3,6 @@
  * against an injected `fetch` answering in Anthropic's, Google's and OpenRouter's own formats,
  * which the fake does not speak. Nothing leaves loopback.
  */
-import { createServer } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MODEL_CATALOGUE } from '../src/catalogue.js';
 import { listModels, testConnection } from '../src/connection-check.js';
@@ -11,6 +10,12 @@ import { FAKE_SCENARIOS, startFakeProvider } from '../src/testing/fake-provider.
 import type { FakeProvider } from '../src/testing/fake-provider.js';
 
 const KEY = 'sk-fake-connection-key-0123456789';
+
+/**
+ * A loopback port nothing listens on. Port 2 lies below every OS's ephemeral range, so fakes other
+ * test files start on port 0 never land on it, and `fetch` does not block it as a bad port.
+ */
+const REFUSED_PORT = 2;
 
 let fake: FakeProvider;
 beforeAll(async () => {
@@ -76,7 +81,7 @@ describe('OpenAI-wire Providers that list their models', () => {
   it('report a refused connection with its cause, not a bare "fetch failed"', async () => {
     const tested = await testConnection({
       providerId: 'ollama',
-      baseUrl: `http://127.0.0.1:${String(await closedPort())}/v1`,
+      baseUrl: `http://127.0.0.1:${String(REFUSED_PORT)}/v1`,
       fetch: globalThis.fetch,
     });
     expect(tested).toMatchObject({
@@ -100,6 +105,19 @@ describe('OpenAI-wire Providers that list their models', () => {
       timeoutMs: 20,
     });
     expect(tested).toEqual({ ok: false, reason: 'provider_timeout' });
+  });
+
+  it('pass the test of an Ollama with no model pulled yet, which answers "data": null', async () => {
+    const noModels: typeof globalThis.fetch = () =>
+      Promise.resolve(Response.json({ object: 'list', data: null }));
+    await expect(testConnection({ providerId: 'ollama', fetch: noModels })).resolves.toEqual({
+      ok: true,
+      models: [],
+    });
+    await expect(listModels({ providerId: 'ollama', fetch: noModels })).resolves.toEqual({
+      ok: true,
+      models: [],
+    });
   });
 
   it('fail the listing as an unexpected response when the answer is not a model list', async () => {
@@ -191,16 +209,6 @@ describe('Providers without a model list or catalogue (Zhipu, MiniMax, Doubao)',
     expect(fetch).not.toHaveBeenCalled();
   });
 });
-
-/** A loopback port nothing listens on. */
-async function closedPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  await new Promise((resolve) => server.close(resolve));
-  if (typeof address !== 'object' || address === null) throw new Error('No port');
-  return address.port;
-}
 
 /** A `fetch` that records each request and answers with `reply(path)`. */
 function cannedFetch(reply: (path: string) => Response) {

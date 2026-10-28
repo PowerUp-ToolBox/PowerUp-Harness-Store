@@ -123,6 +123,7 @@
   "onboarding.detect.looking": "Looking for Ollama and LM Studio…",
   "onboarding.detect.found_hint": "Choose which to add as Connections.",
   "onboarding.detect.add": "Add",
+  "onboarding.detect.added": "Added",
   "onboarding.detect.add_named": "Add {name}",
   "onboarding.detect.none": "Ollama and LM Studio were not found on this computer. Install one to run models locally, or continue to add a remote Provider.",
   "onboarding.detect.install_ollama": "Install Ollama",

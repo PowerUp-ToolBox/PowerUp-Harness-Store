@@ -241,18 +241,37 @@ describe('wizard: Local Providers', () => {
     expect(api.connections.add).not.toHaveBeenCalled();
   });
 
-  it('adds a Provider that already has its Connection without the detected base URL', async () => {
+  it('shows a Provider that already has its Connection as Added, and Continue leaves it alone', async () => {
+    // Setup run again: Ollama was added before, and may since have been disabled or moved to
+    // another port. Continue must neither re-enable it nor test it again.
     const api = installFreshProfile();
     api.connections.detectLocal.mockResolvedValue({
       ok: true,
       data: [{ ...OLLAMA, added: true }, LM_STUDIO],
     });
     await openStep();
-    expect(api.connections.add).not.toHaveBeenCalled();
+    expect(screen.queryByRole('checkbox', { name: 'Add Ollama' })).toBeNull();
+    const ollamaRow = screen.getByText('Ollama').closest('li');
+    expect(ollamaRow?.querySelector('.status-chip')?.textContent).toBe('Added');
+    expect(screen.getByRole('checkbox', { name: 'Add LM Studio' })).toBeDefined();
     await click(screen.getByRole('button', { name: 'Continue' }));
     expect(api.connections.add.mock.calls).toEqual([
-      [{ providerId: 'ollama' }],
       [{ providerId: 'lmstudio', baseUrl: 'http://127.0.0.1:1234/v1' }],
     ]);
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
+      'Remote Provider (optional)',
+    );
+  });
+
+  it('adds nothing on Continue when every Provider found already has its Connection', async () => {
+    const api = installFreshProfile();
+    api.connections.detectLocal.mockResolvedValue({ ok: true, data: [{ ...OLLAMA, added: true }] });
+    await openStep();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    await click(screen.getByRole('button', { name: 'Continue' }));
+    expect(api.connections.add).not.toHaveBeenCalled();
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
+      'Remote Provider (optional)',
+    );
   });
 });
