@@ -16,7 +16,10 @@ export interface WizardActionsProps {
   /** The primary button's label when it is not Continue (Open Store on `done`). */
   readonly primaryLabel?: string;
   readonly primaryDisabled?: boolean;
-  /** The primary button's action is running: a spinner and no second click. */
+  /**
+   * The primary button's action is running: a spinner on it, and no button of the bar works until
+   * it ends, so the step cannot be left (Skip, Back) with a result the wizard would then miss.
+   */
   readonly busy?: boolean;
   /** "Skip setup" on `welcome`, which ends the wizard; "Skip" elsewhere. */
   readonly skipSetup?: boolean;
@@ -34,12 +37,12 @@ export function WizardActions({
   const { t } = useI18n();
   return (
     <div className="wizard-actions">
-      <button type="button" className="button-link" onClick={nav.skip}>
+      <button type="button" className="button-link" disabled={busy} onClick={nav.skip}>
         {skipSetup ? t('onboarding.skip_setup') : t('onboarding.skip')}
       </button>
       <div className="wizard-actions-end">
         {nav.back === undefined ? null : (
-          <button type="button" className="button-secondary" onClick={nav.back}>
+          <button type="button" className="button-secondary" disabled={busy} onClick={nav.back}>
             {t('onboarding.back')}
           </button>
         )}

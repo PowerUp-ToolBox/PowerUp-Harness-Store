@@ -16,10 +16,10 @@ export interface DefaultModelStepProps {
   readonly nav: WizardNav;
   /** The Connections this wizard run added: the picker offers only their models. */
   readonly connections: readonly ConnectionSummary[];
-  /** What the User chose on an earlier visit to this step, if anything. */
+  /** The Default Model an earlier visit to this step saved in this run, if any. */
   readonly choice: DefaultModelChoice | null;
-  /** The Default Model saved by Continue, for the summary; null after Skip (nothing is set). */
-  readonly onChoose: (choice: DefaultModelChoice | null) => void;
+  /** The Default Model Continue saved, for the summary. Skip never clears it: it stays stored. */
+  readonly onChoose: (choice: DefaultModelChoice) => void;
 }
 
 /**
@@ -30,8 +30,10 @@ export interface DefaultModelStepProps {
  *
  * Continue saves the picked model as the global Slot Binding of `default`
  * (`bindings.setGlobal`), so a Harness asking for `default` gets it from then on, and moves on
- * once it is saved; a failed save keeps the step with the error. Continue with nothing picked, and
- * Skip, set nothing: a Default Model set before (setup run again) is kept.
+ * once it is saved; a failed save keeps the step with the error. While it saves, the whole action
+ * bar waits, so the step cannot be left with a save the summary would miss. Continue with nothing
+ * picked, and Skip, set nothing: a Default Model set before is kept, and so is the summary's
+ * choice when Back led here after a save in this run, since that binding is still stored.
  */
 export function DefaultModelStep({ nav, connections, choice, onChoose }: DefaultModelStepProps) {
   const { t } = useI18n();
@@ -58,7 +60,6 @@ export function DefaultModelStep({ nav, connections, choice, onChoose }: Default
   const saveAndContinue = async () => {
     const choice = picked();
     if (choice === null) {
-      onChoose(null);
       nav.next();
       return;
     }
@@ -98,17 +99,7 @@ export function DefaultModelStep({ nav, connections, choice, onChoose }: Default
         </>
       )}
       {error === null ? null : <ErrorMessage error={error} />}
-      <WizardActions
-        nav={{
-          ...nav,
-          skip: () => {
-            onChoose(null);
-            nav.skip();
-          },
-        }}
-        busy={saving}
-        onPrimary={() => void saveAndContinue()}
-      />
+      <WizardActions nav={nav} busy={saving} onPrimary={() => void saveAndContinue()} />
     </>
   );
 }

@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   ConnectionSummary,
+  GlobalBinding,
   IpcResult,
   LocalProvider,
   SettingsPatch,
@@ -786,10 +787,51 @@ describe('Default model and Done', () => {
     });
     expect(heading()).toBe(DONE);
     expect(screen.getByText('llama3.2:3b on Ollama')).toBeDefined();
-    await expect(api.bindings.getGlobal()).resolves.toEqual({
-      ok: true,
-      data: [{ slot: 'default', connectionId: 'ollama', model: 'llama3.2:3b' }],
+  });
+
+  it('keeps the Default Model saved in this run in the summary after Back, then Skip', async () => {
+    const api = await openWithOllama();
+    fireEvent.change(screen.getByLabelText('Default Model'), {
+      target: { value: 'ollama/llama3.2:3b' },
     });
+    await click('Continue');
+    expect(heading()).toBe(DONE);
+    await click('Back');
+    expect(heading()).toBe(DEFAULT_MODEL);
+    expect(screen.getByLabelText<HTMLSelectElement>('Default Model').value).toBe(
+      'ollama/llama3.2:3b',
+    );
+    // Another pick that is never saved does not change what is stored, nor the summary.
+    fireEvent.change(screen.getByLabelText('Default Model'), {
+      target: { value: 'ollama/qwen3:8b' },
+    });
+    await click('Skip');
+    expect(heading()).toBe(DONE);
+    expect(api.bindings.setGlobal).toHaveBeenCalledOnce();
+    expect(screen.getByText('llama3.2:3b on Ollama')).toBeDefined();
+  });
+
+  it('cannot be left with Skip or Back while the Default Model is being saved', async () => {
+    const api = await openWithOllama();
+    let answer: (result: IpcResult<readonly GlobalBinding[]>) => void = () => undefined;
+    api.bindings.setGlobal.mockReturnValueOnce(
+      new Promise<IpcResult<readonly GlobalBinding[]>>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await click('Continue');
+    expect(screen.getByRole('button', { name: 'Skip' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Back' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Continue' }).hasAttribute('disabled')).toBe(true);
+    await click('Skip');
+    expect(heading()).toBe(DEFAULT_MODEL);
+
+    await act(async () => {
+      answer({ ok: true, data: [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }] });
+      await Promise.resolve();
+    });
+    expect(heading()).toBe(DONE);
+    expect(screen.getByText('qwen3:8b on Ollama')).toBeDefined();
   });
 
   it('stays on the step with the error when the Default Model cannot be saved', async () => {

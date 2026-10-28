@@ -278,15 +278,20 @@ describe("the wizard's Default Model", () => {
     ).resolves.toMatchObject({ providerId: 'anthropic', model: 'claude-haiku-5-5' });
   });
 
-  it('a Default model step skipped leaves every Slot unbound', async () => {
+  it('a Default model step skipped leaves every Slot unbound, the Connection added', async () => {
     const { runtime, gateway } = await launchWithGateway();
-    await call(runtime, 'connections.add', {
-      providerId: 'anthropic',
-      apiKey: 'sk-ant-test-0123456789',
-    });
-    await call(runtime, 'settings.set', { onboardingDone: true });
     await expect(
-      gateway.resolveBinding({ harnessId: 'acme/hello', slot: 'default' }),
-    ).resolves.toBeNull();
+      call(runtime, 'connections.add', {
+        providerId: 'anthropic',
+        apiKey: 'sk-ant-test-0123456789',
+      }),
+    ).resolves.toMatchObject({ ok: true, data: { id: 'anthropic', enabled: true } });
+    await expect(call(runtime, 'settings.set', { onboardingDone: true })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(call(runtime, 'bindings.getGlobal')).resolves.toEqual({ ok: true, data: [] });
+    for (const slot of ['default', 'reviewer']) {
+      await expect(gateway.resolveBinding({ harnessId: 'acme/hello', slot })).resolves.toBeNull();
+    }
   });
 });
