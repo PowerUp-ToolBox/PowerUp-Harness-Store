@@ -219,9 +219,10 @@ export interface LocalProvider {
   /** The models it lists. */
   readonly models: readonly string[];
   /**
-   * Whether this Provider already had its Connection (enabled or not) when detection ran. Adding
-   * it again edits that Connection, so the wizard then leaves out the detected base URL, keeping a
-   * custom one.
+   * Whether this Provider already had its Connection (enabled or not) when detection ran. A
+   * Provider already added is shown as Added and not offered again, so its Connection (a custom
+   * base URL, a disabled state) is left alone. The wizard reads this flag; the Models page reads
+   * its live Connections list instead, which also covers a Connection added or removed since.
    */
   readonly added: boolean;
 }

@@ -111,13 +111,25 @@ describe('Models page: Local Providers', () => {
     const api = installRuntime('en', [
       connectionSummary({ id: 'ollama', baseUrl: 'http://10.0.0.5:11434/v1' }),
     ]);
+    // The detection flag disagrees on purpose: the page's live Connections list decides.
+    api.connections.detectLocal.mockResolvedValue({
+      ok: true,
+      data: [{ ...OLLAMA, added: false }],
+    });
+    await openModels();
+    expect(within(panel()).getByText('Added')).toBeDefined();
+    expect(within(panel()).queryByRole('button', { name: /^Add/ })).toBeNull();
+  });
+
+  it('offers Add when the Connection is gone, even if detection said added', async () => {
+    const api = installRuntime();
     api.connections.detectLocal.mockResolvedValue({
       ok: true,
       data: [{ ...OLLAMA, added: true }],
     });
     await openModels();
-    expect(within(panel()).getByText('Added')).toBeDefined();
-    expect(within(panel()).queryByRole('button', { name: /^Add/ })).toBeNull();
+    expect(within(panel()).queryByText('Added')).toBeNull();
+    expect(within(panel()).getByRole('button', { name: 'Add Ollama' })).toBeDefined();
   });
 
   it('shows the error of a failed Add, and keeps offering it', async () => {
