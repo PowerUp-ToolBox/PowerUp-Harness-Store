@@ -196,7 +196,18 @@ importers:
         specifier: ^8.3.1
         version: 8.3.1(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)
 
-  packages/sdk: {}
+  packages/sdk:
+    dependencies:
+      openai:
+        specifier: ^7.45.1
+        version: 7.45.1(undici@8.12.3)(zod@4.6.7)
+    devDependencies:
+      '@harness-store/gateway':
+        specifier: workspace:*
+        version: link:../gateway
+      '@harness-store/manifest':
+        specifier: workspace:*
+        version: link:../manifest
 
   tools/repo-checks:
     devDependencies:
