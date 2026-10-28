@@ -70,7 +70,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', (_event, argv) => {
     const url = argv.find((argument) => argument.startsWith(`${AUTH_SCHEME}:`));
     if (url !== undefined) openedWithUrl(url);
-    else focusMainWindow();
+    else showMainWindow();
   });
   // Quit with the last window on every platform, macOS included: the main window may close while
   // Harness windows stay open, and the app runs on until those close too.
@@ -78,10 +78,9 @@ if (!app.requestSingleInstanceLock()) {
     app.quit();
   });
   // macOS: clicking the Dock icon while only Harness windows are open brings the main window back.
+  // (Windows and Linux: starting the app again does, through `second-instance`.)
   app.on('activate', () => {
-    if (mainWindow === null && startedRuntime !== null && quitState === 'idle') {
-      mainWindow = createMainWindow(startedRuntime);
-    }
+    if (mainWindow === null) showMainWindow();
   });
   // The first quit request is held until the Runtime has stopped: every running Harness stops
   // (SIGTERM, then SIGKILL after 5 s; 10 s at most in all), the Model Gateway stops listening
@@ -115,8 +114,17 @@ if (!app.requestSingleInstanceLock()) {
     });
 }
 
-function focusMainWindow(): void {
-  if (mainWindow === null) return;
+/**
+ * Brings the main window to the front, restoring it when minimized. The User may have closed it
+ * while Harness windows kept the app running: it opens again then, on the Library.
+ */
+function showMainWindow(): void {
+  if (mainWindow === null) {
+    if (startedRuntime !== null && quitState === 'idle') {
+      mainWindow = createMainWindow(startedRuntime);
+    }
+    return;
+  }
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.focus();
 }
@@ -135,7 +143,7 @@ function emitToMainWindow<E extends IpcEventName>(event: E, payload: IpcEvents[E
 function openModelsPage(harnessId: string): void {
   const path = `/models?harness=${encodeURIComponent(harnessId)}`;
   if (mainWindow !== null) {
-    focusMainWindow();
+    showMainWindow();
     emitToMainWindow('app.navigate', { path });
   } else if (startedRuntime !== null && quitState === 'idle') {
     mainWindow = createMainWindow(startedRuntime, path);
@@ -148,7 +156,7 @@ function openModelsPage(harnessId: string): void {
  * the front either way, since the User just left the browser for it.
  */
 function openedWithUrl(url: string): void {
-  focusMainWindow();
+  showMainWindow();
   if (process.platform === 'darwin') app.focus({ steal: true });
   void runtime?.then((started) => started.auth.handleCallback(url));
 }

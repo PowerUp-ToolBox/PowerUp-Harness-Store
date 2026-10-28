@@ -292,6 +292,7 @@
   "error.package_invalid": "This folder is not a valid Harness, or it changed since it was checked. Check it again.",
   "error.file_unreadable": "Harness Store cannot open \"{path}\" in this folder. Make sure your user account can read it, then try again.",
   "error.harness_running": "This Harness is running. Close it, then try again.",
+  "error.harness_installing": "This Harness is being installed. Try again once the install has finished.",
   "error.not_installed": "This Harness is not installed.",
   "error.encryption_unavailable": "Harness Store cannot store this secret: this computer offers no secure storage for secrets. On Linux, install and unlock a keyring such as GNOME Keyring or KWallet, then restart Harness Store. Keys and sign-in sessions are never stored unencrypted.",
   "error.invalid_request": "The Model Gateway could not read the request.",

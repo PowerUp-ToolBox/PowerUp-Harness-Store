@@ -24,7 +24,7 @@ import { fail, ok } from './ipc-result.js';
 import { launchEnvironment } from './launch-env.js';
 import { KEPT_LAUNCH_LOGS, openLaunchLog, pruneLaunchLogs, type LaunchLog } from './launch-log.js';
 import type { LaunchStore } from './launch-store.js';
-import { signalProcessTree } from './process-tree.js';
+import { processTreeEndsWithin, signalProcessTree } from './process-tree.js';
 import type { PtyProcess, PtySpawner } from './pty.js';
 
 /** How long a Harness has to exit after SIGTERM before it gets SIGKILL (architecture §4). */
@@ -87,6 +87,11 @@ export interface SupervisorOptions {
   readonly tokens: Pick<Gateway, 'issueToken' | 'revokeLaunch'>;
   /** The app's UI language now: a launch's `HARNESS_LOCALE` and its token's locale. */
   readonly locale: () => Locale;
+  /**
+   * Whether an install of the Harness is putting its files in place now (the installer's
+   * `isInstalling`); it is not launched then. Default: never.
+   */
+  readonly isInstalling?: (harnessId: string) => boolean;
   /**
    * Whether some model fills the Harness's `default` Model Slot now. A Harness without one is not
    * launched (docs/ux/flows.md F3): the User sets up a model first.
@@ -185,12 +190,13 @@ interface Launch {
  * window reports it, with the Data Directory as its working directory and the contract's
  * environment.
  *
- * Closing the window stops the Harness: SIGTERM to its process group, SIGKILL after
- * {@link STOP_GRACE_MS}, the launch recorded as ended at most {@link KILL_WAIT_MS} later, and it
- * ends `stopped`. A Harness that exits on its own ends `stopped` with code 0 and
- * `failed(exit_nonzero)` otherwise; its window stays open, readable, with the exit code. Either
- * way the Gateway Token is revoked and the `launches` row gets `ended_at`, `exit_code` and
- * `token_revoked_at`.
+ * Closing the window stops the Harness: SIGTERM to its process group, SIGKILL to the group after
+ * {@link STOP_GRACE_MS} when the process or another process of its group is still there, the
+ * launch recorded as ended at most {@link KILL_WAIT_MS} later, and it ends `stopped`. A Harness
+ * that exits on its own ends `stopped` with code 0 and `failed(exit_nonzero)` otherwise; its
+ * window stays open, readable, with the exit code. Either way the Gateway Token is revoked and the
+ * `launches` row gets `ended_at`, `exit_code` and `token_revoked_at`. A launch is refused while an
+ * install of the same Harness is putting its files in place (`harness_installing`).
  */
 export function createSupervisor(options: SupervisorOptions): Supervisor {
   const { installs, launches, paths, windows, tokens } = options;
@@ -375,12 +381,18 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     setState(launch, 'ready');
   };
 
-  /** The shutdown sequence of a launch whose process runs. */
+  /**
+   * The shutdown sequence of a launch whose process runs. SIGKILL goes to the process group when
+   * the process, or any process of its group, is still there after the grace period: a process
+   * the Harness started may ignore SIGTERM although the Harness itself exits on it.
+   */
   const stopProcess = async (launch: Launch, child: PtyProcess) => {
     setState(launch, 'stopping');
     runtimeLine(launch, `Sent SIGTERM to ${String(child.pid)} and its children`);
     signalProcessTree(child.pid, 'SIGTERM');
-    if (!(await settlesWithin(launch.exited, STOP_GRACE_MS))) {
+    const graceEnds = Date.now() + STOP_GRACE_MS;
+    const exitedInTime = await settlesWithin(launch.exited, STOP_GRACE_MS);
+    if (!exitedInTime || !(await processTreeEndsWithin(child.pid, graceEnds - Date.now()))) {
       runtimeLine(launch, `Sent SIGKILL to ${String(child.pid)} and its children`);
       signalProcessTree(child.pid, 'SIGKILL');
       if (!(await settlesWithin(launch.exited, KILL_WAIT_MS))) {
@@ -416,6 +428,8 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       return ok({ outcome: 'focused', launchId: current.launchId });
     }
     if (closing) return fail('internal_error', { method: 'launch.start' });
+    // Its files are being replaced: it would run from a folder about to be deleted.
+    if (options.isInstalling?.(harnessId) === true) return fail('harness_installing');
     const { manifest } = install;
     if (manifest.runtime.kind !== 'node' || manifest.ui.kind !== 'terminal') {
       return fail('not_implemented', { method: 'launch.start' });

@@ -275,6 +275,8 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       : createSupervisor({
           installs: sqlite.installs,
           launches: sqlite.launches,
+          // `installs` is created below; this runs only once a launch is asked for.
+          isInstalling: (harnessId) => installs.isInstalling(harnessId),
           paths: harnessPaths(options.dataDir),
           platform,
           gatewayUrl,

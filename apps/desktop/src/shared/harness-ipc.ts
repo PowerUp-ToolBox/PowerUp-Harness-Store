@@ -8,7 +8,7 @@
  */
 
 import type { Locale } from './i18n/locale.js';
-import type { BridgeCalls, IpcResult, LaunchStatus, ResolvedSlot } from './ipc.js';
+import type { BridgeCalls, LaunchStatus, ResolvedSlot } from './ipc.js';
 
 /** Every call a Harness window may make, about its own launch. */
 export interface HarnessWindowMethods {
@@ -113,7 +113,3 @@ export type HarnessWindowSubscribe = <E extends HarnessWindowEventName>(
 export type HarnessWindowApi = BridgeCalls<HarnessWindowMethods> & {
   readonly on: HarnessWindowSubscribe;
 };
-
-export type HarnessWindowResult<M extends HarnessWindowMethodName> = IpcResult<
-  HarnessWindowMethods[M]['output']
->;

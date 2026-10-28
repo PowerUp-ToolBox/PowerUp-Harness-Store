@@ -51,6 +51,11 @@ export type IpcErrorCode =
   | 'file_unreadable'
   /** The Harness is running, so it cannot be installed over (or uninstalled) now. */
   | 'harness_running'
+  /**
+   * An install of the Harness is putting new files in place, so it cannot be launched until the
+   * install is done.
+   */
+  | 'harness_installing'
   /** No Harness with this ID is installed. */
   | 'not_installed'
   | 'invalid_request'

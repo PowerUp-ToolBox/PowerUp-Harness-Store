@@ -292,6 +292,7 @@
   "error.package_invalid": "该文件夹不是有效的 Harness，或在检查后已被修改。请重新检查。",
   "error.file_unreadable": "Harness Store 无法打开此文件夹中的 \"{path}\"。请确认你的用户账户有权读取它，然后重试。",
   "error.harness_running": "该 Harness 正在运行。请先关闭它，再重试。",
+  "error.harness_installing": "该 Harness 正在安装。请在安装完成后重试。",
   "error.not_installed": "该 Harness 未安装。",
   "error.encryption_unavailable": "Harness Store 无法保存此密钥：本机没有可用的安全密钥存储。在 Linux 上，请安装并解锁 GNOME Keyring 或 KWallet 等密钥环，然后重启 Harness Store。Key 和登录会话永远不会以明文保存。",
   "error.invalid_request": "Model Gateway 无法解析该请求。",

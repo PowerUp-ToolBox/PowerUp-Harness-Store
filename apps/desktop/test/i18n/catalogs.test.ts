@@ -20,6 +20,7 @@ const IPC_OWN_CODES = [
   'package_invalid',
   'file_unreadable',
   'harness_running',
+  'harness_installing',
   'not_installed',
 ] as const;
 

@@ -243,6 +243,16 @@ async function context(token: string) {
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 }
 
+/** Whether the process `pid` still runs (or has exited and is not reaped yet). */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const logPath = (slug: string, launchId: string) =>
   join(userData, 'logs', 'acme', slug, `${launchId}.log`);
 
@@ -406,9 +416,28 @@ describe('launching fixture-term', () => {
       expect(lastState(launchId)).toMatchObject({ state: 'stopped', exitCode: 0 });
       expect(readFileSync(signalFile, 'utf8')).toBe('SIGTERM\n');
       expect(launchRows()).toMatchObject([{ launch_id: launchId, exit_code: 0 }]);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'once stopping everything for quitting, it launches nothing more',
+    async () => {
+      await install('fixture-term');
+      const launchId = await launch('acme/fixture-term');
+      await waitFor(() => (reports(launchId, 'start').length > 0 ? true : undefined));
+      // The Supervisor's step of quitting alone: the database is still open, so only the
+      // refusal of launches from then on can answer.
+      await runtime.supervisor.stopAll();
+      expect(lastState(launchId)).toMatchObject({ state: 'stopped' });
+
+      const launched = states.length;
       await expect(call('launch.start', { harnessId: 'acme/fixture-term' })).resolves.toMatchObject(
-        { ok: false },
+        { ok: false, error: { code: 'internal_error' } },
       );
+      expect(states).toHaveLength(launched);
+      expect(windows.opens).toEqual([launchId]);
+      expect(spawned).toHaveLength(1);
+      expect(launchRows()).toHaveLength(1);
     },
   );
 });
@@ -436,6 +465,40 @@ describe('the shutdown sequence', () => {
       expect(launchRows()).toMatchObject([{ launch_id: launchId, exit_code: 137 }]);
       const log = readFileSync(logPath('fixture-hang-on-sigterm', launchId), 'utf8');
       expect(log).toMatch(/\[runtime\] Sent SIGTERM .*\n.*\[runtime\] Sent SIGKILL /);
+    },
+  );
+});
+
+describe('the shutdown sequence, for the processes a Harness started', () => {
+  it.skipIf(process.platform === 'win32')(
+    'one that ignores SIGTERM gets SIGKILL 5 seconds later, although the Harness exited at once',
+    { timeout: 15_000 },
+    async () => {
+      await install('fixture-leaves-helper');
+      const launchId = await launch('acme/fixture-leaves-helper');
+      const [{ helperPid }] = (await waitFor(() => {
+        const found = reports(launchId, 'start');
+        return found.length > 0 ? found : undefined;
+      })) as [{ helperPid: number }];
+      try {
+        expect(isAlive(helperPid)).toBe(true);
+
+        const closedAt = Date.now();
+        windows.close(launchId);
+        const stopped = await waitForState(launchId, 'stopped', 10_000);
+        const elapsed = Date.now() - closedAt;
+        // The Harness itself exited on SIGTERM; its helper held the stop for the grace period.
+        expect(stopped.exitCode).toBe(0);
+        expect(elapsed).toBeGreaterThanOrEqual(4900);
+        expect(elapsed).toBeLessThan(8000);
+        await waitFor(() => (isAlive(helperPid) ? undefined : true), 2000);
+        const log = readFileSync(logPath('fixture-leaves-helper', launchId), 'utf8');
+        expect(log).toMatch(
+          /\[runtime\] Sent SIGTERM .*\n(.*\n)*.*\[runtime\] Exited with code 0\n.*\[runtime\] Sent SIGKILL /,
+        );
+      } finally {
+        if (isAlive(helperPid)) process.kill(helperPid, 'SIGKILL');
+      }
     },
   );
 });

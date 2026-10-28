@@ -101,6 +101,43 @@ describe('createInstaller', () => {
     expect(existsSync(join(root, 'userData', 'harnesses'))).toBe(false);
   });
 
+  it('is installing from its running check until it is done, so nothing launches it meanwhile', async () => {
+    const seen: string[] = [];
+    let service: ReturnType<typeof installer> | undefined;
+    const installing = () => service?.isInstalling('acme/fixture-web') ?? false;
+    const watched = (inner: InstallStore): InstallStore => ({
+      all: () => inner.all(),
+      get: (harnessId) => inner.get(harnessId),
+      put: (install) => {
+        seen.push(`put while installing: ${String(installing())}`);
+        inner.put(install);
+      },
+      markLaunched: (harnessId, at) => {
+        inner.markLaunched(harnessId, at);
+      },
+    });
+    service = installer({
+      store: watched(store),
+      isRunning: () => {
+        seen.push(`running check while installing: ${String(installing())}`);
+        return false;
+      },
+    });
+
+    const done = service.installFromFolder(folder);
+    // Still validating: a launch now runs from the previous install, which the check then sees.
+    expect(service.isInstalling('acme/fixture-web')).toBe(false);
+    await expect(done).resolves.toMatchObject({ ok: true });
+    expect(seen).toEqual(['running check while installing: false', 'put while installing: true']);
+    expect(service.isInstalling('acme/fixture-web')).toBe(false);
+
+    // A failed install is done too.
+    service = installer({ store: watched(storeThatCannotWrite()) });
+    await expect(service.installFromFolder(folder)).rejects.toThrow('database is locked');
+    expect(seen.at(-1)).toBe('put while installing: true');
+    expect(service.isInstalling('acme/fixture-web')).toBe(false);
+  });
+
   it('a local install over a Store install of the same ID replaces it and becomes local', async () => {
     const paths = harnessPaths(join(root, 'userData'));
     const storeInstall = paths.installPath('acme/fixture-web', '0.5.0');

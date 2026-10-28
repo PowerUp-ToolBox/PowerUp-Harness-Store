@@ -40,6 +40,11 @@ export interface InstallsService {
   installFromFolder(path: string): Promise<IpcResult<InstalledVersion>>;
   /** Every installed Harness, the most recently launched first, then by name. */
   list(): Promise<readonly InstalledHarness[]>;
+  /**
+   * Whether an install of the Harness is copying or putting its files in place now: the Supervisor
+   * launches nothing from a folder that is about to be replaced.
+   */
+  isInstalling(harnessId: string): boolean;
 }
 
 export interface InstallerOptions {
@@ -50,7 +55,11 @@ export interface InstallerOptions {
   readonly platform: Platform | null;
   /** The OS folder picker (Electron's `dialog`); resolves null when the User cancels. */
   readonly pickFolder: () => Promise<string | null>;
-  /** Whether the Harness has a launch that has not ended; it is never installed over then. */
+  /**
+   * Whether the Harness has a launch that has not ended; it is never installed over then. Checked
+   * in the same step that marks the install in progress ({@link InstallsService.isInstalling}),
+   * so no launch can start in between.
+   */
   readonly isRunning?: (harnessId: string) => boolean;
   /** Told after an install replaced what `list` returns. */
   readonly onChanged?: (harnessId: string) => void;
@@ -79,7 +88,9 @@ export interface InstallerOptions {
  * 4. The `installs` row is written with `source = 'local'` (also over a Store install of the same
  *    Harness ID) and the Declared Permissions as consented.
  *
- * Installs run one at a time. A failure at any step up to writing the row removes what that
+ * Installs run one at a time, and never while the Harness runs: from the check that it does not
+ * run until the install is done, {@link InstallsService.isInstalling} answers true and the
+ * Supervisor launches nothing of it. A failure at any step up to writing the row removes what that
  * install created and leaves the previous install as it was. Once the row is written the install
  * has succeeded: deleting the replaced folders and creating the Data Directory are best effort
  * (a failure is logged; a launch creates a missing Data Directory again).
@@ -105,6 +116,8 @@ export function createInstaller(options: InstallerOptions): InstallsService {
   const inspected = new Map<string, string>();
   /** The icons read so far, by install path: an installed version's files never change. */
   const icons = new Map<string, string | null>();
+  /** The Harnesses whose install is past its checks and not done yet. */
+  const installing = new Set<string>();
   const recovered = recoverInterruptedInstalls(paths, store, logError);
   let queue: Promise<unknown> = recovered;
   const oneAtATime = <T>(work: () => Promise<T>): Promise<T> => {
@@ -125,6 +138,59 @@ export function createInstaller(options: InstallerOptions): InstallsService {
     } catch {
       return null;
     }
+  };
+
+  /** Steps 1 to 4 of an install that passed its checks; see {@link createInstaller}. */
+  const copyAndRecord = async (
+    harnessId: string,
+    source: DirectorySource,
+    manifest: Manifest,
+  ): Promise<IpcResult<InstalledVersion>> => {
+    const target = paths.installPath(harnessId, manifest.version);
+    const staging = join(paths.downloads, `${STAGING_PREFIX}${randomUUID()}`);
+    try {
+      try {
+        await copyListedFiles(source, staging);
+      } catch (error) {
+        if (error instanceof FileUnreadableError) {
+          return fail('file_unreadable', { path: error.file });
+        }
+        if (error instanceof FolderChangedError) return fail('package_invalid');
+        throw error;
+      }
+      await makeEntriesExecutable(manifest, staging);
+      const replaced = await putInPlace(paths, {
+        staging,
+        target,
+        previous: store.get(harnessId),
+        record: () => {
+          store.put({
+            harnessId,
+            version: manifest.version,
+            manifest,
+            installPath: target,
+            dataDir: paths.dataDir(harnessId),
+            installedAt: now().toISOString(),
+            consentedPermissions: manifest.permissions,
+            source: 'local',
+          });
+        },
+      });
+      // The row is written: from here on nothing undoes or fails the install.
+      for (const folder of replaced) {
+        await rm(folder, { recursive: true, force: true }).catch((error: unknown) => {
+          logError(`Could not delete the replaced install folder ${folder}`, error);
+        });
+      }
+      await mkdir(paths.dataDir(harnessId), { recursive: true }).catch((error: unknown) => {
+        logError(`Could not create the Data Directory of ${harnessId}`, error);
+      });
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
+    icons.delete(target);
+    options.onChanged?.(harnessId);
+    return ok({ harnessId, version: manifest.version });
   };
 
   return {
@@ -163,53 +229,15 @@ export function createInstaller(options: InstallerOptions): InstallsService {
           return fail('package_invalid');
         }
         const harnessId = manifest.id;
+        // No await between this check and marking the install in progress: a launch starting
+        // from then on is refused until it is done.
         if (options.isRunning?.(harnessId) === true) return fail('harness_running');
-
-        const target = paths.installPath(harnessId, manifest.version);
-        const staging = join(paths.downloads, `${STAGING_PREFIX}${randomUUID()}`);
+        installing.add(harnessId);
         try {
-          try {
-            await copyListedFiles(source, staging);
-          } catch (error) {
-            if (error instanceof FileUnreadableError) {
-              return fail('file_unreadable', { path: error.file });
-            }
-            if (error instanceof FolderChangedError) return fail('package_invalid');
-            throw error;
-          }
-          await makeEntriesExecutable(manifest, staging);
-          const replaced = await putInPlace(paths, {
-            staging,
-            target,
-            previous: store.get(harnessId),
-            record: () => {
-              store.put({
-                harnessId,
-                version: manifest.version,
-                manifest,
-                installPath: target,
-                dataDir: paths.dataDir(harnessId),
-                installedAt: now().toISOString(),
-                consentedPermissions: manifest.permissions,
-                source: 'local',
-              });
-            },
-          });
-          // The row is written: from here on nothing undoes or fails the install.
-          for (const folder of replaced) {
-            await rm(folder, { recursive: true, force: true }).catch((error: unknown) => {
-              logError(`Could not delete the replaced install folder ${folder}`, error);
-            });
-          }
-          await mkdir(paths.dataDir(harnessId), { recursive: true }).catch((error: unknown) => {
-            logError(`Could not create the Data Directory of ${harnessId}`, error);
-          });
+          return await copyAndRecord(harnessId, source, manifest);
         } finally {
-          await rm(staging, { recursive: true, force: true });
+          installing.delete(harnessId);
         }
-        icons.delete(target);
-        options.onChanged?.(harnessId);
-        return ok({ harnessId, version: manifest.version });
       }),
 
     async list() {
@@ -238,6 +266,8 @@ export function createInstaller(options: InstallerOptions): InstallsService {
         }),
       );
     },
+
+    isInstalling: (harnessId) => installing.has(harnessId),
   };
 }
 
@@ -253,6 +283,7 @@ export function createInstallsStub(): InstallsService {
     installFromFolder: () =>
       Promise.resolve(fail('not_implemented', { method: 'installs.installFromFolder' })),
     list: () => Promise.resolve([]),
+    isInstalling: () => false,
   };
 }
 
