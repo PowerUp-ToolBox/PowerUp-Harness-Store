@@ -2,6 +2,7 @@
  * Ticket P0-07.1: what anon (the desktop app) and an authenticated Publisher may read and write
  * through PostgREST, against the seed catalogue (scripts/seed.ts).
  */
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createUser, deleteUser, isPermissionDenied, rest, serviceRest } from './support.ts';
 import type { Caller, TestUser } from './support.ts';
@@ -17,7 +18,9 @@ let publisher: TestUser;
 let other: TestUser;
 
 beforeAll(async () => {
-  publisher = await createUser('Mixed-Case-Login');
+  // Unique per run, like every other test login: github_login is unique, so a fixed login left
+  // behind by an aborted run would refuse the next run's user.
+  publisher = await createUser(`Mixed-Case-${randomUUID().slice(0, 8)}`);
   other = await createUser();
 });
 
@@ -219,9 +222,10 @@ describe('writes to the catalogue', () => {
 describe('profiles', () => {
   it('a GitHub user gets a profile with the lower-cased login, display name from full_name', async () => {
     const [profile] = await serviceRest<Profile[]>('GET', `profiles?id=eq.${publisher.id}`);
+    expect(publisher.userName).toMatch(/^Mixed-Case-/);
     expect(profile).toMatchObject({
-      github_login: 'mixed-case-login',
-      display_name: 'Test Mixed-Case-Login',
+      github_login: publisher.userName.toLowerCase(),
+      display_name: `Test ${publisher.userName}`,
     });
   });
 
@@ -293,7 +297,10 @@ describe('profiles', () => {
       'GET',
       `profiles?id=eq.${publisher.id}`,
     );
-    expect(profile).toMatchObject({ is_admin: false, github_login: 'mixed-case-login' });
+    expect(profile).toMatchObject({
+      is_admin: false,
+      github_login: publisher.userName.toLowerCase(),
+    });
   });
 
   it('a bio over 500 characters is refused', async () => {

@@ -12,6 +12,7 @@ import {
   readHarness,
   rest,
   serviceRest,
+  sql,
   versionRow,
 } from './support.ts';
 import type { HarnessRow, TestUser, VersionRow } from './support.ts';
@@ -119,6 +120,55 @@ describe('Harness fields copied from the latest published version', () => {
       name: 'latest 1.1.0-beta.1',
     });
     expect(row.status).toBe('active');
+  });
+});
+
+describe('concurrent status changes of one Harness', () => {
+  it('leave the latest version that is still published, whatever the interleaving', async () => {
+    const harness = await insertHarness(publisher, 'concurrent');
+    for (const version of ['1.0.0', '2.0.0', '3.0.0']) await insertVersion(harness, version);
+    const setStatus = (version: string, status: string) =>
+      `update public.harness_versions set status = '${status}'
+       where harness_id = '${harness.id}' and version = '${version}';`;
+
+    // The first transaction Unpublishes 2.0.0 and stays open until the second, which takes
+    // 3.0.0 down, is waiting on a lock. Neither version row blocks the other, so the second one
+    // only waits once it reaches the Harness row: what it reads before that lock is stale.
+    const first = sql(`
+      begin;
+      ${setStatus('2.0.0', 'unpublished')}
+      do $$ /* concurrent-first */
+      declare deadline timestamptz := clock_timestamp() + interval '10 seconds';
+      begin
+        while not exists (
+          select 1 from pg_stat_activity
+          where pid <> pg_backend_pid() and wait_event_type = 'Lock'
+            and query like '%concurrent-second%'
+        ) loop
+          if clock_timestamp() > deadline then
+            raise exception 'the second transaction never waited on a lock';
+          end if;
+          perform pg_sleep(0.05);
+          -- pg_stat_activity is otherwise read once per transaction.
+          perform pg_stat_clear_snapshot();
+        end loop;
+      end $$;
+      commit;
+    `);
+    // The second transaction starts only once the first has made its change.
+    for (let tries = 0; ; tries += 1) {
+      const waiting = await sql(
+        `select count(*) from pg_stat_activity
+         where pid <> pg_backend_pid() and query like '%concurrent-first%'`,
+      );
+      if (waiting === '1') break;
+      if (tries > 200) throw new Error('the first transaction never started');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await sql(`/* concurrent-second */ ${setStatus('3.0.0', 'taken_down')}`);
+    await first;
+
+    expect(await readHarness(harness.id)).toMatchObject({ latest_version: '1.0.0' });
   });
 });
 

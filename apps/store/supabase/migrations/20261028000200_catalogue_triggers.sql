@@ -59,6 +59,13 @@ create trigger harnesses_before_write
 -- vector, plus the sum of the versions' download counts. With no published version left, only
 -- latest_version and latest_published_at become null: the last listing fields stay, and the
 -- Harness is hidden by row-level security (latest_version is null).
+--
+-- It locks the Harness row before reading the versions. Writers of different versions of one
+-- Harness (an Unpublish and a Takedown, a download and an Unpublish) do not block each other on
+-- the version rows; under READ COMMITTED, versions read before the lock would be a snapshot from
+-- before the other writer committed, and the UPDATE would then write a stale latest version or
+-- download count. Each statement after the lock sees that commit. Every writer locks the version
+-- row first and the Harness row second, so the lock adds no deadlock.
 create function public.refresh_harness(target uuid)
 returns void
 language plpgsql
@@ -66,12 +73,14 @@ set search_path = ''
 as $$
 declare
   latest public.harness_versions%rowtype;
-  downloads bigint := (
-    select coalesce(sum(v.download_count), 0)
-    from public.harness_versions v
-    where v.harness_id = target
-  );
+  downloads bigint;
 begin
+  perform 1 from public.harnesses h where h.id = target for update;
+
+  select coalesce(sum(v.download_count), 0) into downloads
+  from public.harness_versions v
+  where v.harness_id = target;
+
   select * into latest
   from public.harness_versions v
   where v.harness_id = target and v.status = 'published'

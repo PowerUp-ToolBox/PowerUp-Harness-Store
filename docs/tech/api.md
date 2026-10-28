@@ -15,7 +15,7 @@ Row-level security decides what is visible (see [`data-model.md`](./data-model.m
 | Publisher page | `profiles?github_login=eq.<login>&select=github_login,display_name,avatar_url,bio,created_at,harnesses(harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at)` |
 | Update check | RPC `latest_versions(harness_ids text[])` → `[{ harness_id, latest_version, permissions, entry_kind }]` |
 
-Search is Postgres full-text (`websearch_to_tsquery`) over the generated `search` column, ranked by `ts_rank` then `download_count`. `platform` filters `harness_versions.platforms @> ARRAY[platform]` on the latest version.
+Search is Postgres full-text (`websearch_to_tsquery`) over the `search` column (maintained by `refresh_harness`, not generated), ranked by `ts_rank` then `download_count`. `platform` filters `harness_versions.platforms @> ARRAY[platform]` on the latest version.
 
 ## Edge Functions
 

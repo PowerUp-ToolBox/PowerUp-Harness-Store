@@ -5,8 +5,11 @@
  * metadata a GitHub sign-in gives, and their JWTs are minted with the stack's JWT secret, so no
  * test ever reaches GitHub.
  */
+import { spawn } from 'node:child_process';
 import { createHmac, randomUUID } from 'node:crypto';
-import { localStack } from '../scripts/local-stack.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { localStack, storeRoot } from '../scripts/local-stack.ts';
 
 export const stack = localStack();
 
@@ -123,8 +126,12 @@ export async function createUser(
   return { id: reply.body.id, userName, token: mintJwt(reply.body.id) };
 }
 
-/** Removes a test user and every Harness they published. */
-export async function deleteUser(user: TestUser): Promise<void> {
+/**
+ * Removes a test user and every Harness they published. Does nothing for a user that was never
+ * created, so an `afterAll` after a failed `beforeAll` does not hide that failure.
+ */
+export async function deleteUser(user: TestUser | undefined): Promise<void> {
+  if (user === undefined) return;
   await serviceRest('DELETE', `harnesses?publisher_id=eq.${user.id}`);
   const reply = await call('service', 'DELETE', `auth/v1/admin/users/${user.id}`);
   if (reply.status !== 200)
@@ -221,4 +228,52 @@ export function isPermissionDenied(reply: Reply): boolean {
     (reply.status === 401 || reply.status === 403) &&
     (reply.body as { code?: unknown } | null)?.code === '42501'
   );
+}
+
+/** The local stack's database container, named by the CLI after config.toml's `project_id`. */
+function databaseContainer(): string {
+  const config = readFileSync(join(storeRoot(), 'supabase', 'config.toml'), 'utf8');
+  const projectId = /^project_id\s*=\s*"([^"]+)"/m.exec(config)?.[1];
+  if (projectId === undefined) throw new Error('No project_id in supabase/config.toml');
+  return `supabase_db_${projectId}`;
+}
+
+/**
+ * Runs `script` as the `postgres` superuser in its own database session, through psql inside the
+ * stack's database container (the store tests need Docker anyway), and resolves with psql's
+ * unaligned output. Only for what HTTP cannot do: a test that interleaves two open transactions.
+ */
+export function sql(script: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const psql = spawn(
+      'docker',
+      [
+        'exec',
+        '-i',
+        databaseContainer(),
+        'psql',
+        '-U',
+        'postgres',
+        '-d',
+        'postgres',
+        '-X',
+        '-q',
+        '-A',
+        '-t',
+        '-v',
+        'ON_ERROR_STOP=1',
+      ],
+      { stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    let stdout = '';
+    let stderr = '';
+    psql.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+    psql.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+    psql.on('error', reject);
+    psql.on('close', (code) => {
+      if (code === 0) resolve(stdout.trim());
+      else reject(new Error(`psql failed (${String(code)}): ${stderr}`));
+    });
+    psql.stdin.end(script);
+  });
 }
