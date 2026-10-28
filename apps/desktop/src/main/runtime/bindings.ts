@@ -202,8 +202,9 @@ const MAX_RECOMMENDED = 5;
 /**
  * The request when `input` is a well-formed {@link ManifestSlotsRequest}, else null: a Harness ID
  * and `models.slots` with a `default` Slot and at most 8 Slots named as the Manifest schema names
- * them, each with at most 5 Recommended Models (strings). Only what resolution reads is kept:
- * each Slot's Recommended Models.
+ * them, each with at most 5 Recommended Models (strings of any length, as the schema's `modelId`
+ * has no maximum: an id resolution cannot use is skipped there, not refused here). Only what
+ * resolution reads is kept: each Slot's Recommended Models.
  */
 export function parseManifestSlotsRequest(input: unknown): ManifestSlotsRequest | null {
   if (!isRecord(input) || !hasOnly(input, ['harnessId', 'models'])) return null;
@@ -222,11 +223,11 @@ export function parseManifestSlotsRequest(input: unknown): ManifestSlotsRequest 
     if (
       !Array.isArray(recommended) ||
       recommended.length > MAX_RECOMMENDED ||
-      !recommended.every((id) => typeof id === 'string' && id.length <= 256)
+      !recommended.every((id) => typeof id === 'string')
     ) {
       return null;
     }
-    slots[name] = { recommended: recommended as string[] };
+    slots[name] = { recommended };
   }
   return { harnessId, models: { slots: slots as Manifest['models']['slots'] } };
 }

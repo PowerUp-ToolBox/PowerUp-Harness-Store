@@ -1,6 +1,6 @@
 import type { InstalledHarness, IpcError, LaunchStatus } from '../../../shared/ipc.js';
 import { useI18n } from '../i18n/I18nProvider.js';
-import { LaunchAction, useLauncher } from '../library/LaunchAction.js';
+import { LaunchAction, useLaunch } from '../library/LaunchAction.js';
 import type { PrimaryActionState } from './primary-action.js';
 
 /** A download in progress (P0-10): how far it is, and how to cancel it. */
@@ -13,7 +13,7 @@ export interface DownloadProgress {
 export interface DetailActionProps {
   /** From {@link primaryActionState}. */
   readonly state: PrimaryActionState;
-  /** The installed Harness, if any: Launch and Update run it through the Library's launcher. */
+  /** The installed Harness, if any: Launch and Update run it through the Library's launch controls. */
   readonly install: InstalledHarness | null;
   /** Its latest launch, for Starting…, Running… and Stopping…. */
   readonly launch: LaunchStatus | undefined;
@@ -111,13 +111,13 @@ function InstalledAction({
   readonly onError: (error: IpcError | null) => void;
 }) {
   const { t } = useI18n();
-  const launcher = useLauncher(install, onError);
+  const controls = useLaunch(install, onError);
   return (
     <>
       <LaunchAction
         install={install}
         state={launch?.state}
-        launcher={launcher}
+        controls={controls}
         lead={
           update ? (
             <button type="button" className="button-primary" onClick={onInstall}>
@@ -133,7 +133,7 @@ function InstalledAction({
           )
         }
       />
-      {launcher.sheet}
+      {controls.sheet}
     </>
   );
 }

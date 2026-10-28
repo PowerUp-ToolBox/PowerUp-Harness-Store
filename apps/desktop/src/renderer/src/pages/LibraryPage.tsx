@@ -9,7 +9,7 @@ import type {
 } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
-import { LaunchAction, useLauncher } from '../library/LaunchAction.js';
+import { LaunchAction, useLaunch } from '../library/LaunchAction.js';
 import { LibraryIcon, MoreIcon } from '../shell/icons.js';
 
 /**
@@ -123,7 +123,7 @@ function HarnessCard({
   const { t } = useI18n();
   const navigate = useNavigate();
   const [error, setError] = useState<IpcError | null>(null);
-  const launcher = useLauncher(install, setError);
+  const controls = useLaunch(install, setError);
   const [, dismissed] = useReducer((count: number) => count + 1, 0);
   const { harnessId } = install;
   const failure =
@@ -174,7 +174,7 @@ function HarnessCard({
                 void navigate(`/store/h/${harnessId}`);
               },
             },
-            { label: t('library.menu.overrides'), onSelect: launcher.openModels },
+            { label: t('library.menu.overrides'), onSelect: controls.openModels },
             { label: t('library.showLogs'), onSelect: showLogs },
             {
               label: t('library.menu.openDataFolder'),
@@ -197,10 +197,10 @@ function HarnessCard({
         </div>
       )}
       <div className="harness-card-actions">
-        <LaunchAction install={install} state={launch?.state} launcher={launcher} />
+        <LaunchAction install={install} state={launch?.state} controls={controls} />
       </div>
       {error === null ? null : <ErrorMessage error={error} />}
-      {launcher.sheet}
+      {controls.sheet}
     </article>
   );
 }

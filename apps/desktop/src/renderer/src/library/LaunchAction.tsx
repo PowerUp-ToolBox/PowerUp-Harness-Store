@@ -5,7 +5,7 @@ import { useI18n } from '../i18n/I18nProvider.js';
 import { WorkspaceSheet } from './WorkspaceSheet.js';
 
 /** How an installed Harness is launched from a button: the Library card's and the detail page's. */
-export interface Launcher {
+export interface LaunchControls {
   /** Nothing can fill its `default` Model Slot: the button reads "Set up a model first". */
   readonly needsModel: boolean;
   /** Launch: through the Workspace sheet when the Harness's Manifest asks for a Workspace. */
@@ -25,10 +25,10 @@ export interface Launcher {
  * and `launch.start`. A launch refused with `slot_unbound` turns the button into "Set up a model
  * first"; any other refusal goes to `onError`, which is cleared (null) when a launch begins.
  */
-export function useLauncher(
+export function useLaunch(
   install: InstalledHarness,
   onError: (error: IpcError | null) => void,
-): Launcher {
+): LaunchControls {
   const navigate = useNavigate();
   const [needsModel, setNeedsModel] = useState(false);
   const [choosingWorkspace, setChoosingWorkspace] = useState(false);
@@ -98,13 +98,13 @@ export function useLauncher(
 export function LaunchAction({
   install,
   state,
-  launcher,
+  controls,
   secondary,
   lead,
 }: {
   readonly install: InstalledHarness;
   readonly state: LaunchStatus['state'] | undefined;
-  readonly launcher: Launcher;
+  readonly controls: LaunchControls;
   readonly secondary?: ReactNode;
   readonly lead?: ReactNode;
 }) {
@@ -128,10 +128,10 @@ export function LaunchAction({
     case 'ready':
       return (
         <>
-          <button type="button" className="button-primary" onClick={launcher.focus}>
+          <button type="button" className="button-primary" onClick={controls.focus}>
             {t('library.running')}
           </button>
-          <button type="button" className="button-link" onClick={launcher.focus}>
+          <button type="button" className="button-link" onClick={controls.focus}>
             {t('library.showWindow')}
           </button>
         </>
@@ -144,17 +144,17 @@ export function LaunchAction({
       );
     default: {
       const className = lead === undefined ? 'button-primary' : 'button-link';
-      return launcher.needsModel ? (
+      return controls.needsModel ? (
         <>
           {lead}
-          <button type="button" className={className} onClick={launcher.openModels}>
+          <button type="button" className={className} onClick={controls.openModels}>
             {t('library.needsModel')}
           </button>
         </>
       ) : (
         <>
           {lead}
-          <button type="button" className={className} onClick={launcher.launch}>
+          <button type="button" className={className} onClick={controls.launch}>
             {t('library.launch')}
           </button>
           {secondary}

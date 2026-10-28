@@ -425,6 +425,23 @@ describe('bindings.resolveManifest (the Store detail page, P0-09.3)', () => {
     ]);
   });
 
+  it('accepts a Recommended Model id of any length, as the Manifest schema does', async () => {
+    await addOllama();
+    const models = {
+      slots: {
+        default: { recommended: [`openrouter/${'x'.repeat(300)}`, 'ollama/model-b'] },
+        vision: { recommended: [`anthropic/${'y'.repeat(300)}`] },
+      },
+    };
+    await expect(resolveManifest('bob/not-installed', models)).resolves.toEqual([
+      {
+        slot: 'default',
+        binding: { connectionId: 'ollama', model: 'model-b', source: 'recommended' },
+      },
+      { slot: 'vision', binding: null },
+    ]);
+  });
+
   it("counts the Harness's Model Overrides when it has some, exactly as resolveAll does", async () => {
     await addOllama();
     await addFake();
