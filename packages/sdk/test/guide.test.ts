@@ -23,6 +23,7 @@ import { connect, createServer as createNetServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
+import { runInNewContext } from 'node:vm';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createGateway } from '@harness-store/gateway';
 import type { Binding, Gateway } from '@harness-store/gateway';
@@ -92,6 +93,24 @@ describe('the guide', () => {
     expect(section).toContain(
       '- **No automatic Provider fallback.** When the Provider or model bound to a Slot fails, the Model Gateway returns the error to your Harness and never retries the call or switches to another Provider or model.\n',
     );
+  });
+
+  it('claims at install only what the install consent dialog says', () => {
+    const section = guide.slice(guide.indexOf('## 7.'), guide.indexOf('## 8.'));
+    expect(section).toContain(
+      'and the app tells Users at install that Harnesses are not sandboxed and that Declared Permissions are not enforced.\n',
+    );
+    const strings = JSON.parse(
+      readFileSync(join(REPO, 'apps/desktop/src/shared/i18n/en.json'), 'utf8'),
+    ) as Record<string, string>;
+    const dialog = Object.entries(strings)
+      .filter(([key]) => key.startsWith('consent.'))
+      .map(([, text]) => text)
+      .join('\n');
+    expect(dialog).toContain('does not sandbox Harnesses');
+    expect(dialog).toContain('does not enforce them');
+    // The other two facts are not shown at install, so the guide must not say they are.
+    expect(dialog).not.toMatch(/credential|fallback/i);
   });
 
   it('quotes every file of test/guide/ exactly in a ts block, and has no other ts block', () => {
@@ -457,13 +476,77 @@ describe('the guide’s snippets against a real Model Gateway', () => {
       }
     });
 
-    it('answers no one else: another Host, or a body that is not JSON', async () => {
+    it('answers no one else: another Host on any route, or a body that is not JSON', async () => {
       const body = JSON.stringify({ question: 'Hello' });
-      const rebound = await send('POST', '/ask', { ...own(), Host: 'evil.example:80' }, body);
-      expect(rebound.status).toBe(404);
+      const rebound = { Host: `evil.example:${String(port)}` };
+      // A rebound DNS name is the page's own origin, so every route checks Host, not only /ask.
+      expect((await send('GET', '/', rebound)).status).toBe(403);
+      expect((await send('POST', '/ask', { ...own(), ...rebound }, body)).status).toBe(403);
+      expect((await send('GET', '/history', rebound)).status).toBe(403);
       const form = await send('POST', '/ask', { ...own(), 'Content-Type': 'text/plain' }, body);
       expect(form.status).toBe(404);
       expect(chatRequests()).toHaveLength(0);
+    });
+
+    describe('the page’s script', () => {
+      interface Element {
+        value: string;
+        textContent: string;
+        disabled: boolean;
+        onclick: (() => Promise<void>) | null;
+      }
+
+      /**
+       * Runs the served page's inline script against stand-ins for its three elements, with
+       * `fetch` given, and returns the elements. Only what the script touches is provided.
+       */
+      async function loadPage(fetch: (path: string, init: RequestInit) => Promise<Response>) {
+        const { text } = await send('GET', '/', { Host: `127.0.0.1:${String(port)}` });
+        const script = /<script>([\s\S]*)<\/script>/.exec(text)?.[1];
+        if (script === undefined) throw new Error('the page has no script');
+        const element = (): Element => ({
+          value: '',
+          textContent: '',
+          disabled: false,
+          onclick: null,
+        });
+        const page = { question: element(), ask: element(), answer: element() };
+        runInNewContext(script, {
+          document: { getElementById: (id: keyof typeof page) => page[id] },
+          fetch,
+          TextDecoderStream,
+        });
+        return page;
+      }
+
+      /** fetch() as the page in the Harness window makes it: relative to this server. */
+      const ownFetch = (path: string, init: RequestInit) =>
+        fetch(`http://127.0.0.1:${String(port)}${path}`, init);
+
+      it('streams the answer and allows one question at a time', async () => {
+        const page = await loadPage(ownFetch);
+        page.question.value = 'Hello from the page';
+        const asked = page.ask.onclick?.();
+        // Disabled while the answer streams: a second Ask cannot mix a second answer into it.
+        expect(page.ask.disabled).toBe(true);
+        await asked;
+        expect(page.answer.textContent).toBe('Hello from the page');
+        expect(page.ask.disabled).toBe(false);
+        expect(chatRequests()).toHaveLength(1);
+      });
+
+      it('shows a failed request instead of dropping it', async () => {
+        const page = await loadPage(() => Promise.reject(new Error('Failed to fetch')));
+        await page.ask.onclick?.();
+        expect(page.answer.textContent).toBe('No answer: Failed to fetch');
+        expect(page.ask.disabled).toBe(false);
+
+        const refused = await loadPage((path, init) =>
+          ownFetch(path, { ...init, headers: { 'Content-Type': 'text/plain' } }),
+        );
+        await refused.ask.onclick?.();
+        expect(refused.answer.textContent).toBe('No answer: the server answered 404');
+      });
     });
 
     it('tells the page where to bind a model when the Slot is unbound', async () => {

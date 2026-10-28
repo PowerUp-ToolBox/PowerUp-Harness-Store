@@ -431,32 +431,38 @@ const page = `<!doctype html>
 <input id="question" size="60"> <button id="ask">Ask</button>
 <p id="answer"></p>
 <script>
-  document.getElementById('ask').onclick = async () => {
-    const answer = document.getElementById('answer');
+  const ask = document.getElementById('ask');
+  const answer = document.getElementById('answer');
+  ask.onclick = async () => {
+    ask.disabled = true; // one question at a time, or two answers would mix in #answer
     answer.textContent = '';
-    const response = await fetch('/ask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: document.getElementById('question').value }),
-    });
-    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-    for (let part = await reader.read(); !part.done; part = await reader.read()) {
-      answer.textContent += part.value;
+    try {
+      const response = await fetch('/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: document.getElementById('question').value }),
+      });
+      if (!response.ok) throw new Error('the server answered ' + response.status);
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      for (let part = await reader.read(); !part.done; part = await reader.read()) {
+        answer.textContent += part.value;
+      }
+    } catch (error) {
+      answer.textContent = 'No answer: ' + error.message;
+    } finally {
+      ask.disabled = false;
     }
   };
 </script>
 </html>`;
 
-// Of the pages in a browser, only this Harness's own page may call /ask: a page on another site
-// cannot send JSON here without a CORS preflight, which this server never answers, and a rebound
-// DNS name arrives with another Host. This is not authentication: a local program can still call
-// /ask.
-function fromOwnPage(request: IncomingMessage): boolean {
+// Every request must name this server as 127.0.0.1 or localhost on its port. A page on a rebound
+// DNS name (another site's name pointed at 127.0.0.1) arrives with another Host; without this
+// check it could read every route here as its own origin. This is not authentication: a local
+// program can still send any Host.
+function toOwnHost(request: IncomingMessage): boolean {
   const host = request.headers.host;
-  return (
-    (host === `127.0.0.1:${String(port)}` || host === `localhost:${String(port)}`) &&
-    request.headers['content-type'] === 'application/json'
-  );
+  return host === `127.0.0.1:${String(port)}` || host === `localhost:${String(port)}`;
 }
 
 // The page's backend: asks the default Model Slot and streams the answer back as plain text.
@@ -491,13 +497,20 @@ async function ask(request: IncomingMessage, response: ServerResponse): Promise<
 }
 
 const server = createServer((request, response) => {
-  if (request.method === 'GET' && request.url === '/') {
+  if (!toOwnHost(request)) {
+    response.writeHead(403).end();
+  } else if (request.method === 'GET' && request.url === '/') {
     response.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
       'Content-Security-Policy': "connect-src 'self'",
     });
     response.end(page);
-  } else if (request.method === 'POST' && request.url === '/ask' && fromOwnPage(request)) {
+  } else if (
+    request.method === 'POST' &&
+    request.url === '/ask' &&
+    // Pages on other sites cannot send JSON here: it needs a CORS preflight, never answered.
+    request.headers['content-type'] === 'application/json'
+  ) {
     void ask(request, response);
   } else {
     response.writeHead(404).end();
@@ -509,12 +522,14 @@ server.on('error', (error) => {
 });
 ```
 
-Guard your server's model routes. Any web page the User opens in a browser can send requests to `127.0.0.1:<port>`, and each answered request spends the User's tokens. Two checks keep other web pages out, so that in the browser your own page is the only caller:
+Guard your server. Any web page the User opens in a browser can send requests to `127.0.0.1:<port>`, and each answered model request spends the User's tokens. Two checks keep other web pages out, so that in the browser your own page is the only caller:
 
-- **Require `Content-Type: application/json`.** A page on another site can send such a request only after a CORS preflight, which your server never answers, so the browser never sends it.
-- **Require `Host` to be `127.0.0.1:<port>` or `localhost:<port>`.** This stops DNS rebinding, where another site's name is pointed at `127.0.0.1` and its pages talk to your server as their own origin.
+- **Require `Host` to be `127.0.0.1:<port>` or `localhost:<port>`, on every route.** This stops DNS rebinding, where another site's name is pointed at `127.0.0.1` and its pages talk to your server as their own origin. Such a page can read the response of any route that skips this check, so check it first, for every request, as the snippet does. Only a route that returns nothing private and changes nothing, like a static page, can do without it.
+- **Require `Content-Type: application/json` on every route that does something** (a model call, a write to the Data Directory). A page on another site can send such a request only after a CORS preflight, which your server never answers, so the browser never sends it.
 
-These checks are not authentication. A program running on the User's machine sets any `Host` and `Content-Type` it likes and passes both; such a program already runs with the User's permissions (section 7), so do not put anything behind these routes that you would not let it reach.
+These checks are not authentication. A program running on the User's machine sets any `Host` and `Content-Type` it likes and passes both; such a program already runs with the User's permissions (section 7), so do not put anything behind your server that you would not let it reach.
+
+On the page, let one request run at a time (the snippet disables the button until the answer ends), or two answers stream into the same place and both spend tokens, and show a failed request to the User instead of dropping it.
 
 Also send a `Content-Security-Policy` with `connect-src 'self'` and load nothing from other origins (no CDN, no web fonts), so the page works offline and talks to no one but your server. [`hello-web`](../../examples/hello-web/src) does all of this with a full chat UI: Server-Sent Events, history kept in the page, a size limit on request bodies, en/zh-CN strings and the model that answered.
 
@@ -611,7 +626,7 @@ Guidelines:
 
 ## 7. What the platform does not do
 
-Design your Harness around these facts. They are the trust model of [ADR-0004](../adr/0004-harness-is-a-standalone-process-behind-a-model-gateway.md) and [security.md](../tech/security.md), and the app states them plainly to Users when they install a Harness.
+Design your Harness around these facts. They are the trust model of [ADR-0004](../adr/0004-harness-is-a-standalone-process-behind-a-model-gateway.md) and [security.md](../tech/security.md), and the app tells Users at install that Harnesses are not sandboxed and that Declared Permissions are not enforced.
 
 - **No sandboxing.** Harness Store does not sandbox your Harness: it runs as an ordinary process with all of the User's operating-system permissions, and its Declared Permissions are shown to the User but not enforced.
 - **No access to real credentials.** Your Harness never receives the User's Provider credentials: it gets only a Gateway Token, which works on nothing but the local Model Gateway and is revoked when your process exits.
