@@ -945,6 +945,12 @@ code {
   overflow-wrap: anywhere;
 }
 
+.listing-detail-publisher-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .listing-detail-summary {
   margin: 0;
 }
@@ -1166,6 +1172,60 @@ code {
 
 .store-gone {
   align-items: flex-start;
+}
+
+/* The Publisher page (P0-09.4): Back, the Publisher, then their Harnesses as Store cards. */
+.store-publisher {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 18px;
+}
+
+.publisher-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.avatar.avatar-large {
+  flex-basis: 72px;
+  width: 72px;
+  height: 72px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+}
+
+.publisher-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.publisher-heading h2 {
+  margin: 0;
+  font-size: 22px;
+  overflow-wrap: anywhere;
+}
+
+.publisher-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.publisher-bio {
+  margin: 0;
+  max-width: 640px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .listing-detail-footer {

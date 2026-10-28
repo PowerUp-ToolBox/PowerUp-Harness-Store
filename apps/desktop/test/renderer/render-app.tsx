@@ -43,6 +43,7 @@ import type {
   StoreDetail,
   StoreHome,
   StoreHomeRequest,
+  StorePublisherPage,
   StoreSearchPage,
   StoreSearchRequest,
   UnpublishedVersion,
@@ -179,7 +180,8 @@ export interface FakeApiOptions {
  * A fake `window.api` whose settings behave like the Runtime's: `osLocale` stands in for
  * `app.getLocale()` and an override set through `settings.set` wins over it. The Runtime started
  * fine, the Store is online and its home and every search have no Harnesses, no Harness has a Store
- * detail page (`store.detail` answers `not_found`), there are no Connections or Slot Bindings,
+ * detail page (`store.detail` answers `not_found`) and no login a Publisher page
+ * (`store.publisher` answers `publisher: null`), there are no Connections or Slot Bindings,
  * detection finds nothing, `connections.add`, `update`, `remove` and `test` (of a saved Connection)
  * answer `not_implemented`, `connections.testDraft` passes finding no models and
  * `connections.models` lists none; `bindings.setGlobal` sets or clears a Default Model that
@@ -253,6 +255,9 @@ export function installFakeApi(
           ok: true,
           data: { platform: 'darwin-arm64', storeStatus: 'not_found', harness: null },
         }),
+      ),
+      publisher: vi.fn<(login: string) => Promise<IpcResult<StorePublisherPage>>>(() =>
+        Promise.resolve({ ok: true, data: { platform: 'darwin-arm64', publisher: null } }),
       ),
     },
     providers: {

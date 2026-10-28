@@ -93,6 +93,10 @@ export function createHandlers(services: Services): IpcHandlers {
       }
       return services.store.detail(input);
     },
+    'store.publisher': (input) => {
+      if (!isPublisherLogin(input)) return fail('invalid_input', { method: 'store.publisher' });
+      return services.store.publisher(input);
+    },
     'providers.list': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'providers.list' });
       return ok(services.providers.list());
@@ -272,6 +276,14 @@ function parseStoreHomeRequest(input: unknown): StoreHomeRequest | null {
   if (Object.keys(rest).length > 0) return null;
   if (refresh === undefined) return {};
   return typeof refresh === 'boolean' ? { refresh } : null;
+}
+
+/**
+ * A GitHub login as the Store keeps it, lower-cased: the publisher segment of a Harness ID (the
+ * Manifest schema's `harnessId` pattern).
+ */
+function isPublisherLogin(input: unknown): input is string {
+  return typeof input === 'string' && /^[a-z0-9][a-z0-9-]{0,38}$/.test(input);
 }
 
 /** The greatest `offset` Postgres takes as an `int`. */

@@ -68,7 +68,7 @@ describe('buildApi (window.api)', () => {
       'unpublish',
     ]);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
-    expect(Object.keys(api.store)).toEqual(['home', 'search', 'detail']);
+    expect(Object.keys(api.store)).toEqual(['home', 'search', 'detail', 'publisher']);
     expect(Object.isFrozen(api)).toBe(true);
     expect(Object.isFrozen(api.app)).toBe(true);
     expect(Object.isFrozen(api.settings)).toBe(true);

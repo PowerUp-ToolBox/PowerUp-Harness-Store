@@ -62,6 +62,7 @@ function launch(osLocale: string) {
       home: () => Promise.resolve(fail('not_implemented')),
       search: () => Promise.resolve(fail('not_implemented')),
       detail: () => Promise.resolve(fail('not_implemented')),
+      publisher: () => Promise.resolve(fail('not_implemented')),
     },
     providers: { list: () => providerPresets() },
     connections: createConnectionsStub(),

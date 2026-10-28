@@ -171,7 +171,7 @@ describe('Store home', () => {
   });
 
   it('opens the Publisher page from a card’s login', async () => {
-    const { answer } = installPendingHome();
+    const { api, answer } = installPendingHome();
     await renderApp('#/store');
     await answer({ ok: true, data: HOME });
 
@@ -182,7 +182,7 @@ describe('Store home', () => {
       await Promise.resolve();
     });
     expect(window.location.hash).toBe('#/store/p/alice');
-    expect(screen.getByText('Harnesses by the Publisher alice appear here.')).toBeDefined();
+    expect(api.store.publisher).toHaveBeenCalledWith('alice');
   });
 
   it('hides an empty row', async () => {

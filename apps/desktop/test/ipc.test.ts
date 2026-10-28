@@ -12,6 +12,7 @@ import {
   type IpcResult,
   type StoreDetail,
   type StoreHomeRequest,
+  type StorePublisherPage,
   type StoreSearchRequest,
 } from '../src/shared/ipc.js';
 
@@ -36,6 +37,9 @@ const search = vi.fn((request: StoreSearchRequest) =>
 const detail = vi.fn<(harnessId: string) => Promise<IpcResult<StoreDetail>>>(() =>
   Promise.resolve(ok({ platform: 'darwin-arm64', storeStatus: 'not_found', harness: null })),
 );
+const publisher = vi.fn<(login: string) => Promise<IpcResult<StorePublisherPage>>>(() =>
+  Promise.resolve(ok({ platform: 'darwin-arm64', publisher: null })),
+);
 const resolveManifest = vi.fn(() => ok([{ slot: 'default', binding: null }]));
 const fakeServices: Services = {
   app: {
@@ -58,7 +62,7 @@ const fakeServices: Services = {
     get: () => ({ state: 'offline' }),
     check: () => Promise.resolve({ state: 'online' }),
   },
-  store: { home, search, detail },
+  store: { home, search, detail, publisher },
   providers: { list: () => providerPresets() },
   connections: createConnectionsStub(),
   bindings: {
@@ -280,6 +284,29 @@ describe('IPC handlers against a fake service container', () => {
         { ok: false, error: { code: 'invalid_input', params: { method: 'store.detail' } } },
       );
       expect(detail).not.toHaveBeenCalled();
+    },
+  );
+
+  it('store.publisher reads the page of a Publisher login', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'store.publisher', input: 'alice-1' }),
+    ).resolves.toEqual({ ok: true, data: { platform: 'darwin-arm64', publisher: null } });
+    expect(publisher).toHaveBeenLastCalledWith('alice-1');
+  });
+
+  it.each([undefined, '', 'Alice', '-alice', 'alice/writer', 'a'.repeat(40), 42, { login: 'a' }])(
+    'store.publisher rejects %j as invalid_input',
+    async (input) => {
+      const { dispatch } = dispatcherFor();
+      publisher.mockClear();
+      await expect(
+        dispatch(MAIN_WINDOW, { method: 'store.publisher', input }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'invalid_input', params: { method: 'store.publisher' } },
+      });
+      expect(publisher).not.toHaveBeenCalled();
     },
   );
 

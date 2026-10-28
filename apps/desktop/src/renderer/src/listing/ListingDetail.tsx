@@ -92,6 +92,10 @@ export function ListingDetail({
     ([a], [b]) => Number(a !== 'default') - Number(b !== 'default'),
   );
   const publisherName = publisher.displayName ?? publisher.login;
+  const avatar =
+    publisher.avatarUrl === null ? null : (
+      <img className="avatar avatar-small" src={publisher.avatarUrl} alt="" />
+    );
   return (
     <article className="listing-detail" aria-label={manifest.name}>
       <header className="listing-detail-header">
@@ -99,16 +103,18 @@ export function ListingDetail({
         <div className="listing-detail-heading">
           <Name className="listing-detail-name">{manifest.name}</Name>
           <p className="listing-detail-publisher">
-            {publisher.avatarUrl === null ? null : (
-              <img className="avatar avatar-small" src={publisher.avatarUrl} alt="" />
+            {publisher.href === undefined ? (
+              <>
+                {avatar}
+                <span>{t('listing.by', { publisher: publisherName })}</span>
+              </>
+            ) : (
+              // The avatar and the name are one link to the Publisher's page.
+              <Link className="listing-detail-publisher-link" to={publisher.href}>
+                {avatar}
+                <span>{t('listing.by', { publisher: publisherName })}</span>
+              </Link>
             )}
-            <span>
-              {publisher.href === undefined ? (
-                t('listing.by', { publisher: publisherName })
-              ) : (
-                <Link to={publisher.href}>{t('listing.by', { publisher: publisherName })}</Link>
-              )}
-            </span>
             <span aria-hidden="true">·</span>
             <code>{manifest.id}</code>
             <span aria-hidden="true">·</span>

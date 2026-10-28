@@ -1,6 +1,6 @@
 import type { Manifest } from '@harness-store/manifest';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router';
+import { useParams } from 'react-router';
 import type {
   ConnectionSummary,
   InstalledHarness,
@@ -13,6 +13,7 @@ import { useI18n } from '../i18n/I18nProvider.js';
 import { useLaunchStatus } from '../library/LaunchAction.js';
 import { ListingDetail, type SlotUse } from '../listing/ListingDetail.js';
 import { connectionName } from '../models/names.js';
+import { BackButton } from '../store/BackButton.js';
 import { DetailAction } from '../store/DetailAction.js';
 import { primaryActionState } from '../store/primary-action.js';
 
@@ -194,26 +195,6 @@ export function HarnessDetailPage() {
         />
       ) : null}
     </div>
-  );
-}
-
-/** Back where the User came from in the app, or the Store home for a page opened directly. */
-function BackButton() {
-  const { t } = useI18n();
-  const navigate = useNavigate();
-  const location = useLocation();
-  return (
-    <button
-      type="button"
-      className="button-link page-back"
-      onClick={() => {
-        // The first entry of the app's history has the key `default`: there is nothing to go back to.
-        if (location.key === 'default') void navigate('/store');
-        else void navigate(-1);
-      }}
-    >
-      {t('store.detail.back')}
-    </button>
   );
 }
 

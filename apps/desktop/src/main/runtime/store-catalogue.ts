@@ -9,6 +9,7 @@ import {
   type StoreHome,
   type StoreHomeRequest,
   type StoreListing,
+  type StorePublisherPage,
   type StoreSearchPage,
   type StoreSearchRequest,
   type StoreVersion,
@@ -46,6 +47,12 @@ const DETAIL_COLUMNS =
   'id,harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at,status,' +
   'profiles(github_login,display_name,avatar_url),' +
   'harness_versions(version,changelog,published_at,platforms,status,download_count,permissions)';
+
+/**
+ * api.md's Publisher page read, without the login: the profile's public columns and the
+ * Publisher's Harnesses as list rows, most downloaded first.
+ */
+const PUBLISHER_COLUMNS = `github_login,display_name,avatar_url,bio,created_at,harnesses(${LIST_COLUMNS})`;
 
 /** How many screenshots a detail page shows, as the Store keeps at most that many. */
 const MAX_SCREENSHOTS = 5;
@@ -89,6 +96,8 @@ export interface StoreCatalogue {
   search(request: StoreSearchRequest): Promise<IpcResult<StoreSearchPage>>;
   /** A Harness's detail page (`store.detail`). */
   detail(harnessId: string): Promise<IpcResult<StoreDetail>>;
+  /** A Publisher's page (`store.publisher`). */
+  publisher(login: string): Promise<IpcResult<StorePublisherPage>>;
 }
 
 /**
@@ -183,6 +192,36 @@ export function createStoreCatalogue(options: StoreCatalogueOptions): StoreCatal
       : ok({ platform: options.platform, storeStatus: 'available', harness });
   };
 
+  /**
+   * api.md's Publisher page read. Row-level security leaves only the Publisher's active Harnesses
+   * with a published version in the nested rows, so a Publisher whose Harnesses are all hidden
+   * has none; a login with no profile has no row at all.
+   */
+  const readPublisher = async (login: string): Promise<IpcResult<StorePublisherPage>> => {
+    const rows = await read(
+      `profiles?github_login=eq.${encodeURIComponent(login)}&select=${PUBLISHER_COLUMNS}` +
+        '&harnesses.order=download_count.desc,harness_id',
+    );
+    if (!rows.ok) return rows;
+    const row = rows.data[0];
+    if (row === undefined) return ok({ platform: options.platform, publisher: null });
+    if (!isRecord(row) || row.github_login !== login) return fail('store_error');
+    return ok({
+      platform: options.platform,
+      publisher: {
+        login,
+        displayName:
+          typeof row.display_name === 'string' && row.display_name.trim() !== ''
+            ? row.display_name
+            : null,
+        avatarUrl: isHttpsUrl(row.avatar_url) ? row.avatar_url : null,
+        bio: typeof row.bio === 'string' && row.bio.trim() !== '' ? row.bio : null,
+        joinedAt: typeof row.created_at === 'string' ? row.created_at : null,
+        harnesses: listingsOf(Array.isArray(row.harnesses) ? row.harnesses : []),
+      },
+    });
+  };
+
   return {
     async home(request = {}) {
       const baseUrl = options.storeBaseUrl();
@@ -242,6 +281,12 @@ export function createStoreCatalogue(options: StoreCatalogueOptions): StoreCatal
 
     async detail(harnessId) {
       const answer = await readDetail(harnessId);
+      if (!answer.ok && answer.error.code === 'store_unreachable') options.onStoreUnreachable?.();
+      return answer;
+    },
+
+    async publisher(login) {
+      const answer = await readPublisher(login);
       if (!answer.ok && answer.error.code === 'store_unreachable') options.onStoreUnreachable?.();
       return answer;
     },

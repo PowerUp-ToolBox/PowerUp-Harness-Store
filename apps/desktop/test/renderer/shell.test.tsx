@@ -59,6 +59,7 @@ describe('main window shell', () => {
 
   it('reads the Publisher login from its route', async () => {
     await renderAt('#/store/p/octocat');
+    expect(api.store.publisher).toHaveBeenCalledWith('octocat');
     expect(screen.getByText(/\boctocat\b/)).toBeDefined();
   });
 

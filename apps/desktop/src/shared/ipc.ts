@@ -179,6 +179,14 @@ export interface IpcMethods {
    * Manifest that does not validate included.
    */
   'store.detail': { input: string; output: StoreDetail };
+  /**
+   * A Publisher's Store page (P0-09.4), by GitHub login: api.md's Publisher page read, anonymous
+   * and never kept in memory, so it lists exactly the Harnesses every User sees (active, with a
+   * published version), most downloaded first. A login with no profile answers `publisher: null`.
+   * `store_unreachable` when the Store did not answer (connectivity is checked again),
+   * `store_error` when it answered with something else.
+   */
+  'store.publisher': { input: string; output: StorePublisherPage };
   /** Every Provider of the Gateway's table, in its order, local ones (Ollama, LM Studio) included. */
   'providers.list': { input: undefined; output: readonly ProviderPreset[] };
   /**
@@ -805,6 +813,24 @@ export interface StorePublisher {
   readonly avatarUrl: string | null;
 }
 
+/** A Publisher's Store page, or none for a login with no profile (`store.publisher`). */
+export interface StorePublisherPage {
+  /** This machine's platform, as in {@link StoreHome}. */
+  readonly platform: Platform | null;
+  /** The Publisher and their Harnesses; null when no Publisher has this login. */
+  readonly publisher: StorePublisherProfile | null;
+}
+
+/** A Publisher as their Store page shows them. */
+export interface StorePublisherProfile extends StorePublisher {
+  /** What they wrote about themselves (plain text); null without it. */
+  readonly bio: string | null;
+  /** When their profile was made (ISO-8601): the page's join date. Null when unknown. */
+  readonly joinedAt: string | null;
+  /** Their Harnesses every User sees, most downloaded first; none when all are hidden. */
+  readonly harnesses: readonly StoreListing[];
+}
+
 /** One published Harness Version in a detail page's version history. */
 export interface StoreVersion {
   readonly version: string;
@@ -1103,6 +1129,7 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'store.home': true,
   'store.search': true,
   'store.detail': true,
+  'store.publisher': true,
   'providers.list': true,
   'connections.detectLocal': true,
   'connections.list': true,
