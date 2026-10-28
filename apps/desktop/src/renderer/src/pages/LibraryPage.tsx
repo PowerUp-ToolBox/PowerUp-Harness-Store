@@ -162,7 +162,12 @@ function HarnessCard({
             ) : null}
           </div>
           <p className="harness-card-subtitle">
-            {t('library.card.subtitle', { publisher: install.publisher, version: install.version })}
+            {/* The Publisher's Store page; one that is not in the Store says "No such Publisher". */}
+            <Link className="harness-card-publisher" to={`/store/p/${install.publisher}`}>
+              {install.publisher}
+            </Link>
+            <span aria-hidden="true"> · </span>
+            {install.version}
           </p>
         </div>
         <CardMenu

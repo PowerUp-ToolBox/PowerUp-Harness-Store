@@ -809,7 +809,7 @@ export interface StorePublisher {
   /** The GitHub login: the publisher segment of the Harness ID. */
   readonly login: string;
   readonly displayName: string | null;
-  /** Their GitHub avatar (https); null without one. */
+  /** Their GitHub avatar (on `https://avatars.githubusercontent.com`); null without one. */
   readonly avatarUrl: string | null;
 }
 
@@ -825,7 +825,7 @@ export interface StorePublisherPage {
 export interface StorePublisherProfile extends StorePublisher {
   /** What they wrote about themselves (plain text); null without it. */
   readonly bio: string | null;
-  /** When their profile was made (ISO-8601): the page's join date. Null when unknown. */
+  /** When their profile was made (ISO-8601): the page's join date. Null when unknown or unparseable. */
   readonly joinedAt: string | null;
   /** Their Harnesses every User sees, most downloaded first; none when all are hidden. */
   readonly harnesses: readonly StoreListing[];

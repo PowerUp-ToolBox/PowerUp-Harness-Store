@@ -8,7 +8,6 @@
   "section.settings": "设置",
   "library.empty": "还没有安装任何 Harness",
   "library.empty.browse": "去商店看看",
-  "library.card.subtitle": "{publisher} · {version}",
   "library.local": "本地",
   "library.launch": "启动",
   "library.unsupported": "不支持当前平台",

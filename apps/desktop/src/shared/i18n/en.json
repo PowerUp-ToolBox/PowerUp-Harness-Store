@@ -8,7 +8,6 @@
   "section.settings": "Settings",
   "library.empty": "Nothing installed yet",
   "library.empty.browse": "Browse the Store",
-  "library.card.subtitle": "{publisher} · {version}",
   "library.local": "Local",
   "library.launch": "Launch",
   "library.unsupported": "Not available for your platform",

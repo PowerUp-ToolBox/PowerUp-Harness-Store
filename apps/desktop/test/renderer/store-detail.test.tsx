@@ -547,6 +547,10 @@ describe('opening the page', () => {
       install: installed('1.1.0'),
     });
     expect(within(page()).getByText('Version 1.1.0')).toBeDefined();
+    // The Publisher may still have other Harnesses in the Store.
+    expect(within(page()).getByRole('link', { name: 'by alice' }).getAttribute('href')).toBe(
+      '#/store/p/alice',
+    );
     expect(buttons()).toEqual(['Launch', 'Uninstall (disabled)']);
     // Its installed Manifest's changelog is its only version history.
     const entries = within(region('Version history')).getAllByRole('listitem');

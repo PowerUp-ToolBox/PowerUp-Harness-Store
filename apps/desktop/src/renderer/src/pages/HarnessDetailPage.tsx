@@ -175,7 +175,13 @@ export function HarnessDetailPage() {
         <ListingDetail
           headingLevel={2}
           manifest={install.manifest}
-          publisher={{ login: install.publisher, avatarUrl: null }}
+          publisher={{
+            login: install.publisher,
+            avatarUrl: null,
+            // The Publisher may still have other Harnesses in the Store; an unknown login's page
+            // says "No such Publisher".
+            href: `/store/p/${install.publisher}`,
+          }}
           iconUrl={install.iconDataUrl}
           downloads={null}
           readme={null}

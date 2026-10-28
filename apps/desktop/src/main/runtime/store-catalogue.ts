@@ -57,6 +57,9 @@ const PUBLISHER_COLUMNS = `github_login,display_name,avatar_url,bio,created_at,h
 /** How many screenshots a detail page shows, as the Store keeps at most that many. */
 const MAX_SCREENSHOTS = 5;
 
+/** The one avatar host the renderer's CSP allows images from. */
+const GITHUB_AVATAR_ORIGIN = 'https://avatars.githubusercontent.com';
+
 const STORE_STATUSES: ReadonlySet<string> = new Set<HarnessStoreStatus>([
   'available',
   'unpublished',
@@ -214,9 +217,9 @@ export function createStoreCatalogue(options: StoreCatalogueOptions): StoreCatal
           typeof row.display_name === 'string' && row.display_name.trim() !== ''
             ? row.display_name
             : null,
-        avatarUrl: isHttpsUrl(row.avatar_url) ? row.avatar_url : null,
+        avatarUrl: isGitHubAvatarUrl(row.avatar_url) ? row.avatar_url : null,
         bio: typeof row.bio === 'string' && row.bio.trim() !== '' ? row.bio : null,
-        joinedAt: typeof row.created_at === 'string' ? row.created_at : null,
+        joinedAt: isTimestamp(row.created_at) ? row.created_at : null,
         harnesses: listingsOf(Array.isArray(row.harnesses) ? row.harnesses : []),
       },
     });
@@ -316,7 +319,7 @@ function harnessOf(
     publisher: {
       login,
       displayName: typeof profile.display_name === 'string' ? profile.display_name : null,
-      avatarUrl: isHttpsUrl(profile.avatar_url) ? profile.avatar_url : null,
+      avatarUrl: isGitHubAvatarUrl(profile.avatar_url) ? profile.avatar_url : null,
     },
     iconUrl: typeof row.icon_path === 'string' ? storeAssetUrl(row.icon_path) : null,
     downloadCount: typeof row.download_count === 'number' ? row.download_count : 0,
@@ -332,15 +335,15 @@ function harnessOf(
 
 /**
  * The version history: the published versions, newest first as the read orders them, each marked
- * when its Declared Permissions are not those of the next older one. A row that is not a version
- * is skipped.
+ * when its Declared Permissions are not those of the next older one. A row that is not a version,
+ * or whose publish date does not parse, is skipped.
  */
 function versionsOf(rows: unknown): StoreVersion[] {
   const published = (Array.isArray(rows) ? rows : []).filter(
     (row): row is Record<string, unknown> =>
       isRecord(row) &&
       typeof row.version === 'string' &&
-      typeof row.published_at === 'string' &&
+      isTimestamp(row.published_at) &&
       // Row-level security shows anon the published ones only.
       row.status === 'published',
   );
@@ -356,14 +359,22 @@ function versionsOf(rows: unknown): StoreVersion[] {
   });
 }
 
-/** An absolute https URL, such as a GitHub avatar. */
-function isHttpsUrl(value: unknown): value is string {
+/**
+ * A GitHub avatar URL. The CSP loads images from GitHub's avatar host only, so a Publisher who set
+ * their avatar elsewhere gets none and shows the monogram rather than a blocked image.
+ */
+function isGitHubAvatarUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   try {
-    return new URL(value).protocol === 'https:';
+    return new URL(value).origin === GITHUB_AVATAR_ORIGIN;
   } catch {
     return false;
   }
+}
+
+/** A date the renderer can format: an unparseable one would make it throw. */
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value));
 }
 
 /** The cards of a list read's rows; a row that is not one (no ID, name or version) is skipped. */

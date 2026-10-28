@@ -2484,6 +2484,10 @@ input[aria-invalid='true'] {
   overflow-wrap: anywhere;
 }
 
+.harness-card-publisher {
+  color: inherit;
+}
+
 .harness-card-actions {
   display: flex;
   flex-wrap: wrap;

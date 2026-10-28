@@ -78,6 +78,7 @@ let baseUrl: string;
 let harnesses: StoredHarness[];
 let requests: { method: string; url: URL; body: string; apikey: string | undefined }[];
 let failWith: number | null;
+let avatarUrl: string;
 let unreachable: ReturnType<typeof vi.fn<() => void>>;
 
 const day = (n: number) => `2026-10-${String(n).padStart(2, '0')}T09:00:00.000000+00:00`;
@@ -143,6 +144,7 @@ function seed(): StoredHarness[] {
 beforeEach(async () => {
   requests = [];
   failWith = null;
+  avatarUrl = 'https://avatars.githubusercontent.com/u/1';
   unreachable = vi.fn<() => void>();
   harnesses = seed();
   server = createServer((request, response) => {
@@ -213,7 +215,7 @@ function serve(request: IncomingMessage, body: string, response: ServerResponse)
           profiles: {
             github_login: 'alice',
             display_name: 'Alice Liddell',
-            avatar_url: 'https://avatars.githubusercontent.com/u/1',
+            avatar_url: avatarUrl,
           },
           harness_versions: versions.map((version) => ({
             version: version.version,
@@ -344,6 +346,20 @@ describe('store.detail', () => {
       ],
     });
     expect(detail.harness?.manifest).toEqual(writerManifest('1.2.0', WITH_SHELL));
+  });
+
+  it('leaves out a version whose publish date does not parse', async () => {
+    const writer = harnesses[0];
+    const middle = writer?.versions.find((version) => version.version === '1.1.0');
+    if (middle === undefined) throw new Error('No 1.1.0');
+    middle.published_at = 'not-a-date';
+    const detail = await detailOf('alice/writer');
+    expect(detail.harness?.versions.map(({ version }) => version)).toEqual(['1.2.0', '1.0.0']);
+  });
+
+  it('leaves out a Publisher avatar off GitHub’s avatar host, which the CSP would block', async () => {
+    avatarUrl = 'https://example.com/me.png';
+    expect((await detailOf('alice/writer')).harness?.publisher.avatarUrl).toBeNull();
   });
 
   it('makes api.md’s detail read, then the Version manifest read of the latest version, anonymously', async () => {

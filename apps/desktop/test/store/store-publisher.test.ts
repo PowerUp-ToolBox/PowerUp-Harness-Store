@@ -333,6 +333,29 @@ describe('store.publisher', () => {
     });
   });
 
+  it.each(['https://example.com/me.png', 'https://avatars.githubusercontent.com.evil.test/u/1'])(
+    'leaves out an avatar the CSP would block (%s), so the monogram shows',
+    async (avatarUrl) => {
+      const alice = profiles[0];
+      if (alice === undefined) throw new Error('No seed');
+      alice.avatar_url = avatarUrl;
+      expect((await pageOf('alice')).publisher?.avatarUrl).toBeNull();
+    },
+  );
+
+  it.each(['', 'not-a-date'])(
+    'has no join date for a created_at that does not parse (%j), rather than one the page cannot format',
+    async (createdAt) => {
+      const alice = profiles[0];
+      if (alice === undefined) throw new Error('No seed');
+      alice.created_at = createdAt;
+      expect((await pageOf('alice')).publisher).toMatchObject({
+        login: 'alice',
+        joinedAt: null,
+      });
+    },
+  );
+
   describe('when it fails', () => {
     it('is store_unreachable when the Store does not answer, and has connectivity checked again', async () => {
       const result = await dispatcherFor(() => `http://127.0.0.1:${String(REFUSED_PORT)}`)('alice');
