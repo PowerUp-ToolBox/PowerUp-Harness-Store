@@ -72,9 +72,30 @@ function userMessage(content: Extract<ChatMessage, { role: 'user' }>['content'])
       if (/^data:/i.test(url)) {
         return { type: 'file', mediaType: /^data:([^;,]+)/i.exec(url)?.[1] ?? 'image', data: url };
       }
-      return { type: 'file', mediaType: 'image', data: new URL(url) };
+      const parsed = new URL(url);
+      return { type: 'file', mediaType: imageMediaTypeOf(parsed), data: parsed };
     }),
   };
+}
+
+const IMAGE_EXTENSIONS = new Map([
+  ['png', 'image/png'],
+  ['jpg', 'image/jpeg'],
+  ['jpeg', 'image/jpeg'],
+  ['gif', 'image/gif'],
+  ['webp', 'image/webp'],
+  ['heic', 'image/heic'],
+  ['heif', 'image/heif'],
+]);
+
+/**
+ * The media type of an http(s) image, guessed from its path's extension, else `image/jpeg`. Some
+ * adapters need a full media type for an image they hand over as a URL (Google's `fileData`,
+ * OpenRouter's `image_url`); the Provider fetches the image and sees what it really is.
+ */
+function imageMediaTypeOf(url: URL): string {
+  const extension = /\.([a-z0-9]+)$/i.exec(url.pathname)?.[1]?.toLowerCase() ?? '';
+  return IMAGE_EXTENSIONS.get(extension) ?? 'image/jpeg';
 }
 
 /**

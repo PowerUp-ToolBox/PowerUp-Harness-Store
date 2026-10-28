@@ -148,22 +148,24 @@ A **Provider id** is a fixed string; a **Connection** is the User's credential/e
 
 | Provider id | Adapter | Credential | Notes |
 |---|---|---|---|
-| `anthropic` | @ai-sdk/anthropic | API key | |
-| `openai` | @ai-sdk/openai | API key | |
-| `google` | @ai-sdk/google | API key | Gemini API |
-| `openrouter` | @openrouter/ai-sdk-provider | API key | model ids are OpenRouter's, e.g. `openrouter/anthropic/claude-sonnet-4-5` |
+| `anthropic` | @ai-sdk/anthropic | API key | `https://api.anthropic.com/v1` |
+| `openai` | @ai-sdk/openai | API key | `https://api.openai.com/v1`, Chat Completions |
+| `google` | @ai-sdk/google | API key | Gemini API, `https://generativelanguage.googleapis.com/v1beta` |
+| `openrouter` | @openrouter/ai-sdk-provider | API key | `https://openrouter.ai/api/v1`; model ids are OpenRouter's, e.g. `openrouter/anthropic/claude-sonnet-4-5` |
 | `ollama` | openai-compatible | none; base URL default `http://127.0.0.1:11434/v1` | auto-detected |
 | `lmstudio` | openai-compatible | none; default `http://127.0.0.1:1234/v1` | auto-detected |
 | `deepseek` | openai-compatible preset | API key | `https://api.deepseek.com/v1` |
-| `qwen` | openai-compatible preset | API key | DashScope compatible endpoint |
-| `moonshot` | openai-compatible preset | API key | Kimi |
-| `zhipu` | openai-compatible preset | API key | GLM |
-| `minimax` | openai-compatible preset | API key | |
-| `doubao` | openai-compatible preset | API key | Volcengine Ark |
-| `groq` | openai-compatible preset | API key | |
+| `qwen` | openai-compatible preset | API key | DashScope compatible mode, `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `moonshot` | openai-compatible preset | API key | Kimi, `https://api.moonshot.cn/v1` |
+| `zhipu` | openai-compatible preset | API key | GLM, `https://open.bigmodel.cn/api/paas/v4` |
+| `minimax` | openai-compatible preset | API key | `https://api.minimax.cn/v1` |
+| `doubao` | openai-compatible preset | API key | Volcengine Ark, `https://ark.cn-beijing.volces.com/api/v3` |
+| `groq` | openai-compatible preset | API key | `https://api.groq.com/openai/v1` |
 | `openai-compatible` | @ai-sdk/openai-compatible | optional key + base URL | vLLM, custom proxies, anything else |
 
 Presets are data (id, display name, base URL, docs link, key placeholder, whether `/models` listing works). Adding a preset must never require code changes outside the preset table.
+
+The base URL in the table is the Provider's default; a Connection's own base URL replaces it (an international account of a Chinese vendor, such as `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`, or Ollama on another port). Where a vendor has a mainland-China and an international endpoint, the default is the mainland-China one. `openai-compatible` has no default: its Connections must name a base URL. Every Provider except `ollama`, `lmstudio` and `openai-compatible` needs an API key; the Gateway never falls back to an SDK's environment variables (`OPENAI_API_KEY` and the like). Model names are passed to the Provider exactly as written after the Provider id.
 
 Model listing: for each Connection the app calls the Provider's model list where available (`/v1/models` for OpenAI-compatible endpoints and OpenAI; Anthropic and Google use a static list shipped with the app, refreshed with app updates) and lets the User type a model name manually when listing is unavailable.
 
@@ -173,4 +175,4 @@ On every completed or failed-after-first-byte request the Gateway writes one Usa
 
 ## 8. Conformance fixtures
 
-`packages/gateway` ships a **fake Provider** (an OpenAI-compatible HTTP server with scripted responses, including streaming and tool calls) used by its own tests, the Supervisor tests and the desktop E2E suite. Any Provider adapter change must keep the conformance suite green: identical inbound request → equivalent outbound semantics for text, tool calls, images, stop sequences and usage reporting.
+`packages/gateway` ships a **fake Provider** (an OpenAI-compatible HTTP server with scripted responses, including streaming and tool calls) used by its own tests, the Supervisor tests and the desktop E2E suite. Any Provider adapter change must keep the conformance suite green: identical inbound request → equivalent outbound semantics for text, tool calls, images, stop sequences and usage reporting. The suite runs one scenario set (text, streaming, tool calls, parallel tool calls, a stream without usage, images, Provider errors, rate limits, timeouts) through the Gateway against every Provider whose adapter speaks the OpenAI wire format (`openai`, `openrouter` and every OpenAI-compatible row of §6), with the fake standing in for the Provider; it reads the Provider list from the Provider table, so a new preset is covered automatically. Anthropic and Google are checked against canned answers in their own wire formats. The text, streaming and tool-call scenarios also run against real Anthropic, OpenAI and one OpenAI-compatible endpoint when a developer sets `CONFORMANCE_*` API keys; without them those tests are skipped, never failed.

@@ -3,7 +3,7 @@
  * import them. Imports the built `dist/` (run `pnpm build` first; CI builds before testing).
  */
 import { expect, it } from 'vitest';
-import { createGateway } from '@harness-store/gateway';
+import { PROVIDERS, PROVIDER_IDS, createGateway } from '@harness-store/gateway';
 import { startFakeProvider } from '@harness-store/gateway/testing/fake-provider';
 
 it('starts from @harness-store/gateway/testing/fake-provider, answers and stops', async () => {
@@ -47,4 +47,12 @@ it('serves the Model Gateway from @harness-store/gateway', async () => {
   } finally {
     await gateway.close();
   }
+});
+
+it('exports the Provider table and its ids for the desktop app', () => {
+  expect(PROVIDER_IDS).toHaveLength(14);
+  expect(PROVIDERS.find((provider) => provider.id === 'ollama')).toMatchObject({
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    requiresKey: false,
+  });
 });
