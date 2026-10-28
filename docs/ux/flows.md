@@ -11,7 +11,7 @@ Each flow lists steps, decision points and error branches. Screen details are in
 3. Optional remote Provider: choose a Provider from presets (Anthropic, OpenAI, Google, OpenRouter, DeepSeek, Qwen, Moonshot, Zhipu, MiniMax, Doubao, Groq, custom OpenAI-compatible), paste an API key, Test connection.
    - Test succeeds → Connection saved, model list loaded where supported.
    - Test fails → error inline with the Provider's message; options Retry, Edit, Skip.
-4. Bind the `default` Slot: a single picker over all reachable models grouped by Connection; preselects the first local model if any, else the first remote model. Skip allowed.
+4. Bind the `default` Slot: a single picker over the models of the Connections added in this run, grouped by Connection, with "Type a model name"; preselects the first local model if any, else the first remote model. Skip allowed.
 5. Done screen summarising Connections and the Default Model. Button: Open Store. Lands on Store home.
 
 **Decision points:** every step has Skip. If the wizard ends with no Connection, the Store still works; Install is allowed; Launch is blocked with "Set up a model first" (see F3).

@@ -45,7 +45,7 @@ React single-page app. No business logic beyond view state; every action goes th
 - **Installer**: downloads a Harness Package from the Store (signed URL), verifies sha256, unpacks into the install directory, records the install, and drives the permission-consent step. Also supports "install from local folder" for Publishers testing their own Harness.
 - **Process Supervisor**: spawns the Harness Entry with the injected environment (§4), owns its window (web or terminal UI Kind), enforces single instance, kills the process when the window closes, and cleans up Gateway Tokens.
 - **Model Gateway**: see [`gateway-protocol.md`](./gateway-protocol.md). Implemented in `packages/gateway` as a framework-independent Node HTTP server so it can be tested without Electron and later reused server-side (P2).
-- **Local store**: SQLite database in the app data directory for installs, Slot Bindings, Usage Records, settings and Provider Connection metadata. Secrets (API keys) are encrypted with Electron `safeStorage` and stored as opaque blobs.
+- **Local store**: SQLite database in the app data directory for installs, Slot Bindings, Usage Records, settings and Provider Connection metadata. Secrets (API keys) are encrypted with Electron `safeStorage` and stored as opaque blobs; when OS encryption is unavailable (on Linux also when its backend is `basic_text`), the Runtime refuses to store a key rather than keep it in plaintext.
 
 ### 2.3 Store (Supabase)
 - **Auth**: GitHub OAuth only. Only Publishers sign in; browsing and installing are anonymous.
@@ -104,7 +104,7 @@ Node Harnesses are executed with the Runtime's bundled Node LTS (`<bundled node>
 
 ## 5. Model resolution (summary; normative text in gateway-protocol.md)
 
-`model` in a request is either a Slot name declared in the Manifest or an explicit `provider/model` id. For a Slot, the Gateway resolves, in order: the User's Model Override for (Harness, Slot) → the first Recommended Model whose Provider has a Connection → the User's Default Model for that Slot name → the User's Default Model for `default` → error `slot_unbound`. Model Requirements are checked in the UI when binding and surfaced as warnings; the Gateway does not refuse a request on requirement mismatch.
+`model` in a request is either a Slot name declared in the Manifest or an explicit `provider/model` id. For a Slot, the Gateway resolves, in order: the User's Model Override for (Harness, Slot) → the first Recommended Model whose Provider has an enabled Connection → the User's Default Model for that Slot name → the User's Default Model for `default` → error `slot_unbound`; a binding whose Connection is disabled or removed is skipped. Model Requirements are checked in the UI when binding and surfaced as warnings; the Gateway does not refuse a request on requirement mismatch.
 
 ## 6. Data flows
 

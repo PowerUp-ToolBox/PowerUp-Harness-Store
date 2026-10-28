@@ -161,15 +161,16 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Manage Connections, Default Models and per-Harness Model Overrides.
 
-**Elements.** Section Connections (list with status, Test, Edit, Remove; Add Connection). Section Default Models (row per Slot name with picker and requirement warnings). Section Per-Harness Overrides (expandable per installed Harness: Slots, description, requirements, resolution reason, picker, Clear override). Every picker has "Type a model name".
+**Elements.** Section Connections (list with status, Test, Edit, Enable/Disable, Remove; Add Connection opens a dialog with a preset picker, then the Provider's fields, Test connection and Save, enabled once the test passed; a saved key shows only as "Key stored encrypted on this machine" with its last 4 characters). Local Providers panel (Ollama and LM Studio found on this machine, each with Add, or "Added" when it already has a Connection; Detect again). Section Default Models (`default` first and always, then every other globally bound Slot name, each with a picker that includes "Not set", and requirement warnings; the resolution order is explained above the rows). Section Per-Harness Overrides (expandable per installed Harness: Slots, description, requirements, resolution reason, picker, Clear override). Every picker has "Type a model name".
 
-**States.** Empty Connections: "Add a Connection to run Harnesses". Detecting local Providers (inline spinner in Add sheet). Test in progress / succeeded / failed with Provider message. Requirement warning (yellow, non-blocking). Remove Connection confirmation naming affected Slots.
+**States.** Empty Connections: "Add a Connection to run Harnesses". Detecting local Providers (inline spinner in the Local Providers panel; nothing found → install guidance and Detect again). Status of a Connection, in order: Disabled, Connection failed (with the Provider's message), Local, Connected, Not tested. A Default Model whose Connection is disabled is kept and marked "Connection disabled". OS encryption unavailable → adding a key is refused with guidance to enable an OS keyring. Test in progress / succeeded / failed with Provider message. Requirement warning (yellow, non-blocking). Remove Connection confirmation naming affected Slots.
 
 **Key copy.**
 - Add Connection / 添加模型连接 · Test connection / 测试连接 · Connected / 已连接 · Local / 本地 · Connection failed / 连接失败
 - Default Models / 默认模型 · Overrides for this Harness / 此 Harness 的槽位覆盖 · Uses: Recommended / 来源：推荐模型 · Uses: Default / 来源：默认模型 · Uses: Override / 来源：手动覆盖 · Clear override / 清除覆盖
 - "This model may not meet the requirements of …'s `default` Slot (tool calling)." / "此模型可能不满足 … 的 `default` 槽位要求（工具调用）。"
 - Type a model name / 手动输入模型名称
+- Local Providers / 本地 Provider · Detect again / 重新检测 · Disabled / 已停用 · Not tested / 未测试 · Enable / 启用 · Disable / 停用 · Not set / 未设置 · Connection disabled / 模型连接已停用 · Key stored encrypted on this machine / Key 已加密保存在本机
 
 ---
 
