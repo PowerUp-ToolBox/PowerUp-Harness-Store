@@ -19,10 +19,11 @@ import { once } from 'node:events';
 import { readdirSync, readFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import type { Server } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
+import { connect, createServer as createNetServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { createGateway } from '@harness-store/gateway';
 import type { Binding, Gateway } from '@harness-store/gateway';
 import { startFakeProvider } from '@harness-store/gateway/testing/fake-provider';
@@ -114,6 +115,20 @@ describe('the guide', () => {
       'harness-store/hello-term',
       'alice/first-harness',
     ]);
+  });
+
+  it('names every field in which hello-term’s Manifest differs from hello-web’s', () => {
+    const web = exampleManifest('hello-web') as Record<string, unknown>;
+    const term = exampleManifest('hello-term') as Record<string, unknown>;
+    const differing = [...new Set([...Object.keys(web), ...Object.keys(term)])].filter(
+      (key) => JSON.stringify(web[key]) !== JSON.stringify(term[key]),
+    );
+    expect(differing.sort()).toEqual(
+      ['id', 'name', 'summary', 'sourceRepo', 'ui', 'workspace', 'models'].sort(),
+    );
+    expect(guide).toContain(
+      'Apart from its identity fields (`id`, `name`, `summary` and `sourceRepo`), [`hello-term`](../../examples/hello-term/manifest.json) differs in three fields: its UI Kind is `terminal`',
+    );
   });
 
   it('holds only valid Manifests, with no problems and no warnings', () => {
@@ -327,14 +342,25 @@ describe('the guide’s snippets against a real Model Gateway', () => {
       ({ port } = probe.address() as AddressInfo);
       await new Promise((resolve) => probe.close(resolve));
       vi.stubEnv('HARNESS_PORT', String(port));
+      // Not the suite's 'en', which is also getContext()'s fallback: the page must follow the launch.
+      vi.stubEnv('HARNESS_LOCALE', 'zh-CN');
       await run('web-server.ts');
       const [server] = servers;
       if (server === undefined) throw new Error('web-server.ts created no server');
       if (!server.listening) await once(server, 'listening');
     });
 
-    /** A request to the snippet's server, with `headers` exactly as given (Host included). */
-    function send(method: string, path: string, headers: Record<string, string>, body = '') {
+    /**
+     * A request to the snippet's server, with `headers` exactly as given (Host included). A body
+     * given as several parts is sent in that many writes, a moment apart, so the server reads it
+     * in that many chunks.
+     */
+    function send(
+      method: string,
+      path: string,
+      headers: Record<string, string>,
+      body: string | Buffer[] = '',
+    ) {
       return new Promise<{ status: number; headers: Record<string, unknown>; text: string }>(
         (resolve, reject) => {
           const request = httpRequest(
@@ -349,7 +375,17 @@ describe('the guide’s snippets against a real Model Gateway', () => {
             },
           );
           request.on('error', reject);
-          request.end(body);
+          if (typeof body === 'string') {
+            request.end(body);
+            return;
+          }
+          void (async () => {
+            for (const part of body) {
+              request.write(part);
+              await sleep(50);
+            }
+            request.end();
+          })();
         },
       );
     }
@@ -362,7 +398,7 @@ describe('the guide’s snippets against a real Model Gateway', () => {
       expect(page.status).toBe(200);
       expect(page.headers['content-type']).toBe('text/html; charset=utf-8');
       expect(page.headers['content-security-policy']).toBe("connect-src 'self'");
-      expect(page.text).toContain('<html lang="en">');
+      expect(page.text).toContain('<html lang="zh-CN">');
       // The page never sees the Gateway's address or the Gateway Token.
       expect(page.text).not.toContain(token);
       expect(page.text).not.toContain(gatewayUrl);
@@ -382,6 +418,43 @@ describe('the guide’s snippets against a real Model Gateway', () => {
         JSON.stringify({ question: 'Hi again' }),
       );
       expect(local).toMatchObject({ status: 200, text: 'Hi again' });
+    });
+
+    it('reads a question whose characters are split across chunks', async () => {
+      const question = '你好，世界';
+      const body = Buffer.from(JSON.stringify({ question }));
+      // Cut inside the first character's three UTF-8 bytes.
+      const cut = body.indexOf(Buffer.from('你')) + 1;
+      const answer = await send('POST', '/ask', own(), [body.subarray(0, cut), body.subarray(cut)]);
+      expect(answer).toMatchObject({ status: 200, text: question });
+    });
+
+    it('keeps serving when a page goes away halfway through sending its question', async () => {
+      const rejections: unknown[] = [];
+      const onRejection = (reason: unknown) => rejections.push(reason);
+      process.on('unhandledRejection', onRejection);
+      try {
+        const socket = connect(port, '127.0.0.1');
+        await once(socket, 'connect');
+        socket.write(
+          `POST /ask HTTP/1.1\r\nHost: 127.0.0.1:${String(port)}\r\n` +
+            'Content-Type: application/json\r\nContent-Length: 100\r\n\r\n{"question":',
+        );
+        await sleep(50);
+        socket.destroy();
+        await sleep(50);
+        expect(rejections).toEqual([]);
+        expect(chatRequests()).toHaveLength(0);
+        const answer = await send(
+          'POST',
+          '/ask',
+          own(),
+          JSON.stringify({ question: 'Still here' }),
+        );
+        expect(answer).toMatchObject({ status: 200, text: 'Still here' });
+      } finally {
+        process.off('unhandledRejection', onRejection);
+      }
     });
 
     it('answers no one else: another Host, or a body that is not JSON', async () => {

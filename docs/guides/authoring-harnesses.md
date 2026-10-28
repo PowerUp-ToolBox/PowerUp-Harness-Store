@@ -170,7 +170,7 @@ The Manifest is `manifest.json` at the root of the Harness Package. This is the 
 | Field | In `hello-web` | What it means |
 |---|---|---|
 | `manifestVersion` | `1` | The format version. Always `1` for now. |
-| `id` | `harness-store/hello-web` | The **Harness ID**, `publisher/slug`. The publisher segment must be the GitHub login you publish with, in lower case; the slug is 3–40 lower-case letters, digits and hyphens. It never changes for the life of the Harness. |
+| `id` | `harness-store/hello-web` | The **Harness ID**, `publisher/slug`. The publisher segment must be the GitHub login you publish with, in lower case (1–39 lower-case letters, digits and hyphens, starting with a letter or digit); the slug is 3–40 lower-case letters, digits and hyphens, starting and ending with a letter or digit. It never changes for the life of the Harness. |
 | `version` | `0.1.0` | The **Harness Version**, strict semver without a `v`. Every published version must be greater than the last. |
 | `name` | `Hello Web` | The display name, 2–40 characters. |
 | `summary` | one sentence | Shown in lists, at most 120 characters. |
@@ -185,7 +185,7 @@ The Manifest is `manifest.json` at the root of the Harness Package. This is the 
 | `models` | one `default` Slot | The **Model Slots** the Harness asks the Gateway for, each with a `description`, its **Model Requirements** and optional **Recommended Models** (section 6). A `default` Slot is mandatory. |
 | `permissions` | all at their minimum | The **Declared Permissions**: `filesystem.scope` (`none`, `workspace`, `home` or `paths` with a list), `shell` (runs commands or not) and `network` (`domains`, or `any: true`). All three keys are required. Model calls through the Gateway are never declared. |
 
-[`hello-term`](../../examples/hello-term/manifest.json) differs in three fields: its UI Kind is `terminal` (the Runtime runs it in a pty inside an embedded terminal, and stdin and stdout are its whole UI; there is no port), its Workspace is `optional` (the User may pick a folder or continue without one), and its Slot description says what the model does there:
+Apart from its identity fields (`id`, `name`, `summary` and `sourceRepo`), [`hello-term`](../../examples/hello-term/manifest.json) differs in three fields: its UI Kind is `terminal` (the Runtime runs it in a pty inside an embedded terminal, and stdin and stdout are its whole UI; there is no port), its Workspace is `optional` (the User may pick a folder or continue without one), and its Slot description says what the model does there:
 
 ```json
 {
@@ -447,9 +447,10 @@ const page = `<!doctype html>
 </script>
 </html>`;
 
-// Only this Harness's own page may call /ask: a page on another site cannot send JSON here
-// without a CORS preflight, which this server never answers, and a rebound DNS name arrives
-// with another Host.
+// Of the pages in a browser, only this Harness's own page may call /ask: a page on another site
+// cannot send JSON here without a CORS preflight, which this server never answers, and a rebound
+// DNS name arrives with another Host. This is not authentication: a local program can still call
+// /ask.
 function fromOwnPage(request: IncomingMessage): boolean {
   const host = request.headers.host;
   return (
@@ -464,10 +465,12 @@ async function ask(request: IncomingMessage, response: ServerResponse): Promise<
   response.on('close', () => {
     controller.abort(); // the page went away: stop the model call too
   });
-  let body = '';
-  for await (const chunk of request) body += String(chunk);
   response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   try {
+    // Read the body inside the try: a page that goes away mid-upload makes this throw.
+    let body = '';
+    request.setEncoding('utf8'); // decodes a character split across two chunks correctly
+    for await (const chunk of request) body += chunk as string;
     const { question } = JSON.parse(body) as { question: string };
     const stream = await openai.chat.completions.create(
       { model: Slots.default, messages: [{ role: 'user', content: question }], stream: true },
@@ -506,10 +509,12 @@ server.on('error', (error) => {
 });
 ```
 
-Guard your server's model routes. Any program on the User's machine, and any web page the User opens in a browser, can send requests to `127.0.0.1:<port>`, and each answered request spends the User's tokens. Two checks keep your own page the only caller:
+Guard your server's model routes. Any web page the User opens in a browser can send requests to `127.0.0.1:<port>`, and each answered request spends the User's tokens. Two checks keep other web pages out, so that in the browser your own page is the only caller:
 
 - **Require `Content-Type: application/json`.** A page on another site can send such a request only after a CORS preflight, which your server never answers, so the browser never sends it.
 - **Require `Host` to be `127.0.0.1:<port>` or `localhost:<port>`.** This stops DNS rebinding, where another site's name is pointed at `127.0.0.1` and its pages talk to your server as their own origin.
+
+These checks are not authentication. A program running on the User's machine sets any `Host` and `Content-Type` it likes and passes both; such a program already runs with the User's permissions (section 7), so do not put anything behind these routes that you would not let it reach.
 
 Also send a `Content-Security-Policy` with `connect-src 'self'` and load nothing from other origins (no CDN, no web fonts), so the page works offline and talks to no one but your server. [`hello-web`](../../examples/hello-web/src) does all of this with a full chat UI: Server-Sent Events, history kept in the page, a size limit on request bodies, en/zh-CN strings and the model that answered.
 

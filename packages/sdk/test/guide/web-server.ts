@@ -35,9 +35,10 @@ const page = `<!doctype html>
 </script>
 </html>`;
 
-// Only this Harness's own page may call /ask: a page on another site cannot send JSON here
-// without a CORS preflight, which this server never answers, and a rebound DNS name arrives
-// with another Host.
+// Of the pages in a browser, only this Harness's own page may call /ask: a page on another site
+// cannot send JSON here without a CORS preflight, which this server never answers, and a rebound
+// DNS name arrives with another Host. This is not authentication: a local program can still call
+// /ask.
 function fromOwnPage(request: IncomingMessage): boolean {
   const host = request.headers.host;
   return (
@@ -52,10 +53,12 @@ async function ask(request: IncomingMessage, response: ServerResponse): Promise<
   response.on('close', () => {
     controller.abort(); // the page went away: stop the model call too
   });
-  let body = '';
-  for await (const chunk of request) body += String(chunk);
   response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   try {
+    // Read the body inside the try: a page that goes away mid-upload makes this throw.
+    let body = '';
+    request.setEncoding('utf8'); // decodes a character split across two chunks correctly
+    for await (const chunk of request) body += chunk as string;
     const { question } = JSON.parse(body) as { question: string };
     const stream = await openai.chat.completions.create(
       { model: Slots.default, messages: [{ role: 'user', content: question }], stream: true },
