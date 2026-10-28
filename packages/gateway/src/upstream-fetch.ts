@@ -27,10 +27,13 @@ export interface UpstreamFetch {
 }
 
 /**
- * A `fetch` with the Gateway's timeouts. The caller's own signal (the AI SDK passes the request's
- * abort signal) still aborts the call.
+ * A `fetch` with the Gateway's timeouts, over `base` (default: the global `fetch`). The caller's
+ * own signal (the AI SDK passes the request's abort signal) still aborts the call.
  */
-export function createUpstreamFetch({ firstByteMs, idleMs }: UpstreamTimeouts): UpstreamFetch {
+export function createUpstreamFetch(
+  { firstByteMs, idleMs }: UpstreamTimeouts,
+  base: typeof globalThis.fetch = globalThis.fetch,
+): UpstreamFetch {
   let attempted = false;
   let timedOut = false;
   let status: number | undefined;
@@ -61,7 +64,7 @@ export function createUpstreamFetch({ firstByteMs, idleMs }: UpstreamTimeouts): 
     let response: Response;
     arm(firstByteMs);
     try {
-      response = await fetch(input, { ...init, signal: controller.signal });
+      response = await base(input, { ...init, signal: controller.signal });
     } catch (error) {
       cleanup();
       throw error;

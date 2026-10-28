@@ -5,6 +5,9 @@ import type { Locale } from '../../src/shared/i18n/locale.js';
 import type {
   ConnectionDraft,
   ConnectionSummary,
+  ConnectionTestDraft,
+  ConnectionTestPassed,
+  ConnectionTestRequest,
   ConnectionUpdate,
   Connectivity,
   ConnectivityState,
@@ -14,6 +17,7 @@ import type {
   IpcEvents,
   IpcResult,
   LocalProvider,
+  ModelInfo,
   ProviderPreset,
   Settings,
   SettingsPatch,
@@ -43,6 +47,7 @@ export const FAKE_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://docs.claude.com/en/api/overview',
     supportsModelList: false,
     keyPlaceholder: 'sk-ant-...',
+    needsTestModel: false,
   },
   {
     id: 'openai',
@@ -54,6 +59,7 @@ export const FAKE_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://platform.openai.com/docs/api-reference',
     supportsModelList: true,
     keyPlaceholder: 'sk-...',
+    needsTestModel: false,
   },
   {
     id: 'ollama',
@@ -65,6 +71,7 @@ export const FAKE_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://docs.ollama.com/api/openai-compatibility',
     supportsModelList: true,
     keyPlaceholder: '',
+    needsTestModel: false,
   },
   {
     id: 'openai-compatible',
@@ -76,8 +83,23 @@ export const FAKE_PRESETS: readonly ProviderPreset[] = [
     docsUrl: 'https://platform.openai.com/docs/api-reference/chat',
     supportsModelList: true,
     keyPlaceholder: '',
+    needsTestModel: false,
   },
 ];
+
+/** A Provider that lists no models and has no catalogue: its test needs a model name. */
+export const ZHIPU_PRESET: ProviderPreset = {
+  id: 'zhipu',
+  displayName: 'Zhipu AI (GLM)',
+  requiresKey: true,
+  custom: false,
+  local: false,
+  baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+  docsUrl: 'https://docs.bigmodel.cn/cn/guide/develop/openai/introduction',
+  supportsModelList: false,
+  keyPlaceholder: '',
+  needsTestModel: true,
+};
 
 /** A saved Connection as `connections.list` answers it; `overrides` change any field. */
 export function connectionSummary(
@@ -109,7 +131,8 @@ export interface FakeApiOptions {
  * A fake `window.api` whose settings behave like the Runtime's: `osLocale` stands in for
  * `app.getLocale()` and an override set through `settings.set` wins over it. The Runtime started
  * fine, the Store is online, there are no Connections or Slot Bindings, detection finds nothing,
- * and changing Connections answers `not_implemented`; a test changes `app.status`,
+ * changing Connections answers `not_implemented`, every test passes finding no models and no
+ * Connection lists any; a test changes `app.status`,
  * `diagnostics.get`, the `connectivity`, `connections` or `bindings` methods before rendering to
  * say otherwise, and pushes events with `emit`.
  */
@@ -174,6 +197,15 @@ export function installFakeApi(
       ),
       remove: vi.fn((id: string): Promise<IpcResult<null>> =>
         notImplemented('connections.remove', id),
+      ),
+      test: vi.fn((request: ConnectionTestRequest): Promise<IpcResult<ConnectionSummary>> =>
+        notImplemented('connections.test', request.id),
+      ),
+      testDraft: vi.fn<(draft: ConnectionTestDraft) => Promise<IpcResult<ConnectionTestPassed>>>(
+        () => Promise.resolve({ ok: true, data: { models: [] } }),
+      ),
+      models: vi.fn<(id: string) => Promise<IpcResult<readonly ModelInfo[]>>>(() =>
+        Promise.resolve({ ok: true, data: [] }),
       ),
     },
     bindings: {

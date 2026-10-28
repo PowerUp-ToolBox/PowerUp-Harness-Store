@@ -125,6 +125,19 @@ One table, `PROVIDERS` ([`src/providers.ts`](src/providers.ts), exported for the
 
 A new OpenAI-compatible preset is one new row with `adapter: 'openai-compatible'` (and a new line in protocol §6): nothing else changes.
 
+### Connection tests, model listing and the catalogue
+
+For the desktop app's Models page, [`src/connection-check.ts`](src/connection-check.ts) exports `testConnection` and `listModels`. Both take the Connection (`providerId`, `apiKey?`, `baseUrl?`), the `fetch` to use (the desktop app passes Node's, the one upstream calls use) and a 15 s timeout (`CHECK_TIMEOUT_MS`), and go through `createUpstreamFetch`, the adapters and `providerError`, so what they report is the Provider's own error text with the key redacted, followed by the error's causes (`fetch failed: connect ECONNREFUSED 127.0.0.1:11434`).
+
+| Provider                                                       | `testConnection`                                                        | `listModels`                       |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------- | ---------------------------------- |
+| OpenRouter                                                     | `GET {baseUrl}/key` (its `/models` answers without a key), then listing | `GET {baseUrl}/models`             |
+| Every other row with `supportsModelList` (OpenAI, Ollama, ...) | `GET {baseUrl}/models`, Bearer key when there is one                    | the same, `data[].id`              |
+| Anthropic, Google                                              | 1-token completion to the catalogue's test model                        | `MODEL_CATALOGUE`, no network call |
+| Zhipu, MiniMax, Doubao (`needsTestModel`)                      | 1-token completion to a model the User names                            | empty: the User types a name       |
+
+[`src/catalogue.ts`](src/catalogue.ts) holds `MODEL_CATALOGUE`, the static `{ id, contextWindow, tools, vision }` entries for Anthropic and Google, shipped with the app and changed only with app updates; the smallest entry of each is marked `test`. `pnpm test:catalogues` checks its shape, `pnpm test:connection-check` the tests and listings against the fake Provider and canned Anthropic, Google and OpenRouter answers.
+
 ### Conformance suite
 
 [`test/conformance.test.ts`](test/conformance.test.ts) runs one scenario set (echo, streamed echo, tool call streamed and not, parallel tool calls, stream without usage, images, Provider 500, rate limit, timeout) through the Gateway against every row whose adapter speaks the OpenAI wire format (`openai`, `openrouter`, `openai-compatible`), each with its Connection pointed at the fake Provider. [`test/providers.test.ts`](test/providers.test.ts) checks every row's endpoint and credentials, a throwaway preset row, and Anthropic and Google against canned answers in their own wire formats.
@@ -183,10 +196,12 @@ The request's `model` picks a scenario by exact name (an unknown name gets 404 `
 
 ## Scripts
 
-| Command          | What it does                                                                                                                                                                                                                                                                |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm test`      | Vitest over `test/` (offline: a connection beyond loopback throws); run `pnpm build` first                                                                                                                                                                                  |
-| `pnpm lint`      | ESLint with the shared root config (type-aware; run `pnpm build` first)                                                                                                                                                                                                     |
-| `pnpm typecheck` | `tsc --noEmit` against `tsconfig.json` (sources and tests); run `pnpm build` first                                                                                                                                                                                          |
-| `pnpm build`     | Emits `dist/` from `tsconfig.build.json`; the tests import the package by its own name, which resolves to `dist/`                                                                                                                                                           |
-| `pnpm bench`     | [`scripts/bench.mjs`](scripts/bench.mjs) against `dist/`: startup (< 300 ms) and the median overhead of 200 sequential non-streaming calls through the Gateway versus straight to the fake (< 20 ms), Usage Records on; exits non-zero over budget. Not part of `pnpm test` |
+| Command                      | What it does                                                                                                                                                                                                                                                                |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm test`                  | Vitest over `test/` (offline: a connection beyond loopback throws); run `pnpm build` first                                                                                                                                                                                  |
+| `pnpm test:catalogues`       | Only the static model catalogue's shape tests                                                                                                                                                                                                                               |
+| `pnpm test:connection-check` | Only the Connection test and model listing tests                                                                                                                                                                                                                            |
+| `pnpm lint`                  | ESLint with the shared root config (type-aware; run `pnpm build` first)                                                                                                                                                                                                     |
+| `pnpm typecheck`             | `tsc --noEmit` against `tsconfig.json` (sources and tests); run `pnpm build` first                                                                                                                                                                                          |
+| `pnpm build`                 | Emits `dist/` from `tsconfig.build.json`; the tests import the package by its own name, which resolves to `dist/`                                                                                                                                                           |
+| `pnpm bench`                 | [`scripts/bench.mjs`](scripts/bench.mjs) against `dist/`: startup (< 300 ms) and the median overhead of 200 sequential non-streaming calls through the Gateway versus straight to the fake (< 20 ms), Usage Records on; exits non-zero over budget. Not part of `pnpm test` |

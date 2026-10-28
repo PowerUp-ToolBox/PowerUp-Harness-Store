@@ -13,6 +13,7 @@ import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createSqliteSettingsStore } from '../../src/main/runtime/settings-store.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { offlineProviderFetch } from '../support/provider-fetch.js';
 
 const MAIN_WINDOW = {};
 
@@ -37,6 +38,7 @@ async function launch(options: Partial<RuntimeOptions> & Pick<RuntimeOptions, 'f
     quit: () => undefined,
     logError: () => undefined,
     secretCipher: createFakeCipher(),
+    providerFetch: offlineProviderFetch,
     ...options,
   });
   started.push(runtime);

@@ -21,6 +21,8 @@ const FAKE_KEY = 'fake-provider-key-0123456789';
 
 let dataDir: string;
 let fake: FakeProvider;
+/** A fake Provider that wants no key, as Ollama. */
+let keyless: FakeProvider;
 let runtime: Runtime;
 let gateway: Gateway;
 let token: string;
@@ -28,6 +30,7 @@ let token: string;
 beforeEach(async () => {
   dataDir = join(mkdtempSync(join(tmpdir(), 'harness-store-gateway-seam-')), 'userData');
   fake = await startFakeProvider({ apiKey: FAKE_KEY });
+  keyless = await startFakeProvider();
   let created: Gateway | undefined;
   runtime = await startRuntime({
     dataDir,
@@ -36,6 +39,8 @@ beforeEach(async () => {
     quit: () => undefined,
     logError: () => undefined,
     fetch: () => Promise.reject(new TypeError('fetch failed')),
+    // Connection tests reach the fake Providers on loopback, nothing else.
+    providerFetch: globalThis.fetch,
     secretCipher: createFakeCipher(),
     createGateway: (options) => {
       created = createGateway({
@@ -57,6 +62,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await runtime.shutdown();
   await fake.close();
+  await keyless.close();
   rmSync(join(dataDir, '..'), { recursive: true, force: true });
 });
 
@@ -107,12 +113,11 @@ describe('Connections and the Model Gateway', () => {
 
   it('a preset Connection with its own base URL reaches it (Ollama on another port)', async () => {
     await expect(
-      call('connections.add', { providerId: 'ollama', baseUrl: fake.url }),
+      call('connections.add', { providerId: 'ollama', baseUrl: keyless.url }),
     ).resolves.toMatchObject({ ok: true });
-    // The fake wants a key; Ollama sends none, so the fake's own 401 proves the request arrived.
     const response = await complete('ollama/fake/echo');
-    expect(response.status).toBe(502);
-    expect(fake.requests.at(-1)?.path).toBe('/v1/chat/completions');
+    expect(response.status).toBe(200);
+    expect(keyless.requests.at(-1)?.path).toBe('/v1/chat/completions');
   });
 
   it('disabling, enabling and removing apply to the next request; a removed key is gone', async () => {
@@ -122,6 +127,8 @@ describe('Connections and the Model Gateway', () => {
       baseUrl: fake.url,
       apiKey: FAKE_KEY,
     });
+    // The add's own test (GET /models) is not a Gateway request.
+    fake.reset();
     expect((await complete(MODEL)).status).toBe(200);
 
     await call('connections.update', { id: 'openai-compatible:fake', enabled: false });
@@ -142,27 +149,54 @@ describe('Connections and the Model Gateway', () => {
     expect(fake.requests).toHaveLength(2);
   });
 
-  it('a replaced key is used by the next request', async () => {
+  it('a key that fails its test is refused with the Provider text, and the stored one keeps working', async () => {
     await call('connections.add', {
       providerId: 'openai-compatible',
       displayName: 'Fake',
       baseUrl: fake.url,
       apiKey: FAKE_KEY,
     });
-    await call('connections.update', {
-      id: 'openai-compatible:fake',
-      apiKey: 'an-outdated-key-0123456789',
+    await expect(
+      call('connections.update', {
+        id: 'openai-compatible:fake',
+        apiKey: 'an-outdated-key-0123456789',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_error', params: { detail: 'Incorrect API key provided.' } },
     });
-    const response = await complete(MODEL);
-    expect(response.status).toBe(502);
-    expect(response.body.error).toMatchObject({
-      code: 'provider_error',
-      provider_message: 'Incorrect API key provided.',
-    });
+    expect((await complete(MODEL)).status).toBe(200);
+    expect(fake.requests.at(-1)?.headers.authorization).toBe(`Bearer ${FAKE_KEY}`);
+  });
+
+  it('a replaced key and base URL that pass their test are used by the next request', async () => {
+    const moved = await startFakeProvider({ apiKey: 'the-new-key-0123456789' });
+    try {
+      await call('connections.add', {
+        providerId: 'openai-compatible',
+        displayName: 'Fake',
+        baseUrl: fake.url,
+        apiKey: FAKE_KEY,
+      });
+      await expect(
+        call('connections.update', {
+          id: 'openai-compatible:fake',
+          baseUrl: moved.url,
+          apiKey: 'the-new-key-0123456789',
+        }),
+      ).resolves.toMatchObject({ ok: true, data: { keyHint: '6789', lastTestOk: true } });
+      expect((await complete(MODEL)).status).toBe(200);
+      expect(moved.requests.at(-1)).toMatchObject({
+        path: '/v1/chat/completions',
+        headers: { authorization: 'Bearer the-new-key-0123456789' },
+      });
+    } finally {
+      await moved.close();
+    }
   });
 
   it('a removed Connection leaves no Slot Binding pointing at it', async () => {
-    await call('connections.add', { providerId: 'ollama', baseUrl: fake.url });
+    await call('connections.add', { providerId: 'ollama', baseUrl: keyless.url });
     const db = new DatabaseSync(runtime.services.diagnostics.get().databasePath);
     try {
       db.prepare(
@@ -193,6 +227,7 @@ describe('Connections and the Model Gateway', () => {
     } finally {
       db.close();
     }
+    fake.reset();
     const response = await complete(MODEL);
     expect(response.status).toBe(500);
     expect(errorCode(response.body)).toBe('internal_error');

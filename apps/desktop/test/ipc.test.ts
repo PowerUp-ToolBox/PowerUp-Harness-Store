@@ -152,6 +152,25 @@ describe('IPC handlers against a fake service container', () => {
     });
   });
 
+  it.each([
+    ['connections.test', undefined],
+    ['connections.test', 'anthropic'],
+    ['connections.test', { id: 'anthropic', model: 7 }],
+    ['connections.test', { id: 'anthropic', apiKey: 'x' }],
+    ['connections.testDraft', undefined],
+    ['connections.testDraft', { id: 'anthropic' }],
+    ['connections.testDraft', { providerId: 'anthropic', apiKey: null }],
+    ['connections.testDraft', { providerId: 'anthropic', displayName: 'x' }],
+    ['connections.models', undefined],
+    ['connections.models', { id: 'anthropic' }],
+  ])('%s rejects %j as invalid_input', async (method, input) => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input', params: { method } },
+    });
+  });
+
   it('bindings.getGlobal returns the global Slot Bindings', async () => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method: 'bindings.getGlobal' })).resolves.toEqual({

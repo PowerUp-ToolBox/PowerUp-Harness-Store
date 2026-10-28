@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import type { ConnectionSummary, IpcError, ProviderPreset } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
@@ -24,8 +24,10 @@ export function ModelsPage() {
 /**
  * The Connections list: each with its Provider's monogram and name, a status (Disabled, Connection
  * failed with the Provider's text, Local, Connected, Not tested), where it points or that its key is
- * stored encrypted, and Edit, Enable or Disable, and Remove. The list is read from the Runtime when
- * the page opens and again after every change made here.
+ * stored encrypted, how many models it lists, and Test connection, Edit, Enable or Disable, and
+ * Remove. Test runs `connections.test`, which records the result on the Connection; where the
+ * Provider lists no models, it first asks for the model to test with. The list is read from the
+ * Runtime when the page opens and again after every change made here.
  */
 function ConnectionsSection() {
   const { t } = useI18n();
@@ -35,6 +37,8 @@ function ConnectionsSection() {
   const [dialog, setDialog] = useState<Dialog | null>(null);
   /** The Connection whose Enable or Disable is running. */
   const [toggling, setToggling] = useState<string | null>(null);
+  /** The Connection whose test is running. */
+  const [testing, setTesting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const result = await window.api.connections.list();
@@ -66,6 +70,18 @@ function ConnectionsSection() {
       enabled: !connection.enabled,
     });
     setToggling(null);
+    if (result.ok) await load();
+    else setError(result.error);
+  };
+
+  const runTest = async (connection: ConnectionSummary, model?: string) => {
+    setTesting(connection.id);
+    setError(null);
+    const result = await window.api.connections.test({
+      id: connection.id,
+      ...(model === undefined ? {} : { model }),
+    });
+    setTesting(null);
     if (result.ok) await load();
     else setError(result.error);
   };
@@ -103,6 +119,12 @@ function ConnectionsSection() {
             <ConnectionRow
               key={connection.id}
               connection={connection}
+              needsTestModel={
+                presets?.find((preset) => preset.id === connection.providerId)?.needsTestModel ===
+                true
+              }
+              testing={testing === connection.id}
+              onTest={(model) => void runTest(connection, model)}
               toggling={toggling === connection.id}
               onEdit={() => {
                 setDialog({ kind: 'edit', connection });
@@ -141,20 +163,43 @@ function ConnectionsSection() {
 
 function ConnectionRow({
   connection,
+  needsTestModel,
+  testing,
+  onTest,
   toggling,
   onEdit,
   onToggle,
   onRemove,
 }: {
   readonly connection: ConnectionSummary;
+  /** Whether its test needs a model name: the Provider lists none and is not catalogued. */
+  readonly needsTestModel: boolean;
+  readonly testing: boolean;
+  readonly onTest: (model?: string) => void;
   readonly toggling: boolean;
   readonly onEdit: () => void;
   readonly onToggle: () => void;
   readonly onRemove: () => void;
 }) {
   const { t } = useI18n();
+  const ids = useId();
   const name = connectionName(t, connection);
-  const status = connectionStatus(connection);
+  const status = testing ? 'testing' : connectionStatus(connection);
+  /** The inline "Model to test with", open while the User names one. */
+  const [askModel, setAskModel] = useState(false);
+  const [testModel, setTestModel] = useState('');
+  const [modelProblem, setModelProblem] = useState<'required' | 'invalid' | null>(null);
+
+  const submitTestModel = () => {
+    const model = testModel.trim();
+    if (model === '' || /\s/.test(model)) {
+      setModelProblem(model === '' ? 'required' : 'invalid');
+      return;
+    }
+    setModelProblem(null);
+    setAskModel(false);
+    onTest(model);
+  };
   // Where a local Provider or a custom endpoint runs is what tells it apart; a cloud Provider is
   // told apart by its name.
   const showUrl = connection.local || connection.providerId === CUSTOM_PROVIDER_ID;
@@ -171,6 +216,11 @@ function ConnectionRow({
           </span>
         </p>
         {showUrl ? <p className="connection-row-detail">{connection.baseUrl}</p> : null}
+        {connection.models.length > 0 ? (
+          <p className="connection-row-detail">
+            {t('models.models_loaded', { count: connection.models.length })}
+          </p>
+        ) : null}
         {connection.keyHint === null ? null : (
           <p className="connection-row-detail">
             <LockIcon />
@@ -186,6 +236,20 @@ function ConnectionRow({
         ) : null}
       </div>
       <div className="connection-row-actions">
+        <button
+          type="button"
+          className="button-secondary"
+          aria-label={t('models.test_named', { name })}
+          aria-expanded={needsTestModel ? askModel : undefined}
+          disabled={testing}
+          aria-busy={testing}
+          onClick={() => {
+            if (needsTestModel) setAskModel((open) => !open);
+            else onTest();
+          }}
+        >
+          {testing ? t('models.testing') : t('models.test')}
+        </button>
         <button
           type="button"
           className="button-secondary"
@@ -217,6 +281,40 @@ function ConnectionRow({
           {t('models.remove')}
         </button>
       </div>
+      {askModel ? (
+        <form
+          className="connection-row-test"
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault();
+            submitTestModel();
+          }}
+        >
+          <div className="field">
+            <label htmlFor={`${ids}-test-model`}>{t('models.test_model_for', { name })}</label>
+            <input
+              id={`${ids}-test-model`}
+              spellCheck={false}
+              autoComplete="off"
+              value={testModel}
+              aria-invalid={modelProblem !== null}
+              {...(modelProblem === null ? {} : { 'aria-describedby': `${ids}-test-model-error` })}
+              onChange={(event) => {
+                setTestModel(event.target.value);
+                setModelProblem(null);
+              }}
+            />
+            {modelProblem === null ? null : (
+              <p id={`${ids}-test-model-error`} className="field-error">
+                {t(`models.invalid.test_model_${modelProblem}`)}
+              </p>
+            )}
+          </div>
+          <button type="submit" className="button-secondary">
+            {t('models.test')}
+          </button>
+        </form>
+      ) : null}
     </li>
   );
 }

@@ -7,7 +7,13 @@ import type {
   LocalProvider,
   SettingsPatch,
 } from '../../src/shared/ipc.js';
-import { connectionSummary, installFakeApi, renderApp } from './render-app.js';
+import {
+  connectionSummary,
+  FAKE_PRESETS,
+  installFakeApi,
+  renderApp,
+  ZHIPU_PRESET,
+} from './render-app.js';
 
 const WELCOME = 'Run any AI agent on any model you already have.';
 const DETECT = 'Local Providers';
@@ -307,7 +313,7 @@ describe('Local Providers', () => {
     expect(picker.selectedOptions[0]?.textContent).toBe('qwen3:8b');
     expect(within(picker).getByRole('group', { name: 'Ollama' })).toBeDefined();
 
-    fireEvent.change(picker, { target: { value: '1' } });
+    fireEvent.change(picker, { target: { value: 'ollama/llama3.2:3b' } });
     await click('Continue');
     expect(heading()).toBe(DONE);
     const [connections, defaultModel] = screen.getAllByRole('definition');
@@ -503,7 +509,9 @@ describe('Remote Provider', () => {
     );
     await click('Continue');
     expect(heading()).toBe(DEFAULT_MODEL);
-    expect(screen.getByLabelText<HTMLSelectElement>('Default Model').value).toBe('0');
+    expect(screen.getByLabelText<HTMLSelectElement>('Default Model').value).toBe(
+      'anthropic/claude-sonnet-4-5',
+    );
 
     await click('Back');
     expect(screen.getByText('Connected: Anthropic')).toBeDefined();
@@ -591,6 +599,140 @@ describe('Remote Provider', () => {
     expect(screen.getByRole('button', { name: 'Test connection' }).hasAttribute('disabled')).toBe(
       false,
     );
+  });
+});
+
+describe('Remote Provider without a model list', () => {
+  it('asks for the model to test with, and adds the Connection with it', async () => {
+    const api = installFreshProfile();
+    api.providers.list.mockResolvedValue({ ok: true, data: [...FAKE_PRESETS, ZHIPU_PRESET] });
+    api.connections.add.mockImplementation(connectionFor('zhipu', 'Zhipu AI (GLM)', []));
+    await renderApp('');
+    await click('Continue');
+    await click('Skip');
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'zhipu' } });
+    fireEvent.change(screen.getByLabelText('API key'), {
+      target: { value: 'zhipu-key-0123456789' },
+    });
+    const test = screen.getByRole('button', { name: 'Test connection' });
+    expect(test.hasAttribute('disabled')).toBe(true);
+    fireEvent.change(screen.getByLabelText('Model to test with'), {
+      target: { value: 'glm-4.5' },
+    });
+    await click('Test connection');
+    expect(api.connections.add).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'zhipu',
+      apiKey: 'zhipu-key-0123456789',
+      testModel: 'glm-4.5',
+    });
+  });
+});
+
+describe('the Default Model picker', () => {
+  /** The wizard at its Default Model step, with `connection` added on the Remote Provider step. */
+  async function openDefaultStep(connection: ConnectionSummary) {
+    const api = installFreshProfile();
+    api.connections.add.mockResolvedValue({ ok: true, data: connection });
+    await renderApp('');
+    await click('Continue');
+    await click('Skip');
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-ant-0123' } });
+    await click('Continue');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(heading()).toBe(DEFAULT_MODEL);
+    return api;
+  }
+
+  const ANTHROPIC = connectionSummary({
+    id: 'anthropic',
+    models: ['claude-opus-5-5', 'claude-haiku-5-5'],
+  });
+
+  it("annotates the catalogue's models with context window, tool calling and vision", async () => {
+    const api = installFreshProfile();
+    api.connections.models.mockResolvedValue({
+      ok: true,
+      data: [
+        { id: 'claude-opus-5-5', contextWindow: 1_000_000, tools: true, vision: true },
+        { id: 'claude-haiku-5-5', contextWindow: 200_000, tools: true, vision: false },
+      ],
+    });
+    api.connections.add.mockResolvedValue({ ok: true, data: ANTHROPIC });
+    await renderApp('');
+    await click('Continue');
+    await click('Skip');
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-ant-0123' } });
+    await click('Continue');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.connections.models).toHaveBeenCalledWith('anthropic');
+    const picker = screen.getByLabelText<HTMLSelectElement>('Default Model');
+    expect(
+      within(within(picker).getByRole('group', { name: 'Anthropic' }))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual([
+      'claude-opus-5-5 · 1M context · tools · vision',
+      'claude-haiku-5-5 · 200K context · tools',
+    ]);
+  });
+
+  it('accepts any typed model name for a Connection, and keeps it as the choice', async () => {
+    await openDefaultStep(ANTHROPIC);
+    await click('Type a model name');
+    const typed = screen.getByRole('textbox', { name: 'Type a model name' });
+    expect(typed.getAttribute('placeholder')).toBe('provider/model, e.g. ollama/mistral:7b');
+
+    fireEvent.change(typed, { target: { value: 'my-nonsense-model' } });
+    await click('Use');
+    expect(
+      screen.getByText('Type it as provider/model, for example ollama/mistral:7b.'),
+    ).toBeDefined();
+    fireEvent.change(typed, { target: { value: 'groq/llama-4' } });
+    await click('Use');
+    expect(screen.getByText('No enabled Connection is called groq.')).toBeDefined();
+
+    fireEvent.change(typed, { target: { value: 'anthropic/my-nonsense-model:v0' } });
+    await click('Use');
+    const picker = screen.getByLabelText<HTMLSelectElement>('Default Model');
+    expect(picker.value).toBe('anthropic/my-nonsense-model:v0');
+    expect(picker.selectedOptions[0]?.textContent).toBe('my-nonsense-model:v0 (typed)');
+    await click('Continue');
+    expect(heading()).toBe(DONE);
+    expect(screen.getByText('my-nonsense-model:v0 on Anthropic')).toBeDefined();
+  });
+
+  it("says when a Connection's models cannot be listed, with the Provider's text", async () => {
+    const api = installFreshProfile();
+    api.connections.models.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'provider_error',
+        messageKey: 'error.provider_error',
+        params: { detail: 'Invalid API Key' },
+        message: 'The Provider answered with an error: Invalid API Key',
+      },
+    });
+    api.connections.add.mockResolvedValue({ ok: true, data: connectionSummary({ id: 'openai' }) });
+    await renderApp('');
+    await click('Continue');
+    await click('Skip');
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'openai' } });
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-0123' } });
+    await click('Continue');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByText('Could not list the models of OpenAI. You can still type a model name.'),
+    ).toBeDefined();
+    expect(screen.getByRole('alert').textContent).toBe(
+      'The Provider answered with an error: Invalid API Key',
+    );
+    expect(screen.getByRole('button', { name: 'Type a model name' })).toBeDefined();
   });
 });
 

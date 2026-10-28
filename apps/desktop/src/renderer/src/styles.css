@@ -1083,3 +1083,61 @@ input[aria-invalid='true'] {
   font-family: var(--font-mono);
   font-size: 13px;
 }
+
+/* A model picker: the select with "Type a model name", the typed entry, listing failures. */
+.model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.model-picker-row,
+.model-picker-typed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.model-picker-row select {
+  flex: 1 1 260px;
+  max-width: 480px;
+}
+
+.model-picker-typed input {
+  flex: 1 1 240px;
+  max-width: 340px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.model-picker-typed .field-error {
+  flex-basis: 100%;
+}
+
+.model-picker-failed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* A passed Connection test, next to its Test button. */
+.test-passed {
+  color: var(--color-success);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* A Connection row's inline "Model to test with". */
+.connection-row-test {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.connection-row-test .field {
+  flex: 0 1 280px;
+}

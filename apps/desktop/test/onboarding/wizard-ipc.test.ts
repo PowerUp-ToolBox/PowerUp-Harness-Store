@@ -10,6 +10,7 @@ import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { parseSettingsPatch } from '../../src/main/runtime/settings.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { anthropicProviderFetch } from '../support/provider-fetch.js';
 
 const MAIN_WINDOW = {};
 
@@ -35,6 +36,8 @@ async function launch(): Promise<Runtime> {
     logError: () => undefined,
     fetch: () => Promise.reject(new TypeError('fetch failed')),
     secretCipher: createFakeCipher(),
+    // The Remote Provider step's Anthropic Connection is tested against a canned reply.
+    providerFetch: anthropicProviderFetch,
   });
   started.push(runtime);
   return runtime;
@@ -143,8 +146,14 @@ describe('providers.list', () => {
       docsUrl: 'https://docs.claude.com/en/api/overview',
       supportsModelList: false,
       keyPlaceholder: 'sk-ant-...',
+      needsTestModel: false,
     });
     expect(presets.find((preset) => preset.custom)).toMatchObject({ baseUrl: null });
+    expect(presets.filter((preset) => preset.needsTestModel).map((preset) => preset.id)).toEqual([
+      'zhipu',
+      'minimax',
+      'doubao',
+    ]);
   });
 
   it('follows the table it is given', () => {

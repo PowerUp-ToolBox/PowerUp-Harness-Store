@@ -81,8 +81,8 @@ export interface IpcMethods {
    */
   'connections.list': { input: undefined; output: readonly ConnectionSummary[] };
   /**
-   * Checks the draft, tests the Connection and saves it when the test passes; a failed test stores
-   * nothing and answers `provider_error`. Adding a Provider that allows one Connection and already
+   * Checks the draft, tests the Connection and saves it, with the passed test, when the test
+   * passes; a failed test stores nothing and answers `provider_error`. Adding a Provider that allows one Connection and already
    * has it edits that Connection in place (and enables it). A key is stored only encrypted:
    * without OS encryption, a draft with a key answers `encryption_unavailable`.
    */
@@ -92,6 +92,25 @@ export interface IpcMethods {
    * passes; a change of `enabled` or `displayName` alone is saved without a test.
    */
   'connections.update': { input: ConnectionUpdate; output: ConnectionSummary };
+  /**
+   * Tests a saved Connection with one small real request and stores the result
+   * (`lastTestedAt`, `lastTestOk`, `lastTestError`). A failed test is not an IPC failure: the
+   * Connection comes back with `lastTestOk: false` and the Provider's text in `lastTestError`.
+   * `model` names the model to test with, required where the Provider `needsTestModel`.
+   */
+  'connections.test': { input: ConnectionTestRequest; output: ConnectionSummary };
+  /**
+   * Tests what a Connection form holds, without saving anything: for a new Connection, or for the
+   * saved one `id` with the fields left out taken from it (its stored key included). A failed test
+   * answers `provider_error` with the Provider's text.
+   */
+  'connections.testDraft': { input: ConnectionTestDraft; output: ConnectionTestPassed };
+  /**
+   * The models a Connection offers: the app's catalogue for Anthropic and Google, a live listing
+   * where the Provider lists its models (reused for 10 minutes), else none. A failed listing
+   * answers `provider_error` with the Provider's text; the User can still type a model name.
+   */
+  'connections.models': { input: string; output: readonly ModelInfo[] };
   /**
    * Deletes the Connection with this id, its secret and every Slot Binding that uses it, at once.
    * An unknown id is `invalid_input`.
@@ -167,6 +186,11 @@ export interface ProviderPreset {
   readonly supportsModelList: boolean;
   /** What the Provider's keys look like, for the key field's placeholder; `''` when unknown. */
   readonly keyPlaceholder: string;
+  /**
+   * Whether a Connection test needs a model name from the User: the Provider neither lists its
+   * models nor is in the app's catalogue (Zhipu, MiniMax, Doubao).
+   */
+  readonly needsTestModel: boolean;
 }
 
 /** A local Provider found running on this machine, not yet added as a Connection. */
@@ -189,6 +213,8 @@ export interface ConnectionDraft {
   readonly displayName?: string;
   /** Required for the custom endpoint; absent or empty means the Provider's default. */
   readonly baseUrl?: string;
+  /** The model the test sends a 1-token completion to; required where `needsTestModel`. */
+  readonly testModel?: string;
 }
 
 /** A change to a saved Connection; absent fields keep their value. */
@@ -201,6 +227,43 @@ export interface ConnectionUpdate {
   /** A new base URL; empty means the Provider's default (the custom endpoint has none). */
   readonly baseUrl?: string;
   readonly enabled?: boolean;
+  /** The model to test a new key or base URL with; required there where `needsTestModel`. */
+  readonly testModel?: string;
+}
+
+/** Which saved Connection to test, and with which model. */
+export interface ConnectionTestRequest {
+  readonly id: string;
+  /** Required where the Provider `needsTestModel`; else the test needs none. */
+  readonly model?: string;
+}
+
+/** The Connection a form describes, to test before it is saved. */
+export interface ConnectionTestDraft {
+  /** The saved Connection being edited: what the draft leaves out is taken from it. */
+  readonly id?: string;
+  readonly providerId: string;
+  readonly apiKey?: string;
+  /** Absent: the saved Connection's, else the Provider's default; empty: the default. */
+  readonly baseUrl?: string;
+  readonly testModel?: string;
+}
+
+/** A passed test of a draft: the models it found (the catalogue for Anthropic and Google). */
+export interface ConnectionTestPassed {
+  readonly models: readonly ModelInfo[];
+}
+
+/** One model a Connection offers. An absent capability is unknown, never assumed missing. */
+export interface ModelInfo {
+  /** The model name at the Provider, without the Provider prefix. */
+  readonly id: string;
+  /** The context window, in tokens. */
+  readonly contextWindow?: number;
+  /** Whether it supports tool calling. */
+  readonly tools?: boolean;
+  /** Whether it accepts images. */
+  readonly vision?: boolean;
 }
 
 /** A saved Connection as the renderer sees it; its secret never leaves the Runtime. */
@@ -226,7 +289,10 @@ export interface ConnectionSummary {
   readonly lastTestOk: boolean | null;
   /** The Provider's own error text from the last failed test. */
   readonly lastTestError: string | null;
-  /** The models the Provider lists; empty when it does not list them. */
+  /**
+   * The model names known without a network call: the catalogue's, or a live listing from the
+   * last 10 minutes; empty otherwise. `connections.models` lists them with what is known of each.
+   */
   readonly models: readonly string[];
 }
 
@@ -258,6 +324,9 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'connections.list': true,
   'connections.add': true,
   'connections.update': true,
+  'connections.test': true,
+  'connections.testDraft': true,
+  'connections.models': true,
   'connections.remove': true,
   'bindings.getGlobal': true,
 };

@@ -9,6 +9,7 @@ import {
 import type {
   ConnectionDraft,
   ConnectionSummary,
+  ConnectionTestDraft,
   ConnectionUpdate,
   IpcError,
   IpcResult,
@@ -37,13 +38,26 @@ type Problem =
   | 'key_required'
   | 'key_invalid'
   | 'base_url_required'
-  | 'base_url_invalid';
+  | 'base_url_invalid'
+  | 'test_model_required'
+  | 'test_model_invalid';
 
 interface Problems {
   readonly name?: Problem;
   readonly apiKey?: Problem;
   readonly baseUrl?: Problem;
+  readonly testModel?: Problem;
 }
+
+/** The fields in the order they are shown, which is the order a problem is focused in. */
+const FIELDS = ['name', 'apiKey', 'baseUrl', 'testModel'] as const;
+
+/** The Test of what the form holds; any edit of what it tested starts it over. */
+type Test =
+  | { readonly state: 'idle' }
+  | { readonly state: 'testing' }
+  | { readonly state: 'passed'; readonly models: number }
+  | { readonly state: 'failed'; readonly error: IpcError };
 
 export interface ConnectionDialogProps {
   readonly presets: readonly ProviderPreset[];
@@ -60,10 +74,16 @@ export interface ConnectionDialogProps {
  * Provider that allows one Connection and already has it opens that Connection to edit, since
  * adding it again would edit it anyway. The form shows a name for the custom endpoint, the key
  * field where the Provider takes one (optional for the custom endpoint), and the base URL with the
- * Provider's default as its placeholder. A saved key is never shown: the field stays empty, and a
- * new key replaces it. Save checks the fields first (the rules of shared/connection-input.ts,
- * which the Runtime checks again), then calls `connections.add` or `connections.update`, which
- * test the Connection before saving it; a failure stays inline and keeps what was typed.
+ * Provider's default as its placeholder, and "Model to test with" where the Provider lists no
+ * models and is not in the app's catalogue. A saved key is never shown: the field stays empty,
+ * and a new key replaces it.
+ *
+ * Test connection checks the fields (the rules of shared/connection-input.ts, which the Runtime
+ * checks again) and tests what they hold with `connections.testDraft`, saving nothing: it shows
+ * "Connected" with the number of models found, or "Connection failed" with the Provider's text.
+ * Save is enabled once the test passed, for a new Connection or a new key or base URL (a rename
+ * needs no test), and calls `connections.add` or `connections.update`, which test again before
+ * saving; a failure stays inline and keeps what was typed.
  */
 export function ConnectionDialog({
   presets,
@@ -216,19 +236,36 @@ function ConnectionForm({
   const [name, setName] = useState(editing?.displayName ?? '');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState(initialBaseUrl);
+  const [testModel, setTestModel] = useState('');
   const [problems, setProblems] = useState<Problems>({});
+  const [test, setTest] = useState<Test>({ state: 'idle' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<IpcError | null>(null);
   const fields = {
     name: useRef<HTMLInputElement>(null),
     apiKey: useRef<HTMLInputElement>(null),
     baseUrl: useRef<HTMLInputElement>(null),
+    testModel: useRef<HTMLInputElement>(null),
   };
 
   const showKey = preset.requiresKey || preset.custom;
   const hasStoredKey = editing !== undefined && editing.keyHint !== null;
+  const key = parseApiKey(apiKey);
+  /** A new Connection, or a new key or base URL: what Save would test, so Test must pass first. */
+  const newCredentials =
+    editing === undefined ||
+    (key !== undefined && key !== null) ||
+    baseUrl.trim() !== initialBaseUrl;
+  const busy = saving || test.state === 'testing';
 
-  const check = (): Problems => {
+  /** An edit of what the test reached: the test result no longer applies. */
+  const editCredentials = (apply: () => void) => {
+    apply();
+    setTest({ state: 'idle' });
+  };
+
+  /** The problems of the fields; the test model counts only when a test runs. */
+  const check = (testing: boolean): Problems => {
     const found: { -readonly [K in keyof Problems]: Problems[K] } = {};
     if (preset.custom) {
       const parsed = parseConnectionName(name);
@@ -251,40 +288,72 @@ function ConnectionForm({
     const url = parseBaseUrl(baseUrl);
     if (url === null) found.baseUrl = 'base_url_invalid';
     else if (url === undefined && preset.custom) found.baseUrl = 'base_url_required';
+    if (preset.needsTestModel && testing) {
+      const model = testModel.trim();
+      if (model === '') found.testModel = 'test_model_required';
+      else if (/\s/.test(model)) found.testModel = 'test_model_invalid';
+    }
     return found;
   };
 
-  const save = async () => {
-    const found = check();
+  /** Shows the problems and focuses the first; true when there are none. */
+  const accept = (found: Problems): boolean => {
     setProblems(found);
+    const firstInvalid = FIELDS.find((field) => found[field] !== undefined);
+    if (firstInvalid === undefined) return true;
+    fields[firstInvalid].current?.focus();
+    return false;
+  };
+
+  const typedKey = key ?? undefined;
+  const typedTestModel = preset.needsTestModel ? { testModel: testModel.trim() } : {};
+
+  const runTest = async () => {
     setError(null);
-    const firstInvalid = (['name', 'apiKey', 'baseUrl'] as const).find(
-      (field) => found[field] !== undefined,
+    if (!accept(check(true))) return;
+    const draft: ConnectionTestDraft = {
+      ...(editing === undefined ? {} : { id: editing.id }),
+      providerId: preset.id,
+      ...(typedKey === undefined ? {} : { apiKey: typedKey }),
+      // Left out when unchanged: the saved Connection's, or for a new one the Provider's default.
+      ...(baseUrl.trim() === initialBaseUrl ? {} : { baseUrl: baseUrl.trim() }),
+      ...typedTestModel,
+    };
+    setTest({ state: 'testing' });
+    onBusy(true);
+    const result = await window.api.connections.testDraft(draft);
+    onBusy(false);
+    setTest(
+      result.ok
+        ? { state: 'passed', models: result.data.models.length }
+        : { state: 'failed', error: result.error },
     );
-    if (firstInvalid !== undefined) {
-      fields[firstInvalid].current?.focus();
-      return;
-    }
-    const key = parseApiKey(apiKey) ?? undefined;
+  };
+
+  const save = async () => {
+    setError(null);
+    if (!accept(check(newCredentials))) return;
     let call: Promise<IpcResult<ConnectionSummary>>;
     if (editing === undefined) {
       const draft: ConnectionDraft = {
         providerId: preset.id,
-        ...(key === undefined ? {} : { apiKey: key }),
+        ...(typedKey === undefined ? {} : { apiKey: typedKey }),
         ...(preset.custom ? { displayName: name.trim() } : {}),
         ...(baseUrl.trim() === '' ? {} : { baseUrl: baseUrl.trim() }),
+        ...typedTestModel,
       };
       call = window.api.connections.add(draft);
     } else {
       const update: ConnectionUpdate = {
         id: editing.id,
-        ...(key === undefined ? {} : { apiKey: key }),
+        ...(typedKey === undefined ? {} : { apiKey: typedKey }),
         ...(preset.custom && name.trim() !== editing.displayName
           ? { displayName: name.trim() }
           : {}),
         ...(baseUrl.trim() === initialBaseUrl ? {} : { baseUrl: baseUrl.trim() }),
+        ...(newCredentials ? typedTestModel : {}),
       };
-      if (Object.keys(update).length === 1) {
+      if (Object.keys(update).every((field) => field === 'id' || field === 'testModel')) {
         onCancel();
         return;
       }
@@ -329,6 +398,8 @@ function ConnectionForm({
   const nameField = fieldProblem('name', `${ids}-name-hint`);
   const keyField = fieldProblem('apiKey', hasStoredKey ? `${ids}-key-hint` : undefined);
   const urlField = fieldProblem('baseUrl', preset.baseUrl === null ? undefined : `${ids}-url-hint`);
+  const testModelField = fieldProblem('testModel', `${ids}-test-model-hint`);
+  const saveBlocked = newCredentials && test.state !== 'passed';
 
   return (
     <form
@@ -336,10 +407,11 @@ function ConnectionForm({
       noValidate
       onSubmit={(event) => {
         event.preventDefault();
-        void save();
+        // Enter tests the form until a test passed, then saves it.
+        void (saveBlocked ? runTest() : save());
       }}
     >
-      <fieldset className="modal-fields" disabled={saving}>
+      <fieldset className="modal-fields" disabled={busy}>
         {preset.custom ? (
           <div className="field">
             <label htmlFor={`${ids}-name`}>{t('models.dialog.name')}</label>
@@ -374,7 +446,9 @@ function ConnectionForm({
               value={apiKey}
               placeholder={hasStoredKey ? `••••${editing.keyHint}` : preset.keyPlaceholder}
               onChange={(event) => {
-                setApiKey(event.target.value);
+                editCredentials(() => {
+                  setApiKey(event.target.value);
+                });
               }}
               {...keyField.input}
             />
@@ -399,7 +473,9 @@ function ConnectionForm({
             value={baseUrl}
             placeholder={preset.baseUrl ?? t('onboarding.cloud.base_url_placeholder')}
             onChange={(event) => {
-              setBaseUrl(event.target.value);
+              editCredentials(() => {
+                setBaseUrl(event.target.value);
+              });
             }}
             {...urlField.input}
           />
@@ -410,7 +486,56 @@ function ConnectionForm({
           )}
           {urlField.message}
         </div>
+        {preset.needsTestModel ? (
+          <div className="field">
+            <label htmlFor={`${ids}-test-model`}>{t('models.test_model')}</label>
+            <input
+              id={`${ids}-test-model`}
+              ref={fields.testModel}
+              spellCheck={false}
+              autoComplete="off"
+              value={testModel}
+              onChange={(event) => {
+                editCredentials(() => {
+                  setTestModel(event.target.value);
+                });
+              }}
+              {...testModelField.input}
+            />
+            <p id={`${ids}-test-model-hint`} className="field-hint">
+              {t('models.test_model_hint')}
+            </p>
+            {testModelField.message}
+          </div>
+        ) : null}
       </fieldset>
+      <div className="wizard-test">
+        <button
+          type="button"
+          className="button-secondary"
+          disabled={busy}
+          aria-busy={test.state === 'testing'}
+          onClick={() => void runTest()}
+        >
+          {test.state === 'testing' ? <span className="spinner" aria-hidden="true" /> : null}
+          {test.state === 'testing' ? t('models.testing') : t('models.test')}
+        </button>
+        {test.state === 'passed' ? (
+          <span className="test-passed" role="status">
+            {t('models.dialog.test_passed', { count: test.models })}
+          </span>
+        ) : saveBlocked && test.state === 'idle' ? (
+          <span className="field-hint">{t('models.dialog.test_first')}</span>
+        ) : null}
+      </div>
+      {test.state === 'failed' ? (
+        <div className="error-panel" role="group" aria-labelledby={`${ids}-test-failed`}>
+          <p id={`${ids}-test-failed`} className="error-panel-title">
+            {t('models.dialog.test_failed')}
+          </p>
+          <ErrorMessage error={test.error} />
+        </div>
+      ) : null}
       <p className="modal-links">
         <a href={preset.docsUrl} target="_blank" rel="noreferrer">
           {t('models.dialog.docs', { name: providerLabel })}
@@ -433,16 +558,21 @@ function ConnectionForm({
           <button
             type="button"
             className="button-link modal-actions-start"
-            disabled={saving}
+            disabled={busy}
             onClick={onBack}
           >
             {t('models.dialog.back')}
           </button>
         )}
-        <button type="button" className="button-secondary" disabled={saving} onClick={onCancel}>
+        <button type="button" className="button-secondary" disabled={busy} onClick={onCancel}>
           {t('models.dialog.cancel')}
         </button>
-        <button type="submit" className="button-primary" disabled={saving} aria-busy={saving}>
+        <button
+          type="submit"
+          className="button-primary"
+          disabled={busy || saveBlocked}
+          aria-busy={saving}
+        >
           {saving ? <span className="spinner" aria-hidden="true" /> : null}
           {saving ? t('models.dialog.saving') : t('models.dialog.save')}
         </button>

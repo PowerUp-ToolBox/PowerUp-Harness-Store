@@ -7,6 +7,7 @@ import { createConnectionStore, type ConnectionStore } from './connection-store.
 import {
   createConnectionsService,
   createConnectionsStub,
+  createProviderChecks,
   providerPresets,
   type ConnectionsService,
 } from './connections.js';
@@ -40,6 +41,13 @@ export interface RuntimeOptions {
   readonly quit: () => void;
   /** Makes the Store connectivity checks (Electron's `net.fetch`, so system proxies apply). */
   readonly fetch: FetchLike;
+  /**
+   * Tests Connections and lists their models: Node's `fetch`, the one the Model Gateway's upstream
+   * calls use, so a passing test means the Gateway reaches the same place. Tests pass a fake.
+   */
+  readonly providerFetch: typeof globalThis.fetch;
+  /** The clock of Connection test times and the model-list cache. Default: the system clock. */
+  readonly now?: () => Date;
   /** Encrypts Connection secrets (Electron's `safeStorage`); tests pass a reversible fake. */
   readonly secretCipher: SecretCipher;
   /** Pushes an event to the main window; dropped while there is none. */
@@ -140,7 +148,12 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   const connections: ConnectionsService =
     connectionStore === undefined
       ? createConnectionsStub()
-      : createConnectionsService({ store: connectionStore, cipher: options.secretCipher });
+      : createConnectionsService({
+          store: connectionStore,
+          cipher: options.secretCipher,
+          ...createProviderChecks(options.providerFetch),
+          ...(options.now === undefined ? {} : { now: options.now }),
+        });
   let stopping = false;
   let stopped: Promise<void> | undefined;
   const startupStatus = status;

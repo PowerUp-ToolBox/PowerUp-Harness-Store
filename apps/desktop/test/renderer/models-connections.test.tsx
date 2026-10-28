@@ -4,11 +4,18 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type {
   ConnectionDraft,
   ConnectionSummary,
+  ConnectionTestRequest,
   ConnectionUpdate,
   GlobalBinding,
   IpcResult,
 } from '../../src/shared/ipc.js';
-import { connectionSummary, installFakeApi, renderApp } from './render-app.js';
+import {
+  connectionSummary,
+  FAKE_PRESETS,
+  installFakeApi,
+  renderApp,
+  ZHIPU_PRESET,
+} from './render-app.js';
 
 const KEY = 'sk-ant-api03-secret-0123456789';
 
@@ -20,8 +27,14 @@ const VLLM = connectionSummary({
   baseUrl: 'http://10.0.0.2:8000/v1',
 });
 
+/** What connections.test finds next: a pass, or the Provider's error text. */
+let nextTest: { readonly ok: true } | { readonly ok: false; readonly detail: string } = {
+  ok: true,
+};
+
 afterEach(() => {
   cleanup();
+  nextTest = { ok: true };
 });
 
 /**
@@ -62,6 +75,19 @@ function installConnections(initial: readonly ConnectionSummary[], locale: 'en' 
     connections = connections.filter((item) => item.id !== id);
     return Promise.resolve({ ok: true, data: null });
   });
+  // As the Runtime: the result is recorded on the Connection, pass or fail.
+  api.connections.test.mockImplementation((request: ConnectionTestRequest) => {
+    const current = connections.find((item) => item.id === request.id);
+    if (current === undefined) throw new Error(`unknown ${request.id}`);
+    const next: ConnectionSummary = {
+      ...current,
+      lastTestedAt: '2026-10-28T09:00:00.000Z',
+      lastTestOk: nextTest.ok,
+      lastTestError: nextTest.ok ? null : nextTest.detail,
+    };
+    connections = connections.map((item) => (item.id === next.id ? next : item));
+    return Promise.resolve({ ok: true, data: next });
+  });
   return api;
 }
 
@@ -97,6 +123,17 @@ function rowFor(name: string) {
 
 function dialog() {
   return screen.getByRole('dialog');
+}
+
+function dialogButton(name: string) {
+  return within(dialog()).getByRole('button', { name });
+}
+
+/** Tests the form (Save stays disabled until a test passed), then saves it. */
+async function testThenSave() {
+  expect(dialogButton('Save').hasAttribute('disabled')).toBe(true);
+  await click(dialogButton('Test connection'));
+  await click(dialogButton('Save'));
 }
 
 describe('the Connections list', () => {
@@ -173,6 +210,59 @@ describe('the Connections list', () => {
   });
 });
 
+describe('Test connection on a row', () => {
+  it('records a passed test: the status becomes Connected', async () => {
+    const api = installConnections([ANTHROPIC]);
+    await openModels();
+    expect(rowFor('Anthropic').querySelector('.status-chip')?.textContent).toBe('Not tested');
+    await click(screen.getByRole('button', { name: 'Test Anthropic' }));
+    expect(api.connections.test).toHaveBeenCalledWith({ id: 'anthropic' });
+    expect(rowFor('Anthropic').querySelector('.status-chip')?.textContent).toBe('Connected');
+  });
+
+  it("shows a failed test with the Provider's actual error text, not a generic message", async () => {
+    installConnections([ANTHROPIC]);
+    nextTest = { ok: false, detail: 'invalid x-api-key' };
+    await openModels();
+    await click(screen.getByRole('button', { name: 'Test Anthropic' }));
+    expect(rowFor('Anthropic').querySelector('.status-chip')?.textContent).toBe(
+      'Connection failed',
+    );
+    expect(within(rowFor('Anthropic')).getByText('invalid x-api-key')).toBeDefined();
+
+    nextTest = { ok: true };
+    await click(screen.getByRole('button', { name: 'Test Anthropic' }));
+    expect(within(rowFor('Anthropic')).queryByText('invalid x-api-key')).toBeNull();
+  });
+
+  it('asks for the model to test with where the Provider lists none', async () => {
+    const api = installConnections([
+      connectionSummary({ id: 'zhipu', displayName: 'Zhipu AI (GLM)', keyHint: '6789' }),
+    ]);
+    api.providers.list.mockResolvedValue({ ok: true, data: [...FAKE_PRESETS, ZHIPU_PRESET] });
+    await openModels();
+    const test = screen.getByRole('button', { name: 'Test Zhipu AI (GLM)' });
+    await click(test);
+    expect(test.getAttribute('aria-expanded')).toBe('true');
+    expect(api.connections.test).not.toHaveBeenCalled();
+    const row = rowFor('Zhipu AI (GLM)');
+    await click(within(row).getByRole('button', { name: 'Test connection' }));
+    expect(within(row).getByText('Enter the name of a model to test with.')).toBeDefined();
+    fireEvent.change(within(row).getByLabelText('Model to test Zhipu AI (GLM) with'), {
+      target: { value: 'glm-4.5' },
+    });
+    await click(within(row).getByRole('button', { name: 'Test connection' }));
+    expect(api.connections.test).toHaveBeenCalledWith({ id: 'zhipu', model: 'glm-4.5' });
+    expect(rowFor('Zhipu AI (GLM)').querySelector('.status-chip')?.textContent).toBe('Connected');
+  });
+
+  it('says how many models a Connection lists', async () => {
+    installConnections([connectionSummary({ id: 'ollama', models: ['qwen3:8b', 'gemma-3'] })]);
+    await openModels();
+    expect(within(rowFor('Ollama')).getByText('2 models loaded')).toBeDefined();
+  });
+});
+
 describe('Add Connection', () => {
   async function openAdd(initial: readonly ConnectionSummary[] = []) {
     const api = installConnections(initial);
@@ -216,17 +306,22 @@ describe('Add Connection', () => {
       within(dialog()).getByLabelText<HTMLInputElement>('Base URL (optional)').placeholder,
     ).toBe('https://api.anthropic.com/v1');
 
-    await click(within(dialog()).getByRole('button', { name: 'Save' }));
+    expect(within(dialog()).getByText('Test the connection before saving.')).toBeDefined();
+    await click(dialogButton('Test connection'));
     expect(within(dialog()).getByText('Enter the API key.')).toBeDefined();
     expect(key.getAttribute('aria-invalid')).toBe('true');
-    expect(api.connections.add).not.toHaveBeenCalled();
+    expect(api.connections.testDraft).not.toHaveBeenCalled();
 
     fireEvent.change(key, { target: { value: 'two words' } });
-    await click(within(dialog()).getByRole('button', { name: 'Save' }));
+    await click(dialogButton('Test connection'));
     expect(within(dialog()).getByText('An API key has no spaces or line breaks.')).toBeDefined();
 
     fireEvent.change(key, { target: { value: ` ${KEY} ` } });
-    await click(within(dialog()).getByRole('button', { name: 'Save' }));
+    await testThenSave();
+    expect(api.connections.testDraft).toHaveBeenCalledWith({
+      providerId: 'anthropic',
+      apiKey: KEY,
+    });
     expect(api.connections.add).toHaveBeenCalledWith({ providerId: 'anthropic', apiKey: KEY });
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(
@@ -242,7 +337,7 @@ describe('Add Connection', () => {
     const api = await openAdd([VLLM]);
     await click(within(dialog()).getByRole('button', { name: 'OpenAI-compatible endpoint' }));
     expect(within(dialog()).getByLabelText('API key (optional)')).toBeDefined();
-    await click(within(dialog()).getByRole('button', { name: 'Save' }));
+    await click(dialogButton('Test connection'));
     expect(within(dialog()).getByText('Enter a name for this endpoint.')).toBeDefined();
     expect(within(dialog()).getByText('Enter the base URL of the endpoint.')).toBeDefined();
     // Focus goes to the first field with a problem.
@@ -252,7 +347,7 @@ describe('Add Connection', () => {
     fireEvent.change(within(dialog()).getByLabelText('Base URL'), {
       target: { value: 'ftp://10.0.0.3' },
     });
-    await click(within(dialog()).getByRole('button', { name: 'Save' }));
+    await click(dialogButton('Test connection'));
     expect(within(dialog()).getByText('Another Connection already has this name.')).toBeDefined();
     expect(
       within(dialog()).getByText('Enter a URL that starts with http:// or https://.'),
@@ -262,7 +357,7 @@ describe('Add Connection', () => {
     fireEvent.change(within(dialog()).getByLabelText('Base URL'), {
       target: { value: 'http://10.0.0.3:8000/v1' },
     });
-    await click(within(dialog()).getByRole('button', { name: 'Save' }));
+    await testThenSave();
     expect(api.connections.add).toHaveBeenCalledWith({
       providerId: 'openai-compatible',
       displayName: 'Home',
@@ -280,7 +375,12 @@ describe('Add Connection', () => {
     fireEvent.change(within(dialog()).getByLabelText('Base URL (optional)'), {
       target: { value: 'http://10.0.0.5:11434/v1' },
     });
-    await click(within(dialog()).getByRole('button', { name: 'Save' }));
+    await testThenSave();
+    expect(api.connections.testDraft).toHaveBeenCalledWith({
+      id: 'ollama',
+      providerId: 'ollama',
+      baseUrl: 'http://10.0.0.5:11434/v1',
+    });
     expect(api.connections.update).toHaveBeenCalledWith({
       id: 'ollama',
       baseUrl: 'http://10.0.0.5:11434/v1',
@@ -300,7 +400,7 @@ describe('Add Connection', () => {
     });
     await click(within(dialog()).getByRole('button', { name: 'Anthropic' }));
     fireEvent.change(within(dialog()).getByLabelText('API key'), { target: { value: KEY } });
-    await click(within(dialog()).getByRole('button', { name: 'Save' }));
+    await testThenSave();
     expect(within(dialog()).getByText('Could not save the Connection')).toBeDefined();
     expect(within(dialog()).getByRole('alert').textContent).toMatch(
       /no secure storage for secrets\. On Linux, install and unlock a keyring/,
@@ -309,9 +409,9 @@ describe('Add Connection', () => {
     expect(screen.queryByText('Add a Connection to run Harnesses')).not.toBeNull();
   });
 
-  it('shows the Provider error text from a failed test verbatim', async () => {
+  it('shows the Provider error text from a failed test verbatim, and keeps Save disabled', async () => {
     const api = await openAdd();
-    api.connections.add.mockResolvedValueOnce({
+    api.connections.testDraft.mockResolvedValueOnce({
       ok: false,
       error: {
         code: 'provider_error',
@@ -322,10 +422,67 @@ describe('Add Connection', () => {
     });
     await click(within(dialog()).getByRole('button', { name: 'Anthropic' }));
     fireEvent.change(within(dialog()).getByLabelText('API key'), { target: { value: KEY } });
-    await click(within(dialog()).getByRole('button', { name: 'Save' }));
-    expect(within(dialog()).getByRole('alert').textContent).toBe(
+    await click(dialogButton('Test connection'));
+    const failed = within(dialog()).getByRole('group', { name: 'Connection failed' });
+    expect(within(failed).getByRole('alert').textContent).toBe(
       'The Provider answered with an error: Incorrect API key provided.',
     );
+    expect(dialogButton('Save').hasAttribute('disabled')).toBe(true);
+    expect(api.connections.add).not.toHaveBeenCalled();
+  });
+
+  it('shows how many models a passed test found; any edit of what it tested asks for a new test', async () => {
+    const api = await openAdd();
+    api.connections.testDraft.mockResolvedValue({
+      ok: true,
+      data: { models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }, { id: 'o4' }] },
+    });
+    await click(within(dialog()).getByRole('button', { name: 'OpenAI' }));
+    fireEvent.change(within(dialog()).getByLabelText('API key'), { target: { value: KEY } });
+    await click(dialogButton('Test connection'));
+    expect(within(dialog()).getByRole('status').textContent).toBe('Connected · 3 models loaded');
+    expect(dialogButton('Save').hasAttribute('disabled')).toBe(false);
+
+    fireEvent.change(within(dialog()).getByLabelText('Base URL (optional)'), {
+      target: { value: 'https://proxy.example.com/v1' },
+    });
+    expect(within(dialog()).queryByRole('status')).toBeNull();
+    expect(dialogButton('Save').hasAttribute('disabled')).toBe(true);
+    await testThenSave();
+    expect(api.connections.add).toHaveBeenCalledWith({
+      providerId: 'openai',
+      apiKey: KEY,
+      baseUrl: 'https://proxy.example.com/v1',
+    });
+  });
+
+  it('asks for the model to test with where the Provider lists none', async () => {
+    const api = installConnections([]);
+    api.providers.list.mockResolvedValue({ ok: true, data: [...FAKE_PRESETS, ZHIPU_PRESET] });
+    await openModels();
+    await click(screen.getByRole('button', { name: 'Add Connection' }));
+    await click(within(dialog()).getByRole('button', { name: 'Zhipu AI (GLM)' }));
+    fireEvent.change(within(dialog()).getByLabelText('API key'), {
+      target: { value: 'zhipu-key-0123456789' },
+    });
+    await click(dialogButton('Test connection'));
+    expect(within(dialog()).getByText('Enter the name of a model to test with.')).toBeDefined();
+    expect(document.activeElement).toBe(within(dialog()).getByLabelText('Model to test with'));
+
+    fireEvent.change(within(dialog()).getByLabelText('Model to test with'), {
+      target: { value: ' glm-4.5 ' },
+    });
+    await testThenSave();
+    expect(api.connections.testDraft).toHaveBeenCalledWith({
+      providerId: 'zhipu',
+      apiKey: 'zhipu-key-0123456789',
+      testModel: 'glm-4.5',
+    });
+    expect(api.connections.add).toHaveBeenCalledWith({
+      providerId: 'zhipu',
+      apiKey: 'zhipu-key-0123456789',
+      testModel: 'glm-4.5',
+    });
   });
 
   it('Escape and Cancel close the dialog without saving; Choose another Provider goes back', async () => {
@@ -364,7 +521,12 @@ describe('Edit', () => {
     fireEvent.change(within(dialog()).getByLabelText('API key'), {
       target: { value: 'sk-ant-api03-replaced-wxyz' },
     });
-    await click(within(dialog()).getByRole('button', { name: 'Save' }));
+    await testThenSave();
+    expect(api.connections.testDraft).toHaveBeenCalledWith({
+      id: 'anthropic',
+      providerId: 'anthropic',
+      apiKey: 'sk-ant-api03-replaced-wxyz',
+    });
     expect(api.connections.update).toHaveBeenCalledWith({
       id: 'anthropic',
       apiKey: 'sk-ant-api03-replaced-wxyz',

@@ -1,5 +1,10 @@
 import type { IpcMethodName, IpcOutput, IpcResult } from '../../shared/ipc.js';
-import { parseConnectionDraft, parseConnectionUpdate } from './connections.js';
+import {
+  parseConnectionDraft,
+  parseConnectionTestDraft,
+  parseConnectionTestRequest,
+  parseConnectionUpdate,
+} from './connections.js';
 import { fail, ok } from './ipc-result.js';
 import type { Services } from './services.js';
 import { parseSettingsPatch } from './settings.js';
@@ -72,6 +77,20 @@ export function createHandlers(services: Services): IpcHandlers {
       const update = parseConnectionUpdate(input);
       if (update === null) return fail('invalid_input', { method: 'connections.update' });
       return services.connections.update(update);
+    },
+    'connections.test': (input) => {
+      const request = parseConnectionTestRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'connections.test' });
+      return services.connections.test(request);
+    },
+    'connections.testDraft': (input) => {
+      const draft = parseConnectionTestDraft(input);
+      if (draft === null) return fail('invalid_input', { method: 'connections.testDraft' });
+      return services.connections.testDraft(draft);
+    },
+    'connections.models': (input) => {
+      if (typeof input !== 'string') return fail('invalid_input', { method: 'connections.models' });
+      return services.connections.models(input);
     },
     'connections.remove': (input) => {
       if (typeof input !== 'string') return fail('invalid_input', { method: 'connections.remove' });

@@ -1,4 +1,13 @@
-import { PROVIDERS, findProvider, type ProviderInfo } from '@harness-store/gateway';
+import {
+  PROVIDERS,
+  catalogueModels,
+  findProvider,
+  isModelName,
+  listModels,
+  needsTestModel,
+  testConnection,
+  type ProviderInfo,
+} from '@harness-store/gateway';
 import {
   customConnectionId,
   isNameTaken,
@@ -10,13 +19,18 @@ import {
 import type {
   ConnectionDraft,
   ConnectionSummary,
+  ConnectionTestDraft,
+  ConnectionTestPassed,
+  ConnectionTestRequest,
   ConnectionUpdate,
   IpcResult,
   LocalProvider,
+  ModelInfo,
   ProviderPreset,
 } from '../../shared/ipc.js';
 import type { ConnectionRow, ConnectionStore } from './connection-store.js';
 import { fail, ok } from './ipc-result.js';
+import { createModelCache } from './model-cache.js';
 import type { SecretCipher } from './secret-cipher.js';
 
 /** The Providers that run on the User's machine. */
@@ -39,26 +53,53 @@ export function providerPresets(
     docsUrl: provider.docsUrl,
     supportsModelList: provider.supportsModelList,
     keyPlaceholder: provider.keyPlaceholder,
+    needsTestModel: needsTestModel(provider.id),
   }));
 }
 
-/** What a Connection test reaches: the Provider, its key and its effective base URL. */
+/** What a Connection test or listing reaches: the Provider, its key and its effective base URL. */
 export interface ConnectionUnderTest {
   /** The Provider id: `openai-compatible` for every custom endpoint. */
   readonly providerId: string;
   readonly apiKey?: string;
   readonly baseUrl: string;
+  /** The model a test sends a 1-token completion to, where the Provider needs one named. */
+  readonly model?: string;
 }
 
-/** A failed test carries the Provider's own error text, with the key redacted. */
+/**
+ * A passed test carries the models it found, when it listed them; a failed one the Provider's own
+ * error text, with the key redacted.
+ */
 export type ConnectionTestResult =
-  { readonly ok: true } | { readonly ok: false; readonly detail: string };
+  | { readonly ok: true; readonly models?: readonly ModelInfo[] }
+  | { readonly ok: false; readonly detail: string };
 
 /** Makes a small real request to check that a Connection works. */
 export type ConnectionTester = (connection: ConnectionUnderTest) => Promise<ConnectionTestResult>;
 
-/** The test until P0-03.2 brings the real one: every Connection passes. */
-const passThroughTest: ConnectionTester = () => Promise.resolve({ ok: true });
+/** The models a Connection offers, or the Provider's error text. */
+export type ModelListing =
+  | { readonly ok: true; readonly models: readonly ModelInfo[] }
+  | { readonly ok: false; readonly detail: string };
+
+/** Lists the models of a Connection. */
+export type ModelLister = (connection: ConnectionUnderTest) => Promise<ModelListing>;
+
+/**
+ * The real test and listing (`testConnection` and `listModels` of @harness-store/gateway), over
+ * `fetch`: Node's, the one the Model Gateway's upstream calls use, so a passing test means the
+ * Gateway reaches the same place.
+ */
+export function createProviderChecks(fetch: typeof globalThis.fetch): {
+  readonly test: ConnectionTester;
+  readonly listModels: ModelLister;
+} {
+  return {
+    test: (connection) => testConnection({ ...connection, fetch }),
+    listModels: (connection) => listModels({ ...connection, fetch }),
+  };
+}
 
 /** The Connections service as the IPC handlers use it. */
 export interface ConnectionsService {
@@ -70,6 +111,12 @@ export interface ConnectionsService {
   add(draft: ConnectionDraft): Promise<IpcResult<ConnectionSummary>>;
   /** Changes a Connection; a new key or base URL is tested first. */
   update(update: ConnectionUpdate): Promise<IpcResult<ConnectionSummary>>;
+  /** Tests a saved Connection and stores the result, passed or failed. */
+  test(request: ConnectionTestRequest): Promise<IpcResult<ConnectionSummary>>;
+  /** Tests what a form holds, saving nothing. */
+  testDraft(draft: ConnectionTestDraft): Promise<IpcResult<ConnectionTestPassed>>;
+  /** The models a Connection offers: catalogue, cached or live listing. */
+  models(id: string): Promise<IpcResult<readonly ModelInfo[]>>;
   /** Deletes a Connection, its secret and the Slot Bindings that use it. */
   remove(id: string): IpcResult<null>;
 }
@@ -77,8 +124,12 @@ export interface ConnectionsService {
 export interface ConnectionsServiceOptions {
   readonly store: ConnectionStore;
   readonly cipher: SecretCipher;
-  /** Default: a test every Connection passes, until P0-03.2. */
-  readonly test?: ConnectionTester;
+  /** The Connection test: {@link createProviderChecks} in the app; tests pass a fake. */
+  readonly test: ConnectionTester;
+  /** The live model listing: {@link createProviderChecks} in the app; tests pass a fake. */
+  readonly listModels: ModelLister;
+  /** The clock of `lastTestedAt` and of the 10-minute model cache. Default: the system clock. */
+  readonly now?: () => Date;
   /** The Provider table; tests pass their own. */
   readonly providers?: readonly ProviderInfo[];
 }
@@ -96,10 +147,36 @@ export interface ConnectionsServiceOptions {
  * what it leaves out (a custom base URL, a key) is kept, and the Connection is enabled, since the
  * User asked to use it. Each custom endpoint is named, and its id `openai-compatible:<slug>` comes
  * from the name it was added with.
+ *
+ * Every test that runs is recorded on the Connection (`lastTestedAt`, `lastTestOk`,
+ * `lastTestError`): the one `add` and a credential change in `update` pass before saving, and
+ * each `test`. Live model listings are kept for 10 minutes per Connection; the models of a passed
+ * test fill that cache too, and a new key or base URL, or removing the Connection, empties it.
  */
 export function createConnectionsService(options: ConnectionsServiceOptions): ConnectionsService {
-  const { store, cipher, test = passThroughTest, providers = PROVIDERS } = options;
+  const { store, cipher, test, providers = PROVIDERS } = options;
+  const now = options.now ?? (() => new Date());
+  const cache = createModelCache(() => now().getTime());
   const order = new Map(providers.map((provider, index) => [provider.id, index]));
+
+  /** The models known without a network call: the catalogue's, else a fresh cached listing. */
+  const knownModels = (row: ConnectionRow): readonly ModelInfo[] =>
+    catalogueModels(row.providerId) ?? cache.get(row.id) ?? [];
+
+  /** Keeps the models a passed test listed, for a Provider that lists them live. */
+  const remember = (
+    id: string,
+    provider: ProviderInfo,
+    models: readonly ModelInfo[] | undefined,
+  ) => {
+    if (models !== undefined && provider.supportsModelList) cache.set(id, models);
+  };
+
+  const passed = () => ({
+    lastTestedAt: now().toISOString(),
+    lastTestOk: true,
+    lastTestError: null,
+  });
 
   const summarize = (row: ConnectionRow): ConnectionSummary => ({
     id: row.id,
@@ -112,7 +189,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
     lastTestedAt: row.lastTestedAt,
     lastTestOk: row.lastTestOk,
     lastTestError: row.lastTestError,
-    models: [],
+    models: knownModels(row).map((model) => model.id),
   });
 
   /** Whether another custom endpoint than `exceptId` is called `name`. */
@@ -139,6 +216,35 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
     }
     return { ok: true, key };
   };
+
+  /**
+   * The model to test with, trimmed: required where the Provider needs one named, else optional.
+   * Null when it is missing there, or not a model name the Gateway would send.
+   */
+  const checkTestModel = (
+    raw: string | undefined,
+    provider: ProviderInfo,
+  ): { readonly model: string | undefined } | null => {
+    const model = raw?.trim();
+    if (model === undefined || model === '') {
+      return needsTestModel(provider.id) ? null : { model: undefined };
+    }
+    return isModelName(provider.id, model) ? { model } : null;
+  };
+
+  /** Runs the test of `provider` against these credentials. */
+  const runTest = (
+    provider: ProviderInfo,
+    apiKey: string | undefined,
+    baseUrl: string | null,
+    model: string | undefined,
+  ) =>
+    test({
+      providerId: provider.id,
+      ...(apiKey === undefined ? {} : { apiKey }),
+      baseUrl: effectiveBaseUrl(baseUrl, provider),
+      ...(model === undefined ? {} : { model }),
+    });
 
   return {
     list() {
@@ -179,6 +285,8 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
           ? existing.baseUrl
           : storedBaseUrl(draft.baseUrl ?? '', provider);
       if (baseUrl === undefined) return invalid();
+      const testModel = checkTestModel(draft.testModel, provider);
+      if (testModel === null) return invalid();
       if (key.key !== undefined && !(await cipher.isAvailable())) {
         return fail('encryption_unavailable');
       }
@@ -186,11 +294,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
       // Without a new key, the stored one (if any) is kept, and tested with the base URL.
       const keptKey = key.key === undefined && existing !== undefined ? existing : undefined;
       const apiKey = key.key ?? (keptKey === undefined ? undefined : await storedKey(keptKey));
-      const tested = await test({
-        providerId: provider.id,
-        ...(apiKey === undefined ? {} : { apiKey }),
-        baseUrl: effectiveBaseUrl(baseUrl, provider),
-      });
+      const tested = await runTest(provider, apiKey, baseUrl, testModel.model);
       if (!tested.ok) return fail('provider_error', { detail: tested.detail });
       const ciphertext = key.key === undefined ? undefined : await cipher.encrypt(key.key);
 
@@ -208,11 +312,11 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
         secretRef: key.key === undefined ? (keptKey?.secretRef ?? null) : id,
         keyHint: key.key === undefined ? (keptKey?.keyHint ?? null) : keyHintFor(key.key),
         enabled: true,
-        lastTestedAt: null,
-        lastTestOk: null,
-        lastTestError: null,
+        ...passed(),
       };
       store.save(row, ciphertext);
+      cache.delete(id);
+      remember(id, provider, tested.models);
       return ok(summarize(row));
     },
 
@@ -238,22 +342,31 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
         if (baseUrl !== row.baseUrl) changes.baseUrl = baseUrl;
       }
       if (update.enabled !== undefined) changes.enabled = update.enabled;
+      const newBaseUrl = 'baseUrl' in changes;
+      const newCredentials = key.key !== undefined || newBaseUrl;
+      // A missing test model matters only when a test runs.
+      const testModel = checkTestModel(update.testModel, provider);
+      if (testModel === null && (newCredentials || (update.testModel?.trim() ?? '') !== '')) {
+        return invalid();
+      }
       if (key.key !== undefined && !(await cipher.isAvailable())) {
         return fail('encryption_unavailable');
       }
 
-      // New credentials are tested before they are saved, and the last test result, which
-      // belonged to the old ones, is dropped.
-      const newBaseUrl = 'baseUrl' in changes;
-      if (key.key !== undefined || newBaseUrl) {
+      // New credentials are tested before they are saved; that test replaces the last result,
+      // which belonged to the old ones.
+      let listed: readonly ModelInfo[] | undefined;
+      if (newCredentials) {
         const apiKey = key.key ?? (await storedKey(row));
-        const tested = await test({
-          providerId: provider.id,
-          ...(apiKey === undefined ? {} : { apiKey }),
-          baseUrl: effectiveBaseUrl(newBaseUrl ? (changes.baseUrl ?? null) : row.baseUrl, provider),
-        });
+        const tested = await runTest(
+          provider,
+          apiKey,
+          newBaseUrl ? (changes.baseUrl ?? null) : row.baseUrl,
+          testModel?.model,
+        );
         if (!tested.ok) return fail('provider_error', { detail: tested.detail });
-        Object.assign(changes, { lastTestedAt: null, lastTestOk: null, lastTestError: null });
+        listed = tested.models;
+        Object.assign(changes, passed());
         if (key.key !== undefined) {
           Object.assign(changes, { secretRef: row.id, keyHint: keyHintFor(key.key) });
         }
@@ -269,16 +382,109 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
       }
       const next: ConnectionRow = { ...current, ...changes };
       store.save(next, ciphertext);
+      if (newCredentials) {
+        cache.delete(row.id);
+        remember(row.id, provider, listed);
+      }
       return ok(summarize(next));
+    },
+
+    async test(request) {
+      const invalid = () => fail('invalid_input', { method: 'connections.test' });
+      const row = store.get(request.id);
+      const provider = row === undefined ? undefined : findProvider(row.providerId, providers);
+      if (row === undefined || provider === undefined) return invalid();
+      const testModel = checkTestModel(request.model, provider);
+      if (testModel === null) return invalid();
+
+      const credentials = credentialsOf(row);
+      const tested = await runTest(provider, await storedKey(row), row.baseUrl, testModel.model);
+      // Recorded on the row as it is now, unless its credentials changed during the test: then the
+      // result belongs to the old ones (and the change ran its own test).
+      const current = store.get(row.id);
+      if (current === undefined) return invalid();
+      if (credentialsOf(current) !== credentials) return ok(summarize(current));
+      const next: ConnectionRow = tested.ok
+        ? { ...current, ...passed() }
+        : {
+            ...current,
+            lastTestedAt: now().toISOString(),
+            lastTestOk: false,
+            lastTestError: tested.detail,
+          };
+      store.save(next);
+      if (tested.ok) remember(row.id, provider, tested.models);
+      return ok(summarize(next));
+    },
+
+    async testDraft(draft) {
+      const invalid = () => fail('invalid_input', { method: 'connections.testDraft' });
+      const provider = findProvider(draft.providerId, providers);
+      if (provider?.id !== draft.providerId) return invalid();
+      const saved = draft.id === undefined ? undefined : store.get(draft.id);
+      if (draft.id !== undefined && saved?.providerId !== provider.id) return invalid();
+
+      const key = checkKey(draft.apiKey, provider);
+      if (!key.ok || (draft.apiKey !== undefined && key.key === undefined)) return invalid();
+      const hasKey = key.key !== undefined || (saved !== undefined && saved.secretRef !== null);
+      if (provider.requiresKey && !hasKey) return invalid();
+      const baseUrl =
+        draft.baseUrl === undefined && saved !== undefined
+          ? saved.baseUrl
+          : storedBaseUrl(draft.baseUrl ?? '', provider);
+      if (baseUrl === undefined) return invalid();
+      const testModel = checkTestModel(draft.testModel, provider);
+      if (testModel === null) return invalid();
+
+      const apiKey = key.key ?? (saved === undefined ? undefined : await storedKey(saved));
+      const tested = await runTest(provider, apiKey, baseUrl, testModel.model);
+      if (!tested.ok) return fail('provider_error', { detail: tested.detail });
+      return ok({ models: tested.models ?? catalogueModels(provider.id) ?? [] });
+    },
+
+    async models(id) {
+      const row = store.get(id);
+      const provider = row === undefined ? undefined : findProvider(row.providerId, providers);
+      if (row === undefined || provider === undefined) {
+        return fail('invalid_input', { method: 'connections.models' });
+      }
+      const known = catalogueModels(row.providerId) ?? cache.get(row.id);
+      if (known !== undefined) return ok(known);
+      if (!provider.supportsModelList) return ok([]);
+
+      const credentials = credentialsOf(row);
+      const listed = await options.listModels({
+        providerId: provider.id,
+        ...(row.secretRef === null ? {} : { apiKey: await storedKey(row) }),
+        baseUrl: effectiveBaseUrl(row.baseUrl, provider),
+      });
+      if (!listed.ok) return fail('provider_error', { detail: listed.detail });
+      // Kept only while the credentials it was listed with are still the Connection's.
+      const current = store.get(row.id);
+      if (current !== undefined && credentialsOf(current) === credentials) {
+        cache.set(row.id, listed.models);
+      }
+      return ok(listed.models);
     },
 
     remove(id) {
       if (store.get(id) === undefined)
         return fail('invalid_input', { method: 'connections.remove' });
       store.remove(id);
+      cache.delete(id);
       return ok(null);
     },
   };
+
+  /**
+   * What a Connection reaches with, as one comparable value: its base URL and its stored key's
+   * ciphertext. Taken before an awaited test or listing and again after it, it tells whether the
+   * credentials changed meanwhile.
+   */
+  function credentialsOf(row: ConnectionRow): string {
+    const ciphertext = row.secretRef === null ? undefined : store.secret(row.secretRef);
+    return JSON.stringify([row.baseUrl, row.secretRef, ciphertext && Array.from(ciphertext)]);
+  }
 
   /** The Connection's decrypted key; undefined when it has none. */
   function storedKey(row: ConnectionRow): Promise<string | undefined> {
@@ -327,6 +533,9 @@ export function createConnectionsStub(): ConnectionsService {
     detectLocal: () => Promise.resolve([]),
     add: () => Promise.resolve(fail('not_implemented', { method: 'connections.add' })),
     update: () => Promise.resolve(fail('not_implemented', { method: 'connections.update' })),
+    test: () => Promise.resolve(fail('not_implemented', { method: 'connections.test' })),
+    testDraft: () => Promise.resolve(fail('not_implemented', { method: 'connections.testDraft' })),
+    models: () => Promise.resolve(fail('not_implemented', { method: 'connections.models' })),
     remove: () => fail('not_implemented', { method: 'connections.remove' }),
   };
 }
@@ -346,22 +555,36 @@ const optionalStrings = (input: Record<string, unknown>, keys: readonly string[]
  * the values, and the test whether the key works.
  */
 export function parseConnectionDraft(input: unknown): ConnectionDraft | null {
-  if (!isRecord(input) || !hasOnly(input, ['providerId', 'apiKey', 'displayName', 'baseUrl'])) {
-    return null;
-  }
+  const fields = ['providerId', 'apiKey', 'displayName', 'baseUrl', 'testModel'];
+  if (!isRecord(input) || !hasOnly(input, fields)) return null;
   const { providerId } = input;
   if (typeof providerId !== 'string' || findProvider(providerId) === undefined) return null;
-  if (!optionalStrings(input, ['apiKey', 'displayName', 'baseUrl'])) return null;
+  if (!optionalStrings(input, ['apiKey', 'displayName', 'baseUrl', 'testModel'])) return null;
   return input as unknown as ConnectionDraft;
+}
+
+/** The draft when `input` is a well-formed {@link ConnectionTestDraft}, else null (never throws). */
+export function parseConnectionTestDraft(input: unknown): ConnectionTestDraft | null {
+  const fields = ['id', 'providerId', 'apiKey', 'baseUrl', 'testModel'];
+  if (!isRecord(input) || !hasOnly(input, fields)) return null;
+  if (typeof input.providerId !== 'string') return null;
+  if (!optionalStrings(input, ['id', 'apiKey', 'baseUrl', 'testModel'])) return null;
+  return input as unknown as ConnectionTestDraft;
+}
+
+/** The request when `input` is a well-formed {@link ConnectionTestRequest}, else null. */
+export function parseConnectionTestRequest(input: unknown): ConnectionTestRequest | null {
+  if (!isRecord(input) || !hasOnly(input, ['id', 'model'])) return null;
+  if (typeof input.id !== 'string' || !optionalStrings(input, ['model'])) return null;
+  return input as unknown as ConnectionTestRequest;
 }
 
 /** The update when `input` is a well-formed {@link ConnectionUpdate}, else null (never throws). */
 export function parseConnectionUpdate(input: unknown): ConnectionUpdate | null {
-  if (!isRecord(input) || !hasOnly(input, ['id', 'displayName', 'apiKey', 'baseUrl', 'enabled'])) {
-    return null;
-  }
+  const fields = ['id', 'displayName', 'apiKey', 'baseUrl', 'enabled', 'testModel'];
+  if (!isRecord(input) || !hasOnly(input, fields)) return null;
   if (typeof input.id !== 'string') return null;
-  if (!optionalStrings(input, ['displayName', 'apiKey', 'baseUrl'])) return null;
+  if (!optionalStrings(input, ['displayName', 'apiKey', 'baseUrl', 'testModel'])) return null;
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') return null;
   return input as unknown as ConnectionUpdate;
 }

@@ -19,6 +19,7 @@ import { MIGRATIONS } from '../../src/main/runtime/database.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { offlineProviderFetch } from '../support/provider-fetch.js';
 
 const MAIN_WINDOW = {};
 
@@ -45,6 +46,7 @@ async function launch(options: Partial<RuntimeOptions> = {}): Promise<Runtime> {
     // No network in these tests: the Store connectivity check sees a refused connection.
     fetch: () => Promise.reject(new TypeError('fetch failed')),
     secretCipher: createFakeCipher(),
+    providerFetch: offlineProviderFetch,
     ...options,
   });
   started.push(runtime);

@@ -22,6 +22,9 @@ describe('buildApi (window.api)', () => {
       'list',
       'add',
       'update',
+      'test',
+      'testDraft',
+      'models',
       'remove',
     ]);
     expect(Object.keys(api.connectivity)).toEqual(['get', 'check']);

@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { MODEL_CATALOGUE } from '@harness-store/gateway';
 import type { SafeStorage } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createConnectionStore } from '../../src/main/runtime/connection-store.js';
@@ -9,6 +10,7 @@ import {
   createConnectionsService,
   type ConnectionTester,
   type ConnectionsService,
+  type ModelLister,
 } from '../../src/main/runtime/connections.js';
 import { openDatabase } from '../../src/main/runtime/database.js';
 import { createSafeStorageCipher } from '../../src/main/runtime/secret-cipher.js';
@@ -27,19 +29,34 @@ let dir: string;
 let db: DatabaseSync;
 let cipher: FakeCipher;
 let tester: ReturnType<typeof vi.fn<ConnectionTester>>;
+let lister: ReturnType<typeof vi.fn<ModelLister>>;
+/** The service's clock: test times and the model-list cache. */
+let clock: Date;
 let service: ConnectionsService;
+
+const T0 = '2026-10-28T09:00:00.000Z';
+const ANTHROPIC_MODELS = MODEL_CATALOGUE.anthropic.map((model) => model.id);
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'harness-store-connections-'));
   db = openDatabase(join(dir, 'harness-store.sqlite'));
   cipher = createFakeCipher();
   tester = vi.fn<ConnectionTester>(() => Promise.resolve({ ok: true }));
+  lister = vi.fn<ModelLister>(() => Promise.resolve({ ok: true, models: [] }));
+  clock = new Date(T0);
   service = createConnectionsService({
     store: createConnectionStore(db),
     cipher,
     test: tester,
+    listModels: lister,
+    now: () => clock,
   });
 });
+
+/** Moves the service's clock on by `ms`. */
+function advance(ms: number) {
+  clock = new Date(clock.getTime() + ms);
+}
 afterEach(() => {
   db.close();
   rmSync(dir, { recursive: true, force: true });
@@ -103,10 +120,12 @@ describe('adding a Connection for a key-based Provider', () => {
       enabled: true,
       baseUrl: 'https://api.anthropic.com/v1',
       keyHint: '6789',
-      lastTestedAt: null,
-      lastTestOk: null,
+      // The test it passed before it was saved.
+      lastTestedAt: T0,
+      lastTestOk: true,
       lastTestError: null,
-      models: [],
+      // The app's catalogue, known without a network call.
+      models: ANTHROPIC_MODELS,
     });
 
     const [secret] = secretRows();
@@ -125,8 +144,8 @@ describe('adding a Connection for a key-based Provider', () => {
         secret_ref: 'anthropic',
         key_hint: '6789',
         enabled: 1,
-        last_tested_at: null,
-        last_test_ok: null,
+        last_tested_at: T0,
+        last_test_ok: 1,
         last_test_error: null,
       },
     ]);
@@ -526,5 +545,233 @@ describe('createSafeStorageCipher', () => {
     const cipher = createSafeStorageCipher(safeStorage(false, 'unknown'), 'win32');
     await expect(cipher.isAvailable()).resolves.toBe(false);
     await expect(cipher.encrypt('sk-123')).rejects.toThrow(/not available/);
+  });
+});
+
+describe('testing a saved Connection', () => {
+  beforeEach(async () => {
+    data(await service.add({ providerId: 'openai', apiKey: OPENAI_KEY }));
+    tester.mockClear();
+  });
+
+  it('stores a passed test with its time, and the models it listed', async () => {
+    advance(60_000);
+    tester.mockResolvedValueOnce({ ok: true, models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }] });
+    const tested = data(await service.test({ id: 'openai' }));
+    expect(tester).toHaveBeenCalledWith({
+      providerId: 'openai',
+      apiKey: OPENAI_KEY,
+      baseUrl: 'https://api.openai.com/v1',
+    });
+    expect(tested).toMatchObject({
+      lastTestedAt: '2026-10-28T09:01:00.000Z',
+      lastTestOk: true,
+      lastTestError: null,
+      models: ['gpt-5', 'gpt-5-mini'],
+    });
+    expect(service.list()).toEqual([tested]);
+  });
+
+  it("stores a failed test with the Provider's own text; the call itself still succeeds", async () => {
+    tester.mockResolvedValueOnce({ ok: false, detail: 'Incorrect API key provided.' });
+    const failed = await service.test({ id: 'openai' });
+    expect(failed).toMatchObject({
+      ok: true,
+      data: { lastTestOk: false, lastTestError: 'Incorrect API key provided.', lastTestedAt: T0 },
+    });
+    expect(connectionRows()[0]).toMatchObject({
+      last_test_ok: 0,
+      last_test_error: 'Incorrect API key provided.',
+    });
+    // The Connection is kept as it was: a failed test changes nothing else.
+    expect(service.list()[0]).toMatchObject({ enabled: true, keyHint: 'abcd' });
+
+    const passed = data(await service.test({ id: 'openai' }));
+    expect(passed).toMatchObject({ lastTestOk: true, lastTestError: null });
+  });
+
+  it('does not record a result that belongs to a key replaced while the test ran', async () => {
+    tester.mockImplementationOnce(async () => {
+      // The User saves a new key (which passes its own test) before this test answers.
+      tester.mockResolvedValueOnce({ ok: true });
+      data(await service.update({ id: 'openai', apiKey: 'sk-proj-replaced-wxyz' }));
+      return { ok: false, detail: 'Incorrect API key provided.' };
+    });
+    const result = data(await service.test({ id: 'openai' }));
+    expect(result).toMatchObject({ keyHint: 'wxyz', lastTestOk: true, lastTestError: null });
+    expect(service.list()[0]).toEqual(result);
+  });
+
+  it('needs a model to test with where the Provider neither lists models nor is catalogued', async () => {
+    data(
+      await service.add({
+        providerId: 'zhipu',
+        apiKey: 'zhipu-key-0123456789',
+        testModel: 'glm-4.5',
+      }),
+    );
+    expect(tester).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'glm-4.5' }));
+    await expect(service.test({ id: 'zhipu' })).resolves.toMatchObject(invalid('connections.test'));
+    data(await service.test({ id: 'zhipu', model: ' glm-4.5-air ' }));
+    expect(tester).toHaveBeenLastCalledWith({
+      providerId: 'zhipu',
+      apiKey: 'zhipu-key-0123456789',
+      baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+      model: 'glm-4.5-air',
+    });
+    // Adding it, or a new key, needs one too.
+    await expect(
+      service.add({ providerId: 'minimax', apiKey: 'minimax-key-0123456789' }),
+    ).resolves.toMatchObject(invalid('connections.add'));
+    await expect(
+      service.update({ id: 'zhipu', apiKey: 'zhipu-key-replaced-wxyz' }),
+    ).resolves.toMatchObject(invalid('connections.update'));
+    // Renaming or disabling runs no test, so needs none.
+    expect(data(await service.update({ id: 'zhipu', enabled: false })).enabled).toBe(false);
+  });
+
+  it.each([
+    { reason: 'an unknown id', request: { id: 'anthropic' } },
+    { reason: 'a model name with a space', request: { id: 'openai', model: 'gpt 5' } },
+  ])('rejects $reason as invalid_input', async ({ request }) => {
+    await expect(service.test(request)).resolves.toMatchObject(invalid('connections.test'));
+    expect(tester).not.toHaveBeenCalled();
+  });
+});
+
+describe('model listing', () => {
+  it('offers the catalogue for Anthropic and Google, with what is known of each model', async () => {
+    data(await service.add({ providerId: 'anthropic', apiKey: ANTHROPIC_KEY }));
+    expect(data(await service.models('anthropic'))).toEqual(MODEL_CATALOGUE.anthropic);
+    expect(lister).not.toHaveBeenCalled();
+  });
+
+  it('lists live once, then reuses the list for 10 minutes; after that it lists again', async () => {
+    data(await service.add({ providerId: 'ollama' }));
+    lister.mockResolvedValue({ ok: true, models: [{ id: 'qwen3:8b' }] });
+    expect(data(await service.models('ollama'))).toEqual([{ id: 'qwen3:8b' }]);
+    expect(lister).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'ollama',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+    });
+    expect(service.list()[0]?.models).toEqual(['qwen3:8b']);
+
+    advance(10 * 60 * 1000 - 1);
+    expect(data(await service.models('ollama'))).toEqual([{ id: 'qwen3:8b' }]);
+    expect(lister).toHaveBeenCalledTimes(1);
+
+    advance(1);
+    // Stale: connections.list never lists live, so it knows no models until the picker asks.
+    expect(service.list()[0]?.models).toEqual([]);
+    data(await service.models('ollama'));
+    expect(lister).toHaveBeenCalledTimes(2);
+  });
+
+  it('a passed test fills the cache, so the picker opened after adding lists nothing again', async () => {
+    tester.mockResolvedValueOnce({ ok: true, models: [{ id: 'gpt-5' }] });
+    expect(data(await service.add({ providerId: 'openai', apiKey: OPENAI_KEY })).models).toEqual([
+      'gpt-5',
+    ]);
+    expect(data(await service.models('openai'))).toEqual([{ id: 'gpt-5' }]);
+    expect(lister).not.toHaveBeenCalled();
+  });
+
+  it("does not keep a failed listing, and answers provider_error with the Provider's text", async () => {
+    data(await service.add({ providerId: 'groq', apiKey: 'gsk_0123456789abcdef' }));
+    lister.mockResolvedValueOnce({ ok: false, detail: 'Invalid API Key' });
+    await expect(service.models('groq')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_error', params: { detail: 'Invalid API Key' } },
+    });
+    data(await service.models('groq'));
+    expect(lister).toHaveBeenCalledTimes(2);
+    expect(lister).toHaveBeenLastCalledWith({
+      providerId: 'groq',
+      apiKey: 'gsk_0123456789abcdef',
+      baseUrl: 'https://api.groq.com/openai/v1',
+    });
+  });
+
+  it('forgets the list when the key or base URL changes, or the Connection is removed', async () => {
+    data(await service.add({ providerId: 'ollama' }));
+    data(await service.models('ollama'));
+    data(await service.update({ id: 'ollama', enabled: false }));
+    data(await service.models('ollama'));
+    expect(lister).toHaveBeenCalledTimes(1);
+
+    data(await service.update({ id: 'ollama', baseUrl: 'http://10.0.0.5:11434/v1' }));
+    data(await service.models('ollama'));
+    expect(lister).toHaveBeenCalledTimes(2);
+
+    expect(service.remove('ollama')).toEqual({ ok: true, data: null });
+    data(await service.add({ providerId: 'ollama' }));
+    data(await service.models('ollama'));
+    expect(lister).toHaveBeenCalledTimes(3);
+  });
+
+  it('lists nothing, and asks nobody, for a Provider without a model list', async () => {
+    data(await service.add({ providerId: 'doubao', apiKey: 'ark-0123456789', testModel: 'x' }));
+    expect(data(await service.models('doubao'))).toEqual([]);
+    expect(lister).not.toHaveBeenCalled();
+    await expect(service.models('nope')).resolves.toMatchObject(invalid('connections.models'));
+  });
+});
+
+describe('testing a draft', () => {
+  it('tests a new Connection without saving anything, and returns the models it found', async () => {
+    tester.mockResolvedValueOnce({ ok: true, models: [{ id: 'gpt-5' }] });
+    await expect(service.testDraft({ providerId: 'openai', apiKey: OPENAI_KEY })).resolves.toEqual({
+      ok: true,
+      data: { models: [{ id: 'gpt-5' }] },
+    });
+    expect(connectionRows()).toEqual([]);
+    expect(secretRows()).toEqual([]);
+    // Anthropic's models come from the catalogue.
+    await expect(
+      service.testDraft({ providerId: 'anthropic', apiKey: ANTHROPIC_KEY }),
+    ).resolves.toEqual({ ok: true, data: { models: MODEL_CATALOGUE.anthropic } });
+  });
+
+  it("answers a failed test with provider_error and the Provider's text", async () => {
+    tester.mockResolvedValueOnce({ ok: false, detail: 'invalid x-api-key' });
+    await expect(
+      service.testDraft({ providerId: 'anthropic', apiKey: ANTHROPIC_KEY }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_error', params: { detail: 'invalid x-api-key' } },
+    });
+  });
+
+  it('for a saved Connection, takes what the draft leaves out from it, its key included', async () => {
+    data(
+      await service.add({
+        providerId: 'openai',
+        apiKey: OPENAI_KEY,
+        baseUrl: 'https://proxy.example.com/v1',
+      }),
+    );
+    tester.mockClear();
+    data(await service.testDraft({ id: 'openai', providerId: 'openai' }));
+    expect(tester).toHaveBeenCalledWith({
+      providerId: 'openai',
+      apiKey: OPENAI_KEY,
+      baseUrl: 'https://proxy.example.com/v1',
+    });
+    data(await service.testDraft({ id: 'openai', providerId: 'openai', baseUrl: '' }));
+    expect(tester).toHaveBeenLastCalledWith(
+      expect.objectContaining({ baseUrl: 'https://api.openai.com/v1' }),
+    );
+    // Nothing about the saved Connection changed.
+    expect(service.list()[0]).toMatchObject({ baseUrl: 'https://proxy.example.com/v1' });
+  });
+
+  it.each([
+    { reason: 'a missing key', draft: { providerId: 'anthropic' } },
+    { reason: 'a missing test model', draft: { providerId: 'zhipu', apiKey: 'k-0123456789' } },
+    { reason: 'an id of another Provider', draft: { id: 'ollama', providerId: 'openai' } },
+    { reason: 'a custom endpoint without a base URL', draft: { providerId: 'openai-compatible' } },
+  ])('rejects $reason as invalid_input', async ({ draft }) => {
+    await expect(service.testDraft(draft)).resolves.toMatchObject(invalid('connections.testDraft'));
+    expect(tester).not.toHaveBeenCalled();
   });
 });
