@@ -18,7 +18,7 @@ Row-level security decides what is visible (see [`data-model.md`](./data-model.m
 `latest_versions` (P0-07.4) answers one row per requested Harness ID, in the order given (duplicates included), at most 1000 IDs per call (more is `400`, SQLSTATE `22023`):
 - `store_status`: `available` (active, with a published version), `unpublished` (no published version left), `taken_down` (the Harness was taken down) or `not_found` (no such Harness).
 - `latest_version` and `manifest`: only when `available`, else `null`. `manifest` is the full stored Manifest of the latest published version, so it has everything `diffForReconsent(installed, latest)` compares (`permissions`, `runtime`, `entry`) and the `changelog`. Nothing of any other version, and nothing but the status of a Harness that is not available, is ever returned.
-- It reports the Harness's status only: a Takedown of an older version than the latest (one the User may have installed) is not reported in P0, and the takedown note is never public.
+- It reports the Harness's status only: no version-level Takedown is reported in P0, not even one of the latest version, and the takedown note is never public. Taking down the latest version (or Unpublishing it) moves the Harness's `latest_version` back to the previous published version, so the row then says `available` with that earlier version, possibly lower than the one the User has installed, or `unpublished` when no published version is left. A client must offer an update only when `latest_version` is greater than the installed version, never because it differs.
 - It is `SECURITY DEFINER` (row-level security would hide the taken-down and Unpublished-only Harnesses whose status it reports) and callable by anon and authenticated.
 
 Search is Postgres full-text (`websearch_to_tsquery`) over the `search` column (maintained by `refresh_harness`, not generated), ranked by `ts_rank` then `download_count`. `platform` filters `harness_versions.platforms @> ARRAY[platform]` on the latest version.
@@ -45,8 +45,8 @@ Every function answers an error with `{ "error": { "code", "message", ... } }`; 
 | 403 | `forbidden` | Not the owner, or not an administrator |
 | 404 | `not_found` | Unknown Harness or version, or one that is not visible |
 | 405 | `method_not_allowed` | Anything but `POST` |
-| 422 | `platform_not_supported` | `download` for a platform the Harness Version does not declare |
 | 409 | `harness_taken_down` | `publish` or `unpublish` against a taken-down Harness or version |
+| 422 | `platform_not_supported` | `download` for a platform the Harness Version does not declare |
 | 429 | `rate_limited` | `publish` (20 per Publisher per 24 h) and `report` |
 | 500 | `internal_error` | Anything unexpected (logged by the function) |
 

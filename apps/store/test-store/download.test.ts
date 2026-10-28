@@ -30,14 +30,19 @@ import {
 } from './support.ts';
 import type { Reply, TestUser } from './support.ts';
 
+/** The caller whose token the privacy test sends; it owns nothing. */
 let user: TestUser;
+/** The Publisher of the Harnesses the tests insert, kept apart from `user` for the privacy scan. */
+let owner: TestUser;
 
 beforeAll(async () => {
   user = await createUser();
+  owner = await createUser();
 });
 
 afterAll(async () => {
   await deleteUser(user);
+  await deleteUser(owner);
   await seed();
 });
 
@@ -269,6 +274,25 @@ describe('download: platform and counters', () => {
     expect(await counters('alice/hello-web')).toEqual(before);
   });
 
+  it('counts nothing when the Harness was taken down after the version was resolved (record_download)', async () => {
+    // The Takedown commits between the function's lookup and its count: the Harness is taken down
+    // while its version is still published, so only record_download's Harness check can refuse.
+    const harness = await insertHarness(owner, 'taken-down-while-counting');
+    const version = await insertVersion(harness, '1.0.0');
+    await serviceRest('PATCH', `harnesses?id=eq.${harness.id}`, { status: 'taken_down' });
+    const before = await counters(harness.harness_id);
+    expect(before).toEqual({ harness: 0, versions: { '1.0.0': 0 }, events: 0 });
+
+    const reply = await rest('service', 'POST', 'rpc/record_download', {
+      version_id: version.id,
+      platform: 'linux-x64',
+      app_version: '0.1.0',
+    });
+    expect(reply.status).toBe(404);
+    expect(reply.body).toMatchObject({ code: 'PT404', message: 'not_found' });
+    expect(await counters(harness.harness_id)).toEqual(before);
+  });
+
   it('record_download is not an RPC for anon or a Publisher', async () => {
     const { id } = await storedVersion('alice/hello-web', '0.1.0');
     for (const caller of ['anon', { token: user.token }] as const) {
@@ -445,7 +469,7 @@ describe('latest_versions', () => {
   });
 
   it('reports a taken-down Harness as taken down even while a version of it is still published', async () => {
-    const harness = await insertHarness(user, 'taken-down-later');
+    const harness = await insertHarness(owner, 'taken-down-later');
     await insertVersion(harness, '1.0.0');
     const [before] = (await latestVersions('anon', [harness.harness_id])).body;
     expect(before).toMatchObject({ store_status: 'available', latest_version: '1.0.0' });
@@ -460,6 +484,30 @@ describe('latest_versions', () => {
     });
     const blocked = await download({ harness_id: harness.harness_id, ...ASK });
     expect(blocked.status).toBe(404);
+  });
+
+  it('does not report a version-level Takedown of the latest version: it falls back to the previous one, then to unpublished', async () => {
+    const harness = await insertHarness(owner, 'version-taken-down');
+    const first = await insertVersion(harness, '1.0.0');
+    const second = await insertVersion(harness, '2.0.0');
+    const [before] = (await latestVersions('anon', [harness.harness_id])).body;
+    expect(before).toMatchObject({ store_status: 'available', latest_version: '2.0.0' });
+
+    // A User with 2.0.0 installed is told 1.0.0 is the latest: lower than theirs, not an update.
+    await serviceRest('PATCH', `harness_versions?id=eq.${second.id}`, { status: 'taken_down' });
+    const [previous] = (await latestVersions('anon', [harness.harness_id])).body;
+    expect(previous).toMatchObject({ store_status: 'available', latest_version: '1.0.0' });
+    expect(previous?.manifest).toMatchObject({ version: '1.0.0' });
+
+    // With no published version left, the Harness reads as Unpublished, not taken down.
+    await serviceRest('PATCH', `harness_versions?id=eq.${first.id}`, { status: 'taken_down' });
+    const [none] = (await latestVersions('anon', [harness.harness_id])).body;
+    expect(none).toEqual({
+      harness_id: harness.harness_id,
+      store_status: 'unpublished',
+      latest_version: null,
+      manifest: null,
+    });
   });
 
   it('answers every ID it is given, duplicates included, and nothing for an empty batch', async () => {

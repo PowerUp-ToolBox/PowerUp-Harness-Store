@@ -57,8 +57,10 @@ grant execute on function public.record_download(uuid, text, text) to service_ro
 --
 -- SECURITY DEFINER: row-level security hides taken-down and Unpublished-only Harnesses, whose
 -- status the desktop app must still learn. It never returns anything of a version that is not the
--- latest published one, and nothing of a Harness that is not available besides its status. A
--- Takedown of only an older version than the latest is not reported (P0).
+-- latest published one, and nothing of a Harness that is not available besides its status. No
+-- version-level Takedown is reported (P0), not even one of the latest version: refresh_harness then
+-- moves latest_version back to the previous published version (possibly lower than the installed
+-- one) or to null ('unpublished').
 create function public.latest_versions(harness_ids text[])
 returns table (harness_id text, store_status text, latest_version text, manifest jsonb)
 language plpgsql
