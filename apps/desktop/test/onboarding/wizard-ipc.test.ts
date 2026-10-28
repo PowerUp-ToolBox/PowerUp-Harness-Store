@@ -87,7 +87,10 @@ describe('onboarding_done across launches', () => {
   it('keeps the language override when onboardingDone is written, and the other way round', async () => {
     const runtime = await launch();
     await call(runtime, 'settings.set', { locale: 'zh-CN' });
-    await call(runtime, 'settings.set', { onboardingDone: true });
+    await expect(call(runtime, 'settings.set', { onboardingDone: true })).resolves.toEqual({
+      ok: true,
+      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN', onboardingDone: true },
+    });
     await expect(call(runtime, 'settings.set', { locale: null })).resolves.toEqual({
       ok: true,
       data: { resolvedLocale: 'en', onboardingDone: true },
