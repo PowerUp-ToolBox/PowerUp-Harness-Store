@@ -1,7 +1,8 @@
 /**
- * The request rules of the `publish` Edge Function that need no network: the Content-Length
- * check, which Harness a package is for, the HTTP answer to validatePackage's problems and to
- * publish_version's errors, and the in-app route of a published Harness. The validation itself is
+ * The request rules of the `publish` Edge Function that need no network: which Auth errors mean a
+ * bad token, the Content-Length check, which Harness a package is for, the HTTP answer to
+ * validatePackage's problems and to publish_version's errors, and the in-app route of a published
+ * Harness. The validation itself is
  * validatePackage from @harness-store/manifest, never repeated here. Plain TypeScript with no
  * imports (see storage-paths.ts).
  */
@@ -58,6 +59,34 @@ export const RATE_LIMITED: ApiError = {
   code: 'rate_limited',
   message: 'A Publisher can publish at most 20 versions in 24 hours. Try again later.',
 };
+
+export const ICON_TOO_LARGE: ApiError = {
+  status: 413,
+  code: 'package_too_large',
+  message: 'assets/icon.png is larger than 5 MB, the most the Store keeps for an icon.',
+};
+
+/** The Auth error codes that say the token itself is not (or no longer) a valid session. */
+const BAD_TOKEN_CODES = new Set([
+  'bad_jwt',
+  'no_authorization',
+  'user_not_found',
+  'session_not_found',
+  'session_expired',
+]);
+
+/**
+ * Whether an error of Auth's `getUser(token)` means the token is not a valid session (`401
+ * unauthenticated`, which ends the desktop app's session), rather than that Auth could not answer
+ * (a network error, a 5xx, a 429: `500 internal_error`, which it may retry). `error` is the
+ * supabase-js AuthError, read structurally: Auth's own refusal is an `AuthApiError` with its HTTP
+ * status and error code, and a session that no longer exists an `AuthSessionMissingError`.
+ */
+export function isBadToken(error: { name?: string; status?: number; code?: string }): boolean {
+  if (error.name === 'AuthSessionMissingError') return true;
+  if (error.name !== 'AuthApiError') return false;
+  return error.status === 401 || error.status === 403 || BAD_TOKEN_CODES.has(error.code ?? '');
+}
 
 /** A refusal of the request from its Content-Length header alone, or undefined to go on. */
 export function contentLengthError(header: string | null): ApiError | undefined {

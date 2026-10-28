@@ -43,7 +43,7 @@ Every function answers an error with `{ "error": { "code", "message", ... } }`; 
 | 429 | `rate_limited` | `publish` (20 per Publisher per 24 h) and `report` |
 | 500 | `internal_error` | Anything unexpected (logged by the function) |
 
-The functions check their own caller (config.toml `verify_jwt = false`): the Publisher and admin functions call Auth's `getUser` with the service role on the bearer token; `download` and `report` need no JWT. Every call still sends the anon key as `apikey`.
+The functions check their own caller (config.toml `verify_jwt = false`): the Publisher and admin functions call Auth's `getUser` with the service role on the bearer token; `download` and `report` need no JWT. Only Auth's refusal of the token (a 401 or 403, or the codes `bad_jwt`, `no_authorization`, `user_not_found`, `session_not_found`, `session_expired`) is `401 unauthenticated`; Auth not answering (a network error, a 5xx, a 429) is `500 internal_error`, so the desktop app keeps the session and may retry. Every call still sends the anon key as `apikey`.
 
 ### `POST /functions/v1/publish` (Publisher JWT)
 `multipart/form-data` with the Harness Package zip in the part `package`; other parts are ignored. Everything else comes from the Manifest (P0): the changelog is the Manifest's `changelog`.
@@ -54,8 +54,9 @@ Steps (P0-07.3):
 3. Rate limit: 20 publishes per Publisher per rolling 24 hours, counted from `harness_versions.published_at`, any status (`429 rate_limited`).
 4. Read the body into memory, open it with `ArchiveSource.open(bytes)` and run `validatePackage()` from `packages/manifest` with `publisher` (the caller's `github_login`) and `publishedVersions` (every version of that Harness, Unpublished and taken-down ones included), exactly what the desktop app runs. Nothing is reimplemented in the function.
 5. A taken-down Harness gets no new version: `409 harness_taken_down`.
-6. Upload the package to `harness-packages/<publisher>/<slug>/<version>.zip`, then the icon and screenshots to `harness-assets` (paths in data-model.md), never overwriting: an object already there means another publish of this version (`409 version_not_greater`; it is not deleted).
-7. `publish_version()` (SQL, service role only) inserts the Harness on its first version and the Harness Version in one transaction, under a per-Publisher lock, re-checking the rate limit and that no version was published since step 4 (else `409 version_not_greater`; a retry gives the up-to-date answer). Triggers refresh the Harness's listing fields.
+6. Read in full what the Store keeps besides the zip, before anything is uploaded: the icon, the screenshots and README.md (at most 1 MiB is kept). The Store keeps at most five screenshots, the first in package path order, and skips any over 2 MB: more, or larger, ones are only warnings for validatePackage, and the detail page shows up to five. An icon over 5 MB (the `harness-assets` limit per object; an honest 512×512 PNG is about 2 MB at most) is `413 package_too_large`. A full read checks each file's CRC-32 and size, which validatePackage does not (it reads only the start of the icon and the screenshots, and nothing of README.md): a file that cannot be read is `422 invalid_manifest` with an `archive_invalid` problem (`messageKey` `archive_invalid.entry`) at its path, built as validatePackage builds it.
+7. Upload the package to `harness-packages/<publisher>/<slug>/<version>.zip`, then the icon and screenshots to `harness-assets` (paths in data-model.md), never overwriting: an object already there means another publish of this version (`409 version_not_greater`; it is not deleted).
+8. `publish_version()` (SQL, service role only) inserts the Harness on its first version and the Harness Version in one transaction, under a per-Publisher lock, re-checking the rate limit and that no version was published since step 4 (else `409 version_not_greater`; a retry gives the up-to-date answer). Triggers refresh the Harness's listing fields.
 
 On any failure after the first upload, the objects this request uploaded (and only those) are deleted.
 
@@ -69,7 +70,7 @@ When validatePackage refuses the package, the status comes from all its problems
                   "params": { "key": "license" }, "message": "Required key \"license\" is missing." } ] } }
 ```
 
-A `409 version_not_greater` from a publish that lost a race (step 6 or 7) has no `problems`. Other errors: `400 invalid_request` (not multipart, or no `package` part), `401`, `405`, `411`, `413` from the Content-Length (no `problems`), `429`, `500`.
+A `409 version_not_greater` from a publish that lost a race (step 7 or 8) has no `problems`. Other errors: `400 invalid_request` (not multipart, or no `package` part), `401`, `405`, `411`, `413` from the Content-Length or for an icon over 5 MB (no `problems`), `429`, `500`.
 
 Known limitations (P0): the package is held in memory (an Edge Function has no disk to stream to), so publishing near the 500 MB limit needs more memory and a larger request than a hosted Edge Function allows; the gateway (and the local edge runtime) passes the Content-Length refusal on only once the whole body has arrived. A package object left by a crash between upload and commit blocks that version number until it is removed by hand.
 

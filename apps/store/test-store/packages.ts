@@ -10,7 +10,7 @@ import { readFolder } from '../scripts/seed.ts';
 import { stack } from './support.ts';
 import type { Reply } from './support.ts';
 
-const FIXTURES = join(storeRoot(), '..', '..', 'packages', 'manifest', 'fixtures');
+export const FIXTURES = join(storeRoot(), '..', '..', 'packages', 'manifest', 'fixtures');
 
 /** A zip entry beyond the fixture's files: its bytes, and zip attributes (a symbolic link). */
 export type ExtraEntry = Uint8Array | [Uint8Array, ZipOptions];
@@ -35,6 +35,23 @@ export function fixturePackage(fixture: string, options: PackageOptions = {}): U
   const entries: Zippable = Object.fromEntries(files);
   for (const [name, entry] of Object.entries(options.extra ?? {})) entries[name] = entry;
   return zipSync(entries, { mtime: new Date('2026-01-01T00:00:00Z') });
+}
+
+/** `bytes` stored without compression, so a test can find and change them in the zip. */
+export function storedEntry(bytes: Uint8Array): ExtraEntry {
+  return [bytes, { level: 0 }];
+}
+
+/**
+ * A copy of `zip` with one byte flipped inside the first occurrence of `marker`: the data of an
+ * uncompressed entry, which then fails its CRC-32 check when read in full.
+ */
+export function corrupt(zip: Uint8Array, marker: Uint8Array): Uint8Array {
+  const at = Buffer.from(zip).indexOf(Buffer.from(marker));
+  if (at < 0) throw new Error('The marker is not in the zip');
+  const copy = zip.slice();
+  copy[at] = (copy[at] ?? 0) ^ 0xff;
+  return copy;
 }
 
 /** A symbolic link entry pointing at `target` (Unix mode 0120777 in the external attributes). */

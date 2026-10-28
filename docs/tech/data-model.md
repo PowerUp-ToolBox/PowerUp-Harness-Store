@@ -58,7 +58,7 @@ Immutable: an UPDATE trigger allows only `status`, `download_count` and `unpubli
 | `package_path` | text | path in `harness-packages`, `<publisher>/<slug>/<version>.zip` |
 | `package_sha256` | text | hex |
 | `package_size` | bigint | bytes |
-| `screenshot_paths` | text[] | paths in `harness-assets`, `<publisher>/<slug>/<version>/screenshots/<n>.<ext>` |
+| `screenshot_paths` | text[] | paths in `harness-assets`, `<publisher>/<slug>/<version>/screenshots/<n>.<ext>`; at most five (see Storage buckets) |
 | `status` | enum `published` \| `unpublished` \| `taken_down` | |
 | `download_count` | bigint | |
 | `published_at`, `unpublished_at` | timestamptz | |
@@ -108,7 +108,7 @@ Every catalogue write uses the service role inside an Edge Function. anon and au
 ### Storage buckets
 Created by a migration. Paths are relative to their bucket (no bucket prefix in any stored path). No policy on `storage.objects` mentions either bucket, so anon and authenticated can neither list nor write.
 - `harness-packages` (private, 500 MiB per object, `application/zip`): `<publisher>/<slug>/<version>.zip`. Downloads only via signed URL from the `download` function (60 s expiry).
-- `harness-assets` (public, read-only, `image/png` and `image/jpeg`): `<publisher>/<slug>/<version>/icon.png`, `.../screenshots/<n>.<ext>`, where `n` is the 0-based index of the screenshots in package path order and `ext` the original extension, lower-cased.
+- `harness-assets` (public, read-only, 5 MiB per object, `image/png` and `image/jpeg`): `<publisher>/<slug>/<version>/icon.png`, `.../screenshots/<n>.<ext>`, where `n` is the 0-based index of the screenshots in package path order and `ext` the original extension, lower-cased. Only what the Store shows is kept: at most five screenshots, the first in package path order, skipping any over 2 MB (validatePackage only warns about more or larger ones). `publish` refuses an icon over 5 MiB.
 
 ## 2. Local store (SQLite, desktop)
 

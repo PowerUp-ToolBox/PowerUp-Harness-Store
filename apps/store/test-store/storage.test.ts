@@ -113,7 +113,7 @@ describe('harness-packages (private)', () => {
 });
 
 describe('bucket settings', () => {
-  it('limits harness-packages to zip files of at most 500 MiB and harness-assets to PNG and JPEG', async () => {
+  it('limits harness-packages to zip files of at most 500 MiB and harness-assets to PNG and JPEG of at most 5 MiB', async () => {
     const buckets = await call<
       {
         id: string;
@@ -130,6 +130,7 @@ describe('bucket settings', () => {
     });
     expect(byId['harness-assets']).toMatchObject({
       public: true,
+      file_size_limit: 5 * 1024 * 1024,
       allowed_mime_types: ['image/png', 'image/jpeg'],
     });
   });

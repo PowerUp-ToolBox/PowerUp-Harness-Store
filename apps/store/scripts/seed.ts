@@ -234,7 +234,8 @@ async function seedHarness(
 
     const zipPath = packagePath(harness.id, version.version);
     await upload(client, PACKAGES_BUCKET, zipPath, zip, 'application/zip');
-    const assets = assetUploads(harness.id, version.version, files.keys());
+    const sizes = new Map([...files].map(([path, bytes]) => [path, bytes.length]));
+    const assets = assetUploads(harness.id, version.version, sizes);
     for (const asset of assets) {
       const bytes = files.get(asset.file);
       if (bytes === undefined) throw new Error(`${asset.file} is missing`);

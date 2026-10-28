@@ -5,21 +5,40 @@
  * validatePackage reports locally for the same bytes and options), and leave no row and no
  * Storage object behind.
  */
-import { createHash } from 'node:crypto';
-import { ArchiveSource, validatePackage } from '@harness-store/manifest';
-import type { ValidatePackageOptions } from '@harness-store/manifest';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  ArchiveSource,
+  interpolate,
+  MESSAGES_EN,
+  PackageReadError,
+  validatePackage,
+} from '@harness-store/manifest';
+import type { Manifest, Problem, ValidatePackageOptions } from '@harness-store/manifest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { fixturePackage, publish, symlinkEntry } from './packages.ts';
+import {
+  corrupt,
+  FIXTURES,
+  fixturePackage,
+  publish,
+  storedEntry,
+  symlinkEntry,
+} from './packages.ts';
 import type { PackageOptions } from './packages.ts';
 import {
   call,
   createUser,
   deleteUser,
   edgeRuntimeUrl,
+  insertHarness,
+  insertVersion,
   listObjects,
+  mintJwt,
   nodeOnStackNetwork,
   rest,
   serviceRest,
+  sql,
   stack,
 } from './support.ts';
 import type { HarnessRow, TestUser } from './support.ts';
@@ -156,6 +175,46 @@ describe('a valid Harness Package', () => {
       `harnesses?harness_id=eq.${encodeURIComponent(harnessId)}&select=latest_version`,
     );
     expect(read.body).toEqual([{ latest_version: '0.1.0' }]);
+  });
+
+  it('keeps at most five screenshots of at most 2 MB, the first in package path order', async () => {
+    const harnessId = `${login}/many-screenshots`;
+    const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    const screenshot = (index: number, size = 16) => {
+      const bytes = new Uint8Array(size);
+      bytes.set(signature);
+      bytes[size - 1] = index;
+      return bytes;
+    };
+    // Seven screenshots (validatePackage only warns), one of them over 2 MB.
+    const extra: Record<string, Uint8Array> = {};
+    for (let index = 0; index < 7; index++)
+      extra[`assets/s${String(index)}.png`] = screenshot(index);
+    extra['assets/s2.png'] = screenshot(2, 2 * 1024 * 1024 + 1);
+    const zip = packageOf('many-screenshots', '1.0.0', 'valid-minimal-node', { extra });
+    const result = await validatePackage(await ArchiveSource.open(zip), { publisher: login });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.map((warning) => warning.code).sort()).toEqual([
+      'file_too_large',
+      'screenshots_too_many',
+    ]);
+
+    expect((await publish(publisher.token, zip)).status).toBe(201);
+    const kept = ['s0', 's1', 's3', 's4', 's5'];
+    const paths = kept.map((_, index) => `${harnessId}/1.0.0/screenshots/${String(index)}.png`);
+    const [version] = await versionsOf(harnessId);
+    expect(version?.screenshot_paths).toEqual(paths);
+    expect(await objectsOf(harnessId)).toEqual([
+      `${harnessId}/1.0.0.zip`,
+      `${harnessId}/1.0.0/icon.png`,
+      ...paths,
+    ]);
+    for (const [index, name] of kept.entries()) {
+      const stored = await fetch(
+        `${stack.apiUrl}/storage/v1/object/public/harness-assets/${paths[index] ?? ''}`,
+      );
+      expect(new Uint8Array(await stored.arrayBuffer()), name).toEqual(extra[`assets/${name}.png`]);
+    }
   });
 
   it('updates the listing fields of the Harness from a newer version immediately', async () => {
@@ -307,6 +366,66 @@ describe('a rejected Harness Package', () => {
     expect(await objectsOf(`${login}/too-many`)).toEqual([]);
   });
 
+  it('is refused with 413 package_too_large for an icon over 5 MB, before any upload', async () => {
+    const icon = readFileSync(join(FIXTURES, 'valid-minimal-node', 'assets', 'icon.png'));
+    const padded = new Uint8Array(5 * 1024 * 1024 + 1);
+    padded.set(icon);
+    const zip = packageOf('huge-icon', '1.0.0', 'valid-minimal-node', {
+      extra: { 'assets/icon.png': padded },
+    });
+    expect((await validatePackage(await ArchiveSource.open(zip), { publisher: login })).ok).toBe(
+      true,
+    );
+    const reply = await publish(publisher.token, zip);
+    expect(reply.status).toBe(413);
+    expect(reply.body.error).toEqual({
+      code: 'package_too_large',
+      message: expect.stringContaining('icon') as string,
+    });
+    expect(await harnessRow(`${login}/huge-icon`)).toBeUndefined();
+    expect(await objectsOf(`${login}/huge-icon`)).toEqual([]);
+  });
+
+  it('is refused with 422 invalid_manifest for a corrupt icon or README that validatePackage does not read in full', async () => {
+    // Stored uncompressed, then one byte flipped past what validatePackage reads (the icon's
+    // first 33 bytes; nothing of README.md): only a full read finds the CRC-32 mismatch.
+    const icon = readFileSync(join(FIXTURES, 'valid-minimal-node', 'assets', 'icon.png'));
+    const readme = new TextEncoder().encode('# Corrupt\n\nCORRUPT-THIS-README-LINE\n');
+    let zip = packageOf('corrupt', '1.0.0', 'valid-minimal-node', {
+      extra: { 'assets/icon.png': storedEntry(icon), 'README.md': storedEntry(readme) },
+    });
+    zip = corrupt(zip, icon.subarray(80, 100));
+    zip = corrupt(zip, new TextEncoder().encode('CORRUPT-THIS-README-LINE'));
+    const source = await ArchiveSource.open(zip);
+    expect((await validatePackage(source, { publisher: login })).ok).toBe(true);
+
+    // The problem validatePackage reports for an entry it cannot read.
+    const unreadable = async (path: string): Promise<Problem> => {
+      const error = await source.readFile(path).then(
+        () => undefined,
+        (thrown: unknown) => thrown,
+      );
+      expect(error).toBeInstanceOf(PackageReadError);
+      const params = { detail: (error as PackageReadError).message };
+      return {
+        path,
+        code: 'archive_invalid',
+        message: interpolate(MESSAGES_EN['archive_invalid.entry'], params),
+        messageKey: 'archive_invalid.entry',
+        params,
+      };
+    };
+    const reply = await publish(publisher.token, zip);
+    expect(reply.status).toBe(422);
+    expect(reply.body.error).toEqual({
+      code: 'invalid_manifest',
+      message: expect.any(String) as string,
+      problems: [await unreadable('assets/icon.png'), await unreadable('README.md')],
+    });
+    expect(await harnessRow(`${login}/corrupt`)).toBeUndefined();
+    expect(await objectsOf(`${login}/corrupt`)).toEqual([]);
+  });
+
   it('is refused with 411 length_required without a Content-Length', async () => {
     // A chunked body, straight to the Edge Functions: the gateway (Kong) buffers a body and
     // passes it on with a Content-Length. (A Content-Length over 500 MB is refused before the
@@ -400,8 +519,8 @@ describe('objects already in Storage', () => {
   });
 });
 
-describe('two publishes of the same version at once', () => {
-  it('give one Harness Version: one succeeds, the other is refused, and the package stays', async () => {
+describe('two publishes at once', () => {
+  it('of the same version give one Harness Version: one succeeds, the other is refused, and the package stays', async () => {
     const harnessId = `${login}/race`;
     const zip = packageOf('race', '1.0.0');
     const replies = await Promise.all([
@@ -409,11 +528,134 @@ describe('two publishes of the same version at once', () => {
       publish(publisher.token, zip),
     ]);
     expect(replies.map((reply) => reply.status).sort()).toEqual([201, 409]);
+    expect(replies.find((reply) => reply.status === 409)?.body.error.code).toBe(
+      'version_not_greater',
+    );
     expect((await versionsOf(harnessId)).map((row) => row.version)).toEqual(['1.0.0']);
     expect(await objectsOf(harnessId)).toEqual([
       `${harnessId}/1.0.0.zip`,
       `${harnessId}/1.0.0/icon.png`,
     ]);
+  });
+
+  it('of two versions of a new Harness, both validated against no version, record only the first to commit', async () => {
+    // A session holds publish_version's lock until both publishes wait for it, so both have
+    // validated against no earlier version and uploaded their objects; the second to get the lock
+    // then finds one version where it expected none.
+    const key = `hashtextextended('publish:${publisher.id}', 0)`;
+    const holder = sql(`
+      select pg_advisory_lock(${key});
+      do $$
+      begin
+        for attempt in 1..300 loop
+          exit when (select count(*) from pg_locks where locktype = 'advisory' and not granted) >= 2;
+          perform pg_sleep(0.1);
+        end loop;
+        if (select count(*) from pg_locks where locktype = 'advisory' and not granted) < 2 then
+          raise exception 'The two publishes never waited for the lock';
+        end if;
+      end $$;
+      select pg_advisory_unlock(${key});
+    `);
+    const held = `select count(*) from pg_locks where locktype = 'advisory' and granted;`;
+    for (let attempt = 0; (await sql(held)) === '0'; attempt++) {
+      if (attempt === 100) throw new Error('The lock was never taken');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    const harnessId = `${login}/race-versions`;
+    const replies = await Promise.all(
+      ['1.0.0', '1.0.1'].map((version) =>
+        publish(publisher.token, packageOf('race-versions', version)),
+      ),
+    );
+    expect(await holder).toBe('t');
+    expect(replies.map((reply) => reply.status).sort()).toEqual([201, 409]);
+    const loser = replies.find((reply) => reply.status === 409);
+    expect(loser?.body.error).toEqual({
+      code: 'version_not_greater',
+      message: expect.any(String) as string,
+    });
+
+    // Only the winner's objects stay: the loser's, uploaded before publish_version refused it,
+    // are deleted.
+    const winner = replies.find((reply) => reply.status === 201)?.body.version ?? '';
+    expect((await versionsOf(harnessId)).map((row) => row.version)).toEqual([winner]);
+    expect(await objectsOf(harnessId)).toEqual([
+      `${harnessId}/${winner}.zip`,
+      `${harnessId}/${winner}/icon.png`,
+    ]);
+  });
+});
+
+describe('publish_version (called directly with the service role)', () => {
+  /** A validated Manifest of `<user's login>/<slug>@<version>`. */
+  async function manifestOf(user: TestUser, slug: string, version: string): Promise<Manifest> {
+    const zip = fixturePackage('valid-minimal-node', {
+      manifest: { id: `${user.userName.toLowerCase()}/${slug}`, version },
+    });
+    const result = await validatePackage(await ArchiveSource.open(zip));
+    if (!result.ok) throw new Error(JSON.stringify(result.problems));
+    return result.manifest;
+  }
+
+  async function publishVersion(user: TestUser, manifest: Manifest, knownVersions: number) {
+    return rest<{ code?: string; message?: string } | null>(
+      'service',
+      'POST',
+      'rpc/publish_version',
+      {
+        publisher: user.id,
+        manifest,
+        readme: '# Readme',
+        package_path: `${manifest.id}/${manifest.version}.zip`,
+        package_sha256: '0'.repeat(64),
+        package_size: 1,
+        screenshot_paths: [],
+        known_versions: knownVersions,
+      },
+    );
+  }
+
+  it('refuses version_not_greater (PT409) when the number of versions changed since validation', async () => {
+    const harnessId = `${login}/stale`;
+    expect((await publish(publisher.token, packageOf('stale', '1.0.0'))).status).toBe(201);
+    const next = await manifestOf(publisher, 'stale', '2.0.0');
+    for (const known of [0, 2]) {
+      const reply = await publishVersion(publisher, next, known);
+      expect(reply.status, String(known)).toBe(409);
+      expect(reply.body, String(known)).toMatchObject({
+        code: 'PT409',
+        message: 'version_not_greater',
+      });
+    }
+    expect((await versionsOf(harnessId)).map((row) => row.version)).toEqual(['1.0.0']);
+
+    // With the right count, the same call records the version.
+    expect((await publishVersion(publisher, next, 1)).status).toBeLessThan(300);
+    expect((await versionsOf(harnessId)).map((row) => row.version)).toEqual(['1.0.0', '2.0.0']);
+  });
+
+  it('refuses version_not_greater (PT409) for a new Harness when versions were expected', async () => {
+    const reply = await publishVersion(publisher, await manifestOf(publisher, 'gone', '1.0.0'), 1);
+    expect(reply.status).toBe(409);
+    expect(reply.body).toMatchObject({ code: 'PT409', message: 'version_not_greater' });
+    expect(await harnessRow(`${login}/gone`)).toBeUndefined();
+  });
+
+  it('re-counts the rate limit under the lock: rate_limited (PT429) after 20 versions in 24 hours', async () => {
+    const busy = await createUser();
+    try {
+      const harness = await insertHarness(busy, 'busy');
+      for (let index = 0; index < 20; index++) await insertVersion(harness, `1.0.${String(index)}`);
+      const manifest = await manifestOf(busy, 'other', '1.0.0');
+      const reply = await publishVersion(busy, manifest, 0);
+      expect(reply.status).toBe(429);
+      expect(reply.body).toMatchObject({ code: 'PT429', message: 'rate_limited' });
+      expect(await harnessRow(manifest.id)).toBeUndefined();
+    } finally {
+      await deleteUser(busy);
+    }
   });
 });
 
@@ -422,7 +664,9 @@ describe('authentication', () => {
     const notGithub = await createUser(undefined, 'email');
     try {
       const zip = packageOf('unauthenticated', '1.0.0');
-      for (const token of [undefined, stack.anonKey, 'not-a-jwt', notGithub.token]) {
+      // A well-signed session JWT of a user that does not exist (deleted, say) included.
+      const noUser = mintJwt(randomUUID());
+      for (const token of [undefined, stack.anonKey, 'not-a-jwt', notGithub.token, noUser]) {
         const reply = await publish(token, zip);
         expect(reply.status, String(token)).toBe(401);
         expect(reply.body.error.code, String(token)).toBe('unauthenticated');

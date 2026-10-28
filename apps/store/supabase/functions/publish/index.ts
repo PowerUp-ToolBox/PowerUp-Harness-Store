@@ -5,10 +5,12 @@
  *
  * Order: authenticate -> Content-Length (411, 413) -> rate limit -> read the multipart body ->
  * validatePackage with the caller's login and every earlier version of the Harness (413, 422,
- * 403, 409 with the validator's problems) -> upload the package, then the assets, never
- * overwriting (an object already there is another publish of this version) -> publish_version
- * writes the rows in one transaction under a lock. On any failure after the first upload, the
- * objects this request created are deleted.
+ * 403, 409 with the validator's problems) -> read in full what the Store keeps besides the zip
+ * (the icon, at most five screenshots of at most 2 MB, README.md), so a corrupt entry is a 422
+ * before anything is uploaded -> upload the package, then the assets, never overwriting (an
+ * object already there is another publish of this version) -> publish_version writes the rows in
+ * one transaction under a lock. On any failure after the first upload, the objects this request
+ * created are deleted.
  *
  * Known limitation: the package is held in memory (an Edge Function has no disk to stream to),
  * so the 500 MB package limit is above what a hosted Edge Function's memory and request size
@@ -16,10 +18,19 @@
  */
 import { createClient } from '@supabase/supabase-js';
 import { errorResponse, bearerToken, jsonResponse } from '../_shared/http.ts';
-import { ArchiveSource, PACKAGE_LIMITS, validatePackage } from '../_shared/manifest.js';
+import {
+  ArchiveSource,
+  interpolate,
+  MESSAGES_EN,
+  PACKAGE_LIMITS,
+  PackageReadError,
+  validatePackage,
+} from '../_shared/manifest.js';
 import {
   contentLengthError,
   HARNESS_TAKEN_DOWN,
+  ICON_TOO_LARGE,
+  isBadToken,
   ownHarnessId,
   publishVersionError,
   RATE_LIMITED,
@@ -27,11 +38,14 @@ import {
   storeRoute,
   VERSION_NOT_GREATER,
 } from '../_shared/publish.ts';
-import type { ApiError } from '../_shared/publish.ts';
+import type { ApiError, Problem } from '../_shared/publish.ts';
 import { README_MAX_BYTES, storedReadme } from '../_shared/readme.ts';
 import {
   ASSETS_BUCKET,
   assetUploads,
+  fileSizes,
+  ICON_FILE,
+  MAX_ASSET_BYTES,
   PACKAGES_BUCKET,
   packagePath,
 } from '../_shared/storage-paths.ts';
@@ -57,12 +71,18 @@ function serverError(what: string, cause: unknown): Response {
   return errorResponse(500, 'internal_error', 'The Store could not publish this package.');
 }
 
-/** The signed-in Publisher: their user id and GitHub login, or undefined. */
+/**
+ * The signed-in Publisher: their user id and GitHub login, or undefined for no or a bad token.
+ * Throws when Auth cannot answer, so an outage is a 500 and never ends the caller's session.
+ */
 async function publisherOf(request: Request) {
   const token = bearerToken(request.headers.get('authorization'));
   if (token === undefined) return undefined;
   const { data, error } = await admin.auth.getUser(token);
-  if (error !== null) return undefined;
+  if (error !== null) {
+    if (isBadToken(error)) return undefined;
+    throw error;
+  }
   const profile = await admin
     .from('profiles')
     .select('github_login')
@@ -81,6 +101,35 @@ async function manifestBytes(source: ArchiveSource): Promise<Uint8Array | undefi
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Reads files in full, which checks each one's CRC-32 and size: validatePackage reads no more
+ * than the start of the icon and the screenshots, and nothing of README.md. A file that cannot be
+ * read is the problem validatePackage reports for an unreadable entry (`archive_invalid.entry`).
+ */
+async function readInFull(
+  source: ArchiveSource,
+  files: readonly { file: string; maxBytes?: number }[],
+): Promise<{ contents: Uint8Array[] } | { problems: Problem[] }> {
+  const contents: Uint8Array[] = [];
+  const problems: Problem[] = [];
+  for (const { file, maxBytes } of files) {
+    try {
+      contents.push(await source.readFile(file, { maxBytes }));
+    } catch (error) {
+      if (!(error instanceof PackageReadError)) throw error;
+      const params = { detail: error.message };
+      problems.push({
+        path: file,
+        code: 'archive_invalid',
+        message: interpolate(MESSAGES_EN['archive_invalid.entry'], params),
+        messageKey: 'archive_invalid.entry',
+        params,
+      });
+    }
+  }
+  return problems.length > 0 ? { problems } : { contents };
 }
 
 /** A Storage error that says the object exists already (upsert is off). */
@@ -146,6 +195,19 @@ async function publish(request: Request): Promise<Response> {
   const { manifest } = result;
   if (harness?.status === 'taken_down') return fail(HARNESS_TAKEN_DOWN);
 
+  // What the Store keeps besides the zip, read before anything is uploaded.
+  const sizes = fileSizes(source.listEntries().entries);
+  if ((sizes.get(ICON_FILE) ?? 0) > MAX_ASSET_BYTES) return fail(ICON_TOO_LARGE);
+  const assets = assetUploads(manifest.id, manifest.version, sizes);
+  const read = await readInFull(source, [
+    ...assets,
+    // The 3 extra bytes complete a character cut at the limit, which storedReadme then drops.
+    ...(sizes.has('README.md') ? [{ file: 'README.md', maxBytes: README_MAX_BYTES + 3 }] : []),
+  ]);
+  if ('problems' in read) return fail(rejection(read.problems), { problems: read.problems });
+  const assetBytes = read.contents.slice(0, assets.length);
+  const readme = read.contents[assets.length] ?? new Uint8Array();
+
   const created: { bucket: string; path: string }[] = [];
   let committed = false;
   try {
@@ -160,13 +222,13 @@ async function publish(request: Request): Promise<Response> {
     }
     created.push({ bucket: PACKAGES_BUCKET, path: zipPath });
 
-    const files = source.listFiles();
-    const assets = assetUploads(manifest.id, manifest.version, files);
-    for (const asset of assets) {
-      const bytes = await source.readFile(asset.file);
+    for (const [index, asset] of assets.entries()) {
       const put = await admin.storage
         .from(ASSETS_BUCKET)
-        .upload(asset.path, bytes, { contentType: asset.contentType, upsert: false });
+        .upload(asset.path, assetBytes[index] ?? new Uint8Array(), {
+          contentType: asset.contentType,
+          upsert: false,
+        });
       if (put.error !== null) {
         if (alreadyExists(put.error)) return fail(VERSION_NOT_GREATER);
         return serverError(`upload ${asset.path}`, put.error);
@@ -174,10 +236,6 @@ async function publish(request: Request): Promise<Response> {
       created.push({ bucket: ASSETS_BUCKET, path: asset.path });
     }
 
-    // The 3 extra bytes complete a character cut at the limit, which storedReadme then drops.
-    const readme = files.includes('README.md')
-      ? await source.readFile('README.md', { maxBytes: README_MAX_BYTES + 3 })
-      : new Uint8Array();
     const inserted = await admin.rpc('publish_version', {
       publisher: publisher.id,
       manifest,

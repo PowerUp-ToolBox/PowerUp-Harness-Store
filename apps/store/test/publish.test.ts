@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { bearerToken, errorResponse } from '../supabase/functions/_shared/http.ts';
 import {
   contentLengthError,
+  isBadToken,
   MAX_PACKAGE_BYTES,
   MULTIPART_ALLOWANCE,
   ownHarnessId,
@@ -23,6 +24,34 @@ const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value
 function problem(code: string, path = '$'): Problem {
   return { path, code, message: code, messageKey: code };
 }
+
+describe('isBadToken', () => {
+  it("is true for Auth's refusal of the token: a 401 or 403, or a code that names a bad session", () => {
+    for (const error of [
+      { name: 'AuthApiError', status: 403, code: 'bad_jwt' },
+      { name: 'AuthApiError', status: 401, code: 'no_authorization' },
+      { name: 'AuthApiError', status: 404, code: 'user_not_found' },
+      { name: 'AuthApiError', status: 400, code: 'bad_jwt' },
+      { name: 'AuthApiError', status: 403 },
+      { name: 'AuthSessionMissingError', status: 400 },
+    ]) {
+      expect(isBadToken(error), JSON.stringify(error)).toBe(true);
+    }
+  });
+
+  it('is false when Auth could not answer, so the call is a 500 and the session is kept', () => {
+    for (const error of [
+      { name: 'AuthRetryableFetchError', status: 0 },
+      { name: 'AuthRetryableFetchError', status: 503 },
+      { name: 'AuthApiError', status: 500, code: 'unexpected_failure' },
+      { name: 'AuthApiError', status: 429, code: 'over_request_rate_limit' },
+      { name: 'AuthUnknownError', status: 502 },
+      { name: 'TypeError' },
+    ]) {
+      expect(isBadToken(error), JSON.stringify(error)).toBe(false);
+    }
+  });
+});
 
 describe('contentLengthError', () => {
   it('needs a Content-Length: 411 length_required', () => {
