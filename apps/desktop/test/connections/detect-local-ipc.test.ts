@@ -216,7 +216,7 @@ describe('detection', () => {
       data: { id: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', keyHint: null },
     });
     // Stored as the Provider's default (NULL), not as a copy of the URL.
-    const db = new DatabaseSync(runtime?.services.diagnostics.get().databasePath ?? '', {
+    const db = new DatabaseSync(runtime?.databasePath ?? '', {
       readOnly: true,
     });
     try {

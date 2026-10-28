@@ -100,7 +100,7 @@ async function query(input: Record<string, unknown>): Promise<UsageRow[]> {
 
 /** Writes Usage Records into the Runtime's database, as the Gateway's onUsage does. */
 function insert(records: readonly Partial<UsageRecord>[]): void {
-  const { databasePath } = runtime.services.diagnostics.get();
+  const { databasePath } = runtime;
   const db = new DatabaseSync(databasePath);
   try {
     const store = createUsageRecordStore(db);
@@ -141,9 +141,9 @@ describe('Usage Records from the Model Gateway', () => {
 
   /** One chat completion through the Gateway, read to its end, as a Harness sends it. */
   async function complete(token: string, model: string, stream = false) {
-    const { gateway: status } = runtime.services.diagnostics.get();
-    if (!status.running) throw new Error('The Model Gateway is not running');
-    const response = await fetch(`http://127.0.0.1:${String(status.port)}/v1/chat/completions`, {
+    const port = runtime.gatewayPort();
+    if (port === null) throw new Error('The Model Gateway is not running');
+    const response = await fetch(`http://127.0.0.1:${String(port)}/v1/chat/completions`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ model, stream, messages: [{ role: 'user', content: 'hello there' }] }),
@@ -154,7 +154,7 @@ describe('Usage Records from the Model Gateway', () => {
 
   /** The rows of usage_records, oldest first, once there are `count` of them. */
   async function storedRecords(count: number): Promise<Record<string, unknown>[]> {
-    const { databasePath } = runtime.services.diagnostics.get();
+    const { databasePath } = runtime;
     let rows: Record<string, unknown>[] = [];
     await vi.waitFor(() => {
       const db = new DatabaseSync(databasePath, { readOnly: true });

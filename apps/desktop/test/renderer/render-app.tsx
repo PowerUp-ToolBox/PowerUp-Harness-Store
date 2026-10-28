@@ -3,6 +3,7 @@ import { vi } from 'vitest';
 import { Root } from '../../src/renderer/src/Root.js';
 import type { Locale } from '../../src/shared/i18n/locale.js';
 import type {
+  AppFolder,
   AuthState,
   ConnectionDraft,
   ConnectionSummary,
@@ -55,6 +56,7 @@ import type {
   UsageFilter,
   UsageQuery,
   UsageRow,
+  UpdateCheckInterval,
 } from '../../src/shared/ipc.js';
 
 /** What `connectivity.get` and `connectivity.check` answer when the Store is in `state`. */
@@ -64,9 +66,14 @@ export function connectivityResult(state: ConnectivityState): IpcResult<Connecti
 
 export const FAKE_DIAGNOSTICS: Diagnostics = {
   version: '4.5.6',
-  gateway: { running: true, port: 51234 },
+  gateway: { running: true, port: 51234, reachable: true },
+  nodeVersion: '24.1.0',
+  dataRoot: '/profile',
   databasePath: '/profile/harness-store.sqlite',
 };
+
+/** The Store base URL the fake Runtime uses when none is set. */
+export const FAKE_DEFAULT_STORE_URL = 'http://127.0.0.1:54321';
 
 /** `usage.query`'s total over no Usage Records. */
 export const NO_USAGE: UsageRow = {
@@ -213,8 +220,9 @@ export interface FakeApiOptions {
  * the Workspace picker is cancelled; validating a folder to publish and publishing answer
  * `not_implemented`, cancelling an upload does nothing, the Publisher has no Harnesses and
  * Unpublishing answers `not_implemented`; there are no Usage Records (a total of zeros, no
- * groups), the export's save dialog is cancelled and clearing succeeds; and a dropped file's path
- * is `/dropped/<name>`; a test changes `app.status`, `diagnostics.get`, the `connectivity`,
+ * groups), the export's save dialog is cancelled and clearing succeeds; the update interval is
+ * 6 hours and the Store the default one until `settings.set` changes them, Check now, opening a
+ * folder and copying the diagnostics succeed; and a dropped file's path is `/dropped/<name>`; a test changes `app.status`, `diagnostics.get`, the `connectivity`,
  * `connections`, `bindings`, `installs` or `usage` methods before rendering to say otherwise, and
  * pushes events with `emit`.
  */
@@ -225,13 +233,19 @@ export function installFakeApi(
 ) {
   let locale = override;
   let onboardingDone = options.onboardingDone ?? true;
+  let updateCheckInterval: UpdateCheckInterval = '6h';
+  let storeBaseUrl: string | undefined;
   let bindings: readonly GlobalBinding[] = [];
   const overrides = new Map<string, readonly ModelOverride[]>();
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
-  const current = (): Settings =>
-    locale === undefined
-      ? { resolvedLocale: osLocale, onboardingDone }
-      : { locale, resolvedLocale: locale, onboardingDone };
+  const current = (): Settings => ({
+    ...(locale === undefined ? {} : { locale }),
+    resolvedLocale: locale ?? osLocale,
+    onboardingDone,
+    updateCheckInterval,
+    ...(storeBaseUrl === undefined ? {} : { storeBaseUrl }),
+    defaultStoreBaseUrl: FAKE_DEFAULT_STORE_URL,
+  });
   const api = {
     app: {
       ping: vi.fn(() => Promise.resolve({ ok: true, data: { version: '4.5.6' } })),
@@ -239,12 +253,24 @@ export function installFakeApi(
         Promise.resolve({ ok: true, data: { state: 'ready' } }),
       ),
       quit: vi.fn(() => Promise.resolve({ ok: true, data: null })),
+      openFolder: vi.fn<(folder: AppFolder) => Promise<IpcResult<null>>>(() =>
+        Promise.resolve({ ok: true, data: null }),
+      ),
     },
     settings: {
       get: vi.fn(() => Promise.resolve({ ok: true, data: current() })),
       set: vi.fn((patch: SettingsPatch): Promise<IpcResult<Settings>> => {
         if (patch.locale !== undefined) locale = patch.locale ?? undefined;
         if (patch.onboardingDone !== undefined) onboardingDone = patch.onboardingDone;
+        if (patch.updateCheckInterval !== undefined) {
+          updateCheckInterval = patch.updateCheckInterval;
+        }
+        if (patch.storeBaseUrl !== undefined) {
+          storeBaseUrl =
+            patch.storeBaseUrl === null || patch.storeBaseUrl === FAKE_DEFAULT_STORE_URL
+              ? undefined
+              : patch.storeBaseUrl.replace(/\/+$/, '');
+        }
         return Promise.resolve({ ok: true, data: current() });
       }),
     },
@@ -252,6 +278,7 @@ export function installFakeApi(
       get: vi.fn((): Promise<IpcResult<Diagnostics>> =>
         Promise.resolve({ ok: true, data: FAKE_DIAGNOSTICS }),
       ),
+      copy: vi.fn((): Promise<IpcResult<null>> => Promise.resolve({ ok: true, data: null })),
     },
     connectivity: {
       get: vi.fn((): Promise<IpcResult<Connectivity>> =>
@@ -400,6 +427,9 @@ export function installFakeApi(
       ),
       list: vi.fn((): Promise<IpcResult<readonly InstalledHarness[]>> =>
         Promise.resolve({ ok: true, data: [] }),
+      ),
+      checkUpdates: vi.fn((): Promise<IpcResult<null>> =>
+        Promise.resolve({ ok: true, data: null }),
       ),
     },
     launch: {

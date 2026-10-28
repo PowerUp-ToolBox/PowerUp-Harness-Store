@@ -219,9 +219,9 @@ function launchRows() {
 
 /** `GET /v1/harness/context` with the Gateway Token the launch spawned `index`-th got. */
 async function context(index = 0) {
-  const { gateway } = runtime.services.diagnostics.get();
-  if (!gateway.running) throw new Error('The Model Gateway is not running');
-  const response = await fetch(`http://127.0.0.1:${String(gateway.port)}/v1/harness/context`, {
+  const port = runtime.gatewayPort();
+  if (port === null) throw new Error('The Model Gateway is not running');
+  const response = await fetch(`http://127.0.0.1:${String(port)}/v1/harness/context`, {
     headers: { authorization: `Bearer ${spawned[index]?.env.HARNESS_GATEWAY_TOKEN ?? ''}` },
   });
   return (await response.json()) as Record<string, unknown>;

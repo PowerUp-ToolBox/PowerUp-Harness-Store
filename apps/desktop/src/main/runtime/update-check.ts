@@ -8,7 +8,10 @@ import type { StoreFetch } from './store-auth.js';
 /** The first check waits this long after the app started (docs/ux/flows.md F4). */
 export const FIRST_UPDATE_CHECK_DELAY_MS = 10_000;
 
-/** Then a check runs this often. P0-11's `update_check_interval` setting replaces it. */
+/**
+ * Then a check runs this often by default: the `update_check_interval` setting's `6h`, which the
+ * User can change to 1 hour, 24 hours or Never in Settings (P0-11.2).
+ */
 export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /** `latest_versions` takes at most this many IDs per call (api.md). */
@@ -35,25 +38,37 @@ export interface UpdateCheckOptions {
   readonly onChanged?: (harnessId: string) => void;
   /** Default: {@link FIRST_UPDATE_CHECK_DELAY_MS}. */
   readonly firstDelayMs?: number;
-  /** Default: {@link UPDATE_CHECK_INTERVAL_MS}. */
-  readonly intervalMs?: number;
+  /**
+   * The time between checks, read each time a check is scheduled (the `update_check_interval`
+   * setting); null for Never. Default: always {@link UPDATE_CHECK_INTERVAL_MS}.
+   */
+  readonly intervalMs?: () => number | null;
 }
 
 export interface UpdateChecker {
-  /** Schedules the first check after the delay, then one every interval. */
+  /**
+   * Schedules the first check after the delay, then one every interval; with Never, nothing at
+   * all, not even the first check.
+   */
   start(): void;
   /**
-   * Checks now; joins the check in flight if there is one. Never rejects: offline, or when the
-   * Store does not answer as api.md says, it changes nothing and shows nothing.
+   * Checks now, whatever the interval; joins the check in flight if there is one. Resolves
+   * whether the Store answered every call as api.md says: false offline, or when it did not, in
+   * which case nothing changed. Never rejects.
    */
-  check(): Promise<void>;
+  check(): Promise<boolean>;
+  /**
+   * Once started, replaces the scheduled check with one a whole interval from now, as read now
+   * (none for Never); the interval setting changed. Checks nothing now.
+   */
+  reschedule(): void;
   /** Cancels the scheduled checks; a check in flight changes nothing more. */
   stop(): void;
 }
 
 /**
  * The background update check (P0-10.2; docs/ux/flows.md F4 step 1): 10 seconds after start and
- * then every 6 hours, it asks the Store's `latest_versions` (api.md) about every installed Store
+ * then every interval (6 hours unless the User chose 1 hour, 24 hours or Never), it asks the Store's `latest_versions` (api.md) about every installed Store
  * Harness (never a local install), in calls of at most 1000 IDs with the anon key, and stores per
  * install its Store status and, when there is one, the update it can take
  * ({@link resolveUpdateCheck}). Each install whose row changed is reported, so the Library and
@@ -61,13 +76,15 @@ export interface UpdateChecker {
  *
  * While the Store is known to be offline the check is skipped; a check that gets no answer has
  * connectivity checked again and is dropped silently. Nothing is retried: the next scheduled check
- * runs, also when the Store comes back.
+ * runs, also when the Store comes back. With Never no check is ever scheduled; only `check`
+ * (Settings' Check now) runs one.
  */
 export function createUpdateChecker(options: UpdateCheckOptions): UpdateChecker {
   const firstDelayMs = options.firstDelayMs ?? FIRST_UPDATE_CHECK_DELAY_MS;
-  const intervalMs = options.intervalMs ?? UPDATE_CHECK_INTERVAL_MS;
+  const intervalMs = options.intervalMs ?? (() => UPDATE_CHECK_INTERVAL_MS);
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let inFlight: Promise<void> | null = null;
+  let inFlight: Promise<boolean> | null = null;
+  let started = false;
   let stopped = false;
 
   /** One `latest_versions` call; null when the Store did not answer as api.md says. */
@@ -100,14 +117,15 @@ export function createUpdateChecker(options: UpdateCheckOptions): UpdateChecker 
     }
   };
 
-  const run = async () => {
-    if (options.connectivity.get().state === 'offline') return;
+  /** One check; whether the Store answered every call. */
+  const run = async (): Promise<boolean> => {
+    if (options.connectivity.get().state === 'offline') return false;
     const ids = (await options.installs())
       .filter((install) => install.source === 'store')
       .map((install) => install.harnessId);
     for (let at = 0; at < ids.length && !stopped; at += LATEST_VERSIONS_MAX_IDS) {
       const rows = await latestVersions(ids.slice(at, at + LATEST_VERSIONS_MAX_IDS));
-      if (rows === null) return;
+      if (rows === null) return false;
       for (const row of rows) {
         const answer = parseLatestVersion(row);
         if (answer === null) continue;
@@ -120,31 +138,46 @@ export function createUpdateChecker(options: UpdateCheckOptions): UpdateChecker 
         }
       }
     }
+    return true;
   };
 
-  const check = (): Promise<void> => {
-    if (stopped) return Promise.resolve();
+  const check = (): Promise<boolean> => {
+    if (stopped) return Promise.resolve(false);
     inFlight ??= run()
-      .catch(() => undefined) // The database closed (the app quits): nothing to report.
+      .catch(() => false) // The database closed (the app quits): nothing to report.
       .finally(() => {
         inFlight = null;
       });
     return inFlight;
   };
 
-  const schedule = (delay: number) => {
+  /**
+   * Runs a check after `delay` (none for null), reading the interval again when it is due: Never
+   * by then checks nothing; otherwise the next check is scheduled a whole interval later.
+   */
+  const schedule = (delay: number | null) => {
+    clearTimeout(timer);
+    timer = undefined;
+    if (delay === null) return;
     timer = setTimeout(() => {
       if (stopped) return;
-      schedule(intervalMs);
-      void check();
+      const next = intervalMs();
+      schedule(next);
+      if (next !== null) void check();
     }, delay);
   };
 
   return {
     start() {
-      if (!stopped && timer === undefined) schedule(firstDelayMs);
+      if (stopped || started) return;
+      started = true;
+      // Never skips the startup check too.
+      schedule(intervalMs() === null ? null : firstDelayMs);
     },
     check,
+    reschedule() {
+      if (started && !stopped) schedule(intervalMs());
+    },
     stop() {
       stopped = true;
       clearTimeout(timer);

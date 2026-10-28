@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router';
+import { Link, NavLink, Outlet, useLocation } from 'react-router';
 import { ToastProvider } from '../components/Toasts.js';
 import { useConnectivity } from '../connectivity/ConnectivityProvider.js';
-import { useI18n } from '../i18n/I18nProvider.js';
+import { useI18n, useSettings } from '../i18n/I18nProvider.js';
 import { InstallJobsProvider } from '../install/InstallJobsProvider.js';
 import { PublishProvider } from '../publish/PublishProvider.js';
 import { offeredUpdate } from '../store/primary-action.js';
@@ -12,7 +12,8 @@ import { SECTIONS, sectionFor } from './sections.js';
 
 /**
  * The main window frame: sidebar navigation, the offline banner while the Store is unreachable,
- * the page title header, the current screen and the toast area. The Publish flow's state, the
+ * the custom Store banner while the Store URL is not the default one (it cannot be dismissed, and
+ * links to Settings), the page title header, the current screen and the toast area. The Publish flow's state, the
  * Store search's and the Store installs' live here, above the screens, so they outlast a visit to
  * another screen; a Store install's consent dialog and the update prompt open over whichever
  * screen is shown. The Library item carries a badge with the number of installed Harnesses that
@@ -21,6 +22,7 @@ import { SECTIONS, sectionFor } from './sections.js';
 export function Shell() {
   const { t } = useI18n();
   const { state } = useConnectivity();
+  const { settings } = useSettings();
   const { pathname } = useLocation();
   const section = sectionFor(pathname);
   const updates = useUpdateCount();
@@ -50,6 +52,12 @@ export function Shell() {
             <span>{t('connectivity.offline_banner')}</span>
           </div>
         ) : null}
+        {settings.storeBaseUrl === undefined ? null : (
+          <div className="custom-store-banner" role="status">
+            <span>{t('custom_store.banner', { url: settings.storeBaseUrl })}</span>
+            <Link to="/settings">{t('custom_store.settings')}</Link>
+          </div>
+        )}
         <header className="page-header">
           <h1>{section === undefined ? null : t(section.labelKey)}</h1>
         </header>

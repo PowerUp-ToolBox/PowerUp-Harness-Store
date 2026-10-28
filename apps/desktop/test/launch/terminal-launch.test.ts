@@ -242,9 +242,9 @@ function launchRows() {
 }
 
 function gatewayUrl(): string {
-  const { gateway } = runtime.services.diagnostics.get();
-  if (!gateway.running) throw new Error('The Model Gateway is not running');
-  return `http://127.0.0.1:${String(gateway.port)}/v1`;
+  const port = runtime.gatewayPort();
+  if (port === null) throw new Error('The Model Gateway is not running');
+  return `http://127.0.0.1:${String(port)}/v1`;
 }
 
 /** `GET /v1/harness/context` with `token`: its status and body. */

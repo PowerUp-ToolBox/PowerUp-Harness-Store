@@ -76,9 +76,9 @@ function call(method: string, input?: unknown) {
 
 /** One chat completion through the Gateway, as a Harness sends it. */
 async function complete(model: string): Promise<{ status: number; body: Record<string, unknown> }> {
-  const { gateway: status } = runtime.services.diagnostics.get();
-  if (!status.running) throw new Error('The Model Gateway is not running');
-  const response = await fetch(`http://127.0.0.1:${String(status.port)}/v1/chat/completions`, {
+  const port = runtime.gatewayPort();
+  if (port === null) throw new Error('The Model Gateway is not running');
+  const response = await fetch(`http://127.0.0.1:${String(port)}/v1/chat/completions`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hello there' }] }),
@@ -197,7 +197,7 @@ describe('Connections and the Model Gateway', () => {
 
   it('a removed Connection leaves no Slot Binding pointing at it', async () => {
     await call('connections.add', { providerId: 'ollama', baseUrl: keyless.url });
-    const db = new DatabaseSync(runtime.services.diagnostics.get().databasePath);
+    const db = new DatabaseSync(runtime.databasePath);
     try {
       db.prepare(
         "INSERT INTO slot_bindings (scope, slot, provider_id, model) VALUES ('global', 'default', 'ollama', 'qwen3:8b')",
@@ -221,7 +221,7 @@ describe('Connections and the Model Gateway', () => {
       baseUrl: fake.url,
       apiKey: FAKE_KEY,
     });
-    const db = new DatabaseSync(runtime.services.diagnostics.get().databasePath);
+    const db = new DatabaseSync(runtime.databasePath);
     try {
       db.prepare('UPDATE secrets SET ciphertext = ?').run(new Uint8Array([1, 2, 3]));
     } finally {

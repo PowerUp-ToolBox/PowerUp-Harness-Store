@@ -22,7 +22,7 @@ describe('buildApi (window.api)', () => {
       'store',
       'usage',
     ]);
-    expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit']);
+    expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit', 'openFolder']);
     expect(Object.keys(api.auth)).toEqual(['signIn', 'signOut', 'whoami']);
     expect(Object.keys(api.bindings)).toEqual([
       'getGlobal',
@@ -44,7 +44,7 @@ describe('buildApi (window.api)', () => {
       'remove',
     ]);
     expect(Object.keys(api.connectivity)).toEqual(['get', 'check']);
-    expect(Object.keys(api.diagnostics)).toEqual(['get']);
+    expect(Object.keys(api.diagnostics)).toEqual(['get', 'copy']);
     expect(Object.keys(api.installs)).toEqual([
       'chooseFolder',
       'inspectFolder',
@@ -56,6 +56,7 @@ describe('buildApi (window.api)', () => {
       'uninstall',
       'dataSize',
       'list',
+      'checkUpdates',
     ]);
     expect(Object.keys(api.launch)).toEqual([
       'start',

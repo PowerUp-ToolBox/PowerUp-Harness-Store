@@ -230,13 +230,16 @@ async function start(): Promise<void> {
     emit: emitToMainWindow,
     // Every Harness runs in a window of its own (./harness-windows.ts).
     harnessWindows,
-    // A launch's log, a Harness's logs folder or its Data Directory, in the OS's own app for it.
-    // A failure is the User's to see (`open_failed` on the card or in the Harness window).
+    // A launch's log, a Harness's logs folder or its Data Directory, in the OS's own app for it;
+    // from Settings, the app data root or its logs folder. A failure is the User's to see
+    // (`open_failed` on the card, in the Harness window or in Settings).
     openPath: async (path) => {
       const error = await shell.openPath(path);
       if (error !== '') console.error(`Could not open ${path}: ${error}`);
       return error === '';
     },
+    // Settings' Copy diagnostics: main writes the text, the renderer never supplies it.
+    writeClipboard: (text) => clipboard.writeText(text),
     // What a web Harness's page kept in its own session goes with it on uninstall.
     clearHarnessSession: (harnessId) =>
       session.fromPartition(harnessPartition(harnessId)).clearStorageData(),

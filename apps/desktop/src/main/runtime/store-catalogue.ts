@@ -101,6 +101,8 @@ export interface StoreCatalogue {
   detail(harnessId: string): Promise<IpcResult<StoreDetail>>;
   /** A Publisher's page (`store.publisher`). */
   publisher(login: string): Promise<IpcResult<StorePublisherPage>>;
+  /** Forgets the cached Store home: the Store base URL setting changed (P0-11.2). */
+  clearCache(): void;
 }
 
 /**
@@ -226,6 +228,9 @@ export function createStoreCatalogue(options: StoreCatalogueOptions): StoreCatal
   };
 
   return {
+    clearCache() {
+      cachedHome = null;
+    },
     async home(request = {}) {
       const baseUrl = options.storeBaseUrl();
       const at = now().getTime();

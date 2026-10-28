@@ -116,8 +116,8 @@ export type IpcErrorCode =
   /** No Harness with this ID is installed. */
   | 'not_installed'
   /**
-   * The OS could not open a log, logs folder or Data Directory (Electron `shell.openPath`
-   * failed: on Linux, say, no app is set up for it). The `path` param names it, so the User can
+   * The OS could not open a log, logs folder, Data Directory or the app data root (Electron
+   * `shell.openPath` failed: on Linux, say, no app is set up for it). The `path` param names it, so the User can
    * open it another way.
    */
   | 'open_failed'
@@ -163,11 +163,32 @@ export interface IpcMethods {
   'app.status': { input: undefined; output: StartupStatus };
   /** Quits the app, stopping the Model Gateway and closing the database first. */
   'app.quit': { input: undefined; output: null };
+  /**
+   * Opens a folder of the app in the OS file browser (Settings, P0-11.2): the app data root, or
+   * its `logs` folder, created when missing. Main computes the path; `open_failed` when the OS
+   * could not open it.
+   */
+  'app.openFolder': { input: AppFolder; output: null };
   'settings.get': { input: undefined; output: Settings };
-  /** Applies the patch and returns the settings as they now are. */
+  /**
+   * Applies the patch and returns the settings as they now are. Each value takes effect at once:
+   * the update check is rescheduled for a new interval; a new Store base URL signs the Publisher
+   * out of the old Store first, then is written, then the Store home cache is dropped and
+   * connectivity checked again. `invalid_input` for a Store base URL that is not an absolute
+   * `http:` or `https:` URL without credentials, query or fragment, of at most 2048 characters.
+   */
   'settings.set': { input: SettingsPatch; output: Settings };
-  /** Read-only facts for support and debugging, shown in Settings. */
+  /**
+   * Read-only facts for support and debugging, shown in Settings, read now: the Model Gateway's
+   * status is a request to it (at most 1 s), never a remembered answer.
+   */
   'diagnostics.get': { input: undefined; output: Diagnostics };
+  /**
+   * Copies the diagnostics, read again now, to the clipboard as an English plain-text block
+   * (version, Model Gateway status and port, Node version, data root, database path, Store URL).
+   * Main writes the text; it holds no key or token.
+   */
+  'diagnostics.copy': { input: undefined; output: null };
   /** Whether the Store answered the last connectivity check. */
   'connectivity.get': { input: undefined; output: Connectivity };
   /**
@@ -400,6 +421,12 @@ export interface IpcMethods {
    * name.
    */
   'installs.list': { input: undefined; output: readonly InstalledHarness[] };
+  /**
+   * Runs the update check now (Settings' Check now), whatever the `update_check_interval`, Never
+   * included, joining a check already running; `installs.changed` reports what it changed.
+   * `store_unreachable` when the Store is offline or did not answer as api.md says.
+   */
+  'installs.checkUpdates': { input: undefined; output: null };
   /**
    * Launches an installed Harness (docs/tech/architecture.md §4) and answers as soon as its launch
    * has begun; how it goes arrives as `launch.state` events. One instance per Harness: while it
@@ -832,11 +859,23 @@ export type StartupStatus =
 export interface Diagnostics {
   /** The desktop app's version. */
   readonly version: string;
-  /** The Model Gateway as it is now: listening on a loopback port, or not running. */
-  readonly gateway: { readonly running: true; readonly port: number } | { readonly running: false };
+  /**
+   * The Model Gateway as it is now: started on a loopback port, and whether it answered a request
+   * just now (`reachable`); or not running.
+   */
+  readonly gateway:
+    | { readonly running: true; readonly port: number; readonly reachable: boolean }
+    | { readonly running: false };
+  /** The version of the bundled Node that Node Harnesses run on (`process.versions.node`). */
+  readonly nodeVersion: string;
+  /** The absolute path of the app data root. */
+  readonly dataRoot: string;
   /** The absolute path of the local SQLite database file. */
   readonly databasePath: string;
 }
+
+/** A folder of the app `app.openFolder` opens: the app data root, or its `logs` folder. */
+export type AppFolder = 'logs' | 'dataRoot';
 
 /** What Usage Records can be grouped by. `model` always groups by its Provider too. */
 export type UsageDimension = 'harness' | 'provider' | 'model' | 'day';
@@ -1055,6 +1094,15 @@ export interface ManifestSlotsRequest {
   readonly models: Manifest['models'];
 }
 
+/** How often the update check runs (the `update_check_interval` setting); `never` never. */
+export type UpdateCheckInterval = '1h' | '6h' | '24h' | 'never';
+
+/** Every {@link UpdateCheckInterval}, as Settings lists them. */
+export const UPDATE_CHECK_INTERVALS: readonly UpdateCheckInterval[] = ['1h', '6h', '24h', 'never'];
+
+/** The longest Store base URL `settings.set` takes. */
+export const STORE_BASE_URL_MAX_LENGTH = 2048;
+
 /** The app settings as the renderer sees them. */
 export interface Settings {
   /** The User's language override; absent means "System" (follow the OS locale). */
@@ -1063,12 +1111,23 @@ export interface Settings {
   readonly resolvedLocale: Locale;
   /** Whether the first-run wizard reached its end (completed or skipped) once. */
   readonly onboardingDone: boolean;
+  /** How often the update check runs; `6h` unless the User chose another. */
+  readonly updateCheckInterval: UpdateCheckInterval;
+  /** The User's Store base URL; absent means the default Store, `defaultStoreBaseUrl`. */
+  readonly storeBaseUrl?: string;
+  /** The Store base URL this build uses when the User set none. */
+  readonly defaultStoreBaseUrl: string;
 }
 
-/** The settings the renderer may write. `locale: null` clears the override (back to System). */
+/**
+ * The settings the renderer may write. `locale: null` clears the override (back to System);
+ * `storeBaseUrl: null`, or the default URL itself, goes back to the default Store.
+ */
 export interface SettingsPatch {
   readonly locale?: Locale | null;
   readonly onboardingDone?: boolean;
+  readonly updateCheckInterval?: UpdateCheckInterval;
+  readonly storeBaseUrl?: string | null;
 }
 
 /** A Provider the User can add a Connection for: one row of the Gateway's table. */
@@ -1320,9 +1379,11 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'app.ping': true,
   'app.status': true,
   'app.quit': true,
+  'app.openFolder': true,
   'settings.get': true,
   'settings.set': true,
   'diagnostics.get': true,
+  'diagnostics.copy': true,
   'connectivity.get': true,
   'connectivity.check': true,
   'store.home': true,
@@ -1358,6 +1419,7 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'installs.uninstall': true,
   'installs.dataSize': true,
   'installs.list': true,
+  'installs.checkUpdates': true,
   'launch.start': true,
   'launch.chooseWorkspace': true,
   'launch.lastWorkspace': true,

@@ -10,6 +10,7 @@ import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createInstallsStub } from '../../src/main/runtime/installer.js';
 import { fail } from '../../src/main/runtime/ipc-result.js';
 import { createConnectionsStub, providerPresets } from '../../src/main/runtime/connections.js';
+import { DEFAULT_STORE_BASE_URL } from '../../src/main/runtime/connectivity.js';
 import type { Services } from '../../src/main/runtime/services.js';
 import { createSqliteSettingsStore } from '../../src/main/runtime/settings-store.js';
 import { createSettingsService, parseSettingsPatch } from '../../src/main/runtime/settings.js';
@@ -17,6 +18,12 @@ import { createSupervisorStub } from '../../src/main/runtime/supervisor.js';
 import { createUsageStub } from '../../src/main/runtime/usage.js';
 
 const MAIN_WINDOW = {};
+/** What `settings.get` answers besides the locale on a fresh profile. */
+const OTHER_DEFAULTS = {
+  onboardingDone: false,
+  updateCheckInterval: '6h',
+  defaultStoreBaseUrl: DEFAULT_STORE_BASE_URL,
+} as const;
 
 let dir: string;
 let path: string;
@@ -50,10 +57,23 @@ function storedSettings(): Record<string, unknown> {
 /** One app run: a fresh Runtime reading the same userData, on an OS in `osLocale`. */
 function launch(osLocale: string) {
   const services: Services = {
-    app: { version: '1.0.0', status: () => ({ state: 'ready' }), quit: () => undefined },
+    app: {
+      version: '1.0.0',
+      status: () => ({ state: 'ready' }),
+      quit: () => undefined,
+      openFolder: () => Promise.resolve(fail('not_implemented')),
+    },
     settings: createSettingsService(createSqliteSettingsStore(database()), () => osLocale),
     diagnostics: {
-      get: () => ({ version: '1.0.0', gateway: { running: false }, databasePath: path }),
+      get: () =>
+        Promise.resolve({
+          version: '1.0.0',
+          gateway: { running: false },
+          nodeVersion: '24.0.0',
+          dataRoot: dir,
+          databasePath: path,
+        }),
+      copy: () => Promise.resolve(),
     },
     connectivity: {
       get: () => ({ state: 'online' }),
@@ -74,6 +94,7 @@ function launch(osLocale: string) {
       whoami: () => Promise.resolve({ signedIn: false }),
     },
     installs: createInstallsStub(),
+    updates: { check: () => Promise.resolve(true) },
     launch: createSupervisorStub(),
     publish: {
       validateFolder: () => Promise.resolve(fail('not_implemented')),
@@ -96,11 +117,11 @@ describe('language setting over IPC', () => {
   it('first launch on a zh-TW OS renders in zh-CN; on en-US in en', async () => {
     await expect(launch('zh-TW')('settings.get')).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'zh-CN', onboardingDone: false },
+      data: { resolvedLocale: 'zh-CN', ...OTHER_DEFAULTS },
     });
     await expect(launch('en-US')('settings.get')).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'en', onboardingDone: false },
+      data: { resolvedLocale: 'en', ...OTHER_DEFAULTS },
     });
   });
 
@@ -108,7 +129,7 @@ describe('language setting over IPC', () => {
     const call = launch('en-US');
     await expect(call('settings.set', { locale: 'zh-CN' })).resolves.toEqual({
       ok: true,
-      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN', onboardingDone: false },
+      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN', ...OTHER_DEFAULTS },
     });
   });
 
@@ -116,7 +137,7 @@ describe('language setting over IPC', () => {
     await launch('en-US')('settings.set', { locale: 'zh-CN' });
     await expect(launch('en-US')('settings.get')).resolves.toEqual({
       ok: true,
-      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN', onboardingDone: false },
+      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN', ...OTHER_DEFAULTS },
     });
     expect(storedSettings()).toEqual({ locale: 'zh-CN' });
   });
@@ -125,16 +146,16 @@ describe('language setting over IPC', () => {
     await launch('zh-CN')('settings.set', { locale: 'en' });
     await expect(launch('zh-CN')('settings.set', { locale: null })).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'zh-CN', onboardingDone: false },
+      data: { resolvedLocale: 'zh-CN', ...OTHER_DEFAULTS },
     });
     expect(storedSettings()).toEqual({});
   });
 
-  it('keeps the window state when the locale changes', () => {
+  it('keeps the window state when the locale changes', async () => {
     const store = createSqliteSettingsStore(database());
     const windowState = { x: 1, y: 2, width: 1000, height: 700, isMaximized: false };
     store.write('window_state', windowState);
-    createSettingsService(store, () => 'en').set({ locale: 'zh-CN' });
+    await createSettingsService(store, () => 'en').set({ locale: 'zh-CN' });
     expect(storedSettings()).toEqual({ window_state: windowState, locale: 'zh-CN' });
   });
 
@@ -181,7 +202,7 @@ describe('stored locale', () => {
         createSettingsService(createSqliteSettingsStore(database()), () => 'en').get(),
       ).toEqual({
         resolvedLocale: 'en',
-        onboardingDone: false,
+        ...OTHER_DEFAULTS,
       });
     },
   );

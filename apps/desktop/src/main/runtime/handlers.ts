@@ -59,18 +59,29 @@ export function createHandlers(services: Services): IpcHandlers {
       services.app.quit();
       return ok(null);
     },
+    'app.openFolder': (input) => {
+      if (input !== 'logs' && input !== 'dataRoot') {
+        return fail('invalid_input', { method: 'app.openFolder' });
+      }
+      return services.app.openFolder(input);
+    },
     'settings.get': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'settings.get' });
       return ok(services.settings.get());
     },
-    'settings.set': (input) => {
+    'settings.set': async (input) => {
       const patch = parseSettingsPatch(input);
       if (patch === null) return fail('invalid_input', { method: 'settings.set' });
-      return ok(services.settings.set(patch));
+      return ok(await services.settings.set(patch));
     },
-    'diagnostics.get': (input) => {
+    'diagnostics.get': async (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'diagnostics.get' });
-      return ok(services.diagnostics.get());
+      return ok(await services.diagnostics.get());
+    },
+    'diagnostics.copy': async (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'diagnostics.copy' });
+      await services.diagnostics.copy();
+      return ok(null);
     },
     'connectivity.get': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'connectivity.get' });
@@ -238,6 +249,10 @@ export function createHandlers(services: Services): IpcHandlers {
     'installs.list': async (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'installs.list' });
       return ok(await services.installs.list());
+    },
+    'installs.checkUpdates': async (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'installs.checkUpdates' });
+      return (await services.updates.check()) ? ok(null) : fail('store_unreachable');
     },
     'launch.start': (input) => {
       const request = parseLaunchRequest(input);
