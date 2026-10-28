@@ -1,9 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  harnessNavigation,
+  harnessPartition,
   isAllowedExternalUrl,
   mainWindowOptions,
   terminalWindowOptions,
+  webContentPreferences,
+  webWindowOptions,
 } from '../src/main/runtime/main-window.js';
 
 describe('mainWindowOptions', () => {
@@ -91,5 +95,64 @@ describe('renderer Content Security Policy', () => {
       "base-uri 'none'",
       "form-action 'none'",
     ]);
+  });
+});
+
+describe('web Harness windows (P0-05.3)', () => {
+  it("open at the Manifest's size hints for the page, plus the top bar, sandboxed", () => {
+    const options = webWindowOptions('Hello Web', '/app/out/preload/harness.cjs', {
+      width: 900,
+      height: 600,
+    });
+    expect(options).toMatchObject({
+      title: 'Hello Web — Harness Store',
+      width: 900,
+      height: 644,
+      useContentSize: true,
+      show: false,
+      webPreferences: {
+        preload: '/app/out/preload/harness.cjs',
+        contextIsolation: true,
+        sandbox: true,
+        nodeIntegration: false,
+      },
+    });
+    expect(webWindowOptions('Hello Web', '/p.cjs')).toMatchObject({ width: 1100, height: 804 });
+  });
+
+  it("load the Harness's page with no preload, sandboxed, isolated, in its own session", () => {
+    const preferences = webContentPreferences('acme/hello-web');
+    // No preload at all: page script reaches neither Node nor Electron IPC.
+    expect(preferences).not.toHaveProperty('preload');
+    expect(preferences).toEqual({
+      partition: 'persist:harness:acme/hello-web',
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
+      webSecurity: true,
+      webviewTag: false,
+      safeDialogs: true,
+    });
+    expect(harnessPartition('acme/other')).toBe('persist:harness:acme/other');
+  });
+
+  it.each([
+    ['http://127.0.0.1:52341/', 'inside'],
+    ['http://127.0.0.1:52341/chat?id=1#end', 'inside'],
+    ['http://127.0.0.1:52342/', 'external'],
+    ['http://localhost:52341/', 'external'],
+    ['https://127.0.0.1:52341/', 'external'],
+    ['https://example.com/', 'external'],
+    ['http://example.com/', 'external'],
+    ['file:///etc/passwd', 'blocked'],
+    ['javascript:alert(1)', 'blocked'],
+    ['data:text/html,hi', 'blocked'],
+    ['harnessstore://auth-callback', 'blocked'],
+    ['about:blank', 'blocked'],
+    ['not a url', 'blocked'],
+  ])('keep %s %s', (url, where) => {
+    expect(harnessNavigation(url, 'http://127.0.0.1:52341')).toBe(where);
   });
 });

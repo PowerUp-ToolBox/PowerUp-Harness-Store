@@ -26,6 +26,7 @@ import { createInstallStore, type InstallStore } from './install-store.js';
 import { createInstaller, createInstallsStub, type InstallsService } from './installer.js';
 import { createLaunchStore, type LaunchStore } from './launch-store.js';
 import { createLocalDetector, type LocalProbeTarget } from './local-detection.js';
+import type { PipedSpawner } from './piped-process.js';
 import { spawnNodePty, type PtySpawner } from './pty.js';
 import type { SecretCipher } from './secret-cipher.js';
 import type { Services } from './services.js';
@@ -121,6 +122,8 @@ export interface RuntimeOptions {
   readonly nodeCommand?: NodeCommand;
   /** Starts a terminal Harness in a pty. Default: node-pty. */
   readonly spawnPty?: PtySpawner;
+  /** Starts a web Harness with its output piped. Default: `child_process.spawn`. */
+  readonly spawnProcess?: PipedSpawner;
   /**
    * The environment a Harness inherits, before the launch contract strips and sets variables.
    * Default: this process's.
@@ -292,6 +295,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           },
           windows: options.harnessWindows,
           spawnPty: options.spawnPty ?? spawnNodePty,
+          ...(options.spawnProcess === undefined ? {} : { spawnProcess: options.spawnProcess }),
           nodeCommand: options.nodeCommand ?? {
             path: process.execPath,
             env: { ELECTRON_RUN_AS_NODE: '1' },

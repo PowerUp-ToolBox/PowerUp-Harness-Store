@@ -56,4 +56,9 @@ describe('launchEnvironment', () => {
       ...launchEnvironment({}, CONTRACT),
     });
   });
+
+  it('sets HARNESS_PORT for a web UI Kind, over an inherited one', () => {
+    const env = launchEnvironment({ HARNESS_PORT: '1234' }, { ...CONTRACT, port: 52341 });
+    expect(env).toEqual({ ...launchEnvironment({}, CONTRACT), HARNESS_PORT: '52341' });
+  });
 });

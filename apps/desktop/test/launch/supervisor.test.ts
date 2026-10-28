@@ -54,6 +54,13 @@ function setup() {
       openTerminal: (spec) => {
         opened.push(spec.launchId);
       },
+      openWeb: (spec) => {
+        opened.push(spec.launchId);
+      },
+      showWeb: () => undefined,
+      hideWeb: () => undefined,
+      reloadWeb: () => undefined,
+      layoutWeb: () => undefined,
       send: () => undefined,
       focus: () => false,
       close: () => undefined,

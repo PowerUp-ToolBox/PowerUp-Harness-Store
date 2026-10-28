@@ -52,6 +52,19 @@ describe('openLaunchLog', () => {
     expect(lines.length).toBeLessThan(1100);
     expect(readFileSync(path).length).toBeLessThanOrEqual(1024 * 1024 + 100);
   });
+
+  it('keeps its last 50 complete lines in memory, past the size cap too (P0-05.3)', async () => {
+    const log = openLaunchLog(join(folder, 'launch.log'), { now, maxBytes: 200 });
+    expect(log.tail()).toEqual([]);
+    for (let index = 0; index < 60; index += 1) log.write('out', `line ${String(index)}\n`);
+    log.write('err', 'no end yet');
+    const tail = log.tail();
+    expect(tail).toHaveLength(50);
+    expect(tail[0]).toBe('2026-10-28T09:00:00.000Z [out] line 10');
+    expect(tail.at(-1)).toBe('2026-10-28T09:00:00.000Z [out] line 59');
+    await log.close();
+    expect(log.tail().at(-1)).toBe('2026-10-28T09:00:00.000Z [err] no end yet');
+  });
 });
 
 describe('pruneLaunchLogs', () => {

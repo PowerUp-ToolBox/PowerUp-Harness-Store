@@ -22,6 +22,7 @@ function setup() {
         harnessId: 'acme/hello',
         name: 'Hello',
         uiKind: 'terminal' as const,
+        readyTimeoutSeconds: null,
         iconDataUrl: null,
         locale: 'en' as const,
         status: {
@@ -35,6 +36,8 @@ function setup() {
     openLogs: vi.fn(() => Promise.resolve()),
     relaunch: vi.fn(() => ok({ outcome: 'started' as const, launchId: 'launch-2' })),
     close: vi.fn(),
+    reload: vi.fn(),
+    webLayout: vi.fn(),
     terminalReady: vi.fn(),
     terminalInput: vi.fn(),
     terminalResize: vi.fn(),
@@ -91,6 +94,15 @@ describe('Harness window handlers', () => {
     await expect(call('launch-1', 'window.relaunch')).resolves.toEqual({ ok: true, data: null });
     await call('launch-1', 'window.close');
     expect(launchWindow.close).toHaveBeenCalledOnce();
+    await call('launch-1', 'web.reload');
+    expect(launchWindow.reload).toHaveBeenCalledOnce();
+    await call('launch-1', 'web.layout', { x: 0, y: 44.5, width: 1100, height: 760 });
+    expect(launchWindow.webLayout).toHaveBeenCalledWith({
+      x: 0,
+      y: 44.5,
+      width: 1100,
+      height: 760,
+    });
     await call('launch-1', 'terminal.ready', { cols: 80, rows: 24 });
     expect(launchWindow.terminalReady).toHaveBeenCalledWith({ cols: 80, rows: 24 });
     await call('launch-1', 'terminal.input', 'ls\r');
@@ -116,6 +128,10 @@ describe('Harness window handlers', () => {
     ['terminal.input', 42],
     ['terminal.copy', undefined],
     ['terminal.paste', 'x'],
+    ['web.reload', 1],
+    ['web.layout', { x: 0, y: 0, width: 10 }],
+    ['web.layout', { x: 0, y: -1, width: 10, height: 10 }],
+    ['web.layout', { x: 0, y: 0, width: Infinity, height: 10 }],
   ])('%s rejects %j as invalid_input', async (method, input) => {
     const { call, launchWindow } = setup();
     await expect(call('launch-1', method, input)).resolves.toMatchObject({
@@ -123,6 +139,7 @@ describe('Harness window handlers', () => {
       error: { code: 'invalid_input', params: { method } },
     });
     expect(launchWindow.terminalReady).not.toHaveBeenCalled();
+    expect(launchWindow.webLayout).not.toHaveBeenCalled();
   });
 
   it('answers invalid_input for a launch the Supervisor does not know', async () => {

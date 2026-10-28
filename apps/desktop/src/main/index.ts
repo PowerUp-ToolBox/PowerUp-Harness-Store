@@ -196,7 +196,7 @@ async function start(): Promise<void> {
       return result.canceled ? null : (result.filePaths[0] ?? null);
     },
     emit: emitToMainWindow,
-    // Terminal Harnesses run in their own windows (./harness-windows.ts).
+    // Every Harness runs in a window of its own (./harness-windows.ts).
     harnessWindows,
     // A launch's log, or a Harness's logs folder, in the OS's own app for it.
     openPath: async (path) => {

@@ -238,8 +238,8 @@ export interface IpcMethods {
    * has begun; how it goes arrives as `launch.state` events. One instance per Harness: while it
    * runs, the answer is `focused` and its window comes to the front instead (a launch that is
    * stopping is left to stop). `not_installed`; `slot_unbound` when no model can fill its
-   * `default` Model Slot, and nothing starts; `not_implemented` for a web UI Kind (P0-05.3) or a
-   * binary runtime kind (P0-05.5).
+   * `default` Model Slot, and nothing starts; `not_implemented` for a binary runtime kind
+   * (P0-05.5).
    */
   'launch.start': { input: LaunchRequest; output: LaunchStarted };
   /** The latest launch of every Harness launched since the app started. */
@@ -291,6 +291,11 @@ export interface LaunchStatus {
   readonly exitCode?: number;
   /** ISO-8601 UTC. */
   readonly startedAt: string;
+  /**
+   * The last 50 lines of the launch's log (`<ISO-8601> [out|err|runtime] <text>`), present only on
+   * `failed(ready_timeout)`, for the Timed-out state.
+   */
+  readonly logTail?: readonly string[];
 }
 
 /** A route of the main window to show, such as `/models?harness=acme%2Fhello`. */

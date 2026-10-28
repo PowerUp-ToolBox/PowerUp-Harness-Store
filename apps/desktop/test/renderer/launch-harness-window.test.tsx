@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 /* eslint-disable @typescript-eslint/no-empty-function -- stand-ins for xterm.js and the DOM */
 /**
- * Ticket P0-05.2: a terminal Harness window's own page, over a fake `window.harness`, with
+ * Tickets P0-05.2 and P0-05.3: a Harness window's own page, over a fake `window.harness`, with
  * xterm.js replaced by a stand-in (jsdom cannot lay a terminal out). The top bar shows the Harness,
- * its models and Open logs; after the process ended, "Exited with code N" with Relaunch and Close,
- * and the window title adds the exit code.
+ * its models and Open logs; after a terminal's process ended, "Exited with code N" with Relaunch
+ * and Close, and the window title adds the exit code. A web window shows Starting, then leaves the
+ * room to the Harness's page, or shows Crashed, Timed out or Could not start.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -57,15 +58,17 @@ const RUNNING: LaunchStatus = {
   startedAt: '2026-10-28T09:00:00.000Z',
 };
 
-function fakeHarness(locale: 'en' | 'zh-CN' = 'en') {
+function fakeHarness(locale: 'en' | 'zh-CN' = 'en', web?: Partial<HarnessWindowInfo>) {
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   const info: HarnessWindowInfo = {
     harnessId: 'acme/hello-term',
     name: 'Hello Term',
     uiKind: 'terminal',
+    readyTimeoutSeconds: null,
     iconDataUrl: null,
     locale,
     status: RUNNING,
+    ...web,
   };
   const ok = <T,>(data: T) => Promise.resolve({ ok: true as const, data });
   const harness = {
@@ -84,6 +87,10 @@ function fakeHarness(locale: 'en' | 'zh-CN' = 'en') {
       openLogs: vi.fn(() => ok(null)),
       relaunch: vi.fn(() => ok(null)),
       close: vi.fn(() => ok(null)),
+    },
+    web: {
+      reload: vi.fn(() => ok(null)),
+      layout: vi.fn(() => ok(null)),
     },
     terminal: {
       ready: vi.fn(() => ok(null)),
@@ -173,5 +180,181 @@ describe('Harness terminal window', () => {
     expect(screen.getByRole('button', { name: '重新启动' })).toBeDefined();
     expect(screen.getByRole('button', { name: '查看日志' })).toBeDefined();
     expect(await screen.findByRole('button', { name: '模型 · default：qwen3:8b' })).toBeDefined();
+  });
+});
+
+const STARTING: LaunchStatus = {
+  harnessId: 'acme/hello-web',
+  launchId: 'launch-1',
+  state: 'spawning',
+  startedAt: '2026-10-28T09:00:00.000Z',
+};
+
+/** A web Harness window's page, its launch `status` when it opened. */
+function fakeWebHarness(status: LaunchStatus = STARTING, locale: 'en' | 'zh-CN' = 'en') {
+  return fakeHarness(locale, {
+    harnessId: 'acme/hello-web',
+    name: 'Hello Web',
+    uiKind: 'web',
+    readyTimeoutSeconds: 5,
+    status,
+  });
+}
+
+describe('Harness web window (P0-05.3)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows Starting with the elapsed seconds and Cancel until the page is ready', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'Date'] });
+    vi.setSystemTime(new Date('2026-10-28T09:00:02.400Z'));
+    const harness = fakeWebHarness();
+    await act(() => render(<HarnessWindowApp />));
+    expect(await screen.findByText('Starting Hello Web…')).toBeDefined();
+    expect(screen.getByText('2 s')).toBeDefined();
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(screen.getByText('5 s')).toBeDefined();
+    expect(document.title).toBe('Hello Web — Harness Store');
+    // No terminal, and Reload waits for the page.
+    expect(screen.queryByRole('region', { name: 'Terminal of Hello Web' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reload' })).toHaveProperty('disabled', true);
+    // The room for the Harness's page is reported to main.
+    expect(harness.web.layout).toHaveBeenCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+
+    // Cancel closes the window, which stops the Harness.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(harness.window.close).toHaveBeenCalledOnce();
+
+    act(() => {
+      harness.emit('window.state', { ...STARTING, state: 'waiting-ready' });
+    });
+    expect(screen.getByText('Starting Hello Web…')).toBeDefined();
+    act(() => {
+      harness.emit('window.state', { ...STARTING, state: 'ready' });
+    });
+    expect(screen.queryByText('Starting Hello Web…')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+    expect(harness.web.reload).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Open logs' }));
+    expect(harness.window.openLogs).toHaveBeenCalledOnce();
+  });
+
+  it('a timed-out launch shows the timeout message with the last lines of its log', async () => {
+    const harness = fakeWebHarness({ ...STARTING, state: 'waiting-ready' });
+    await act(() => render(<HarnessWindowApp />));
+    await screen.findByText('Starting Hello Web…');
+    // It is stopped before it fails: still starting for the User.
+    act(() => {
+      harness.emit('window.state', { ...STARTING, state: 'stopping' });
+    });
+    expect(screen.getByText('Starting Hello Web…')).toBeDefined();
+    const logTail = [
+      '2026-10-28T09:00:00.100Z [out] fixture-hang: line 60',
+      '2026-10-28T09:00:05.000Z [runtime] Did not accept connections on 127.0.0.1:52341 within 5 s',
+    ];
+    act(() => {
+      harness.emit('window.state', {
+        ...STARTING,
+        state: 'failed',
+        reason: 'ready_timeout',
+        exitCode: 143,
+        logTail,
+      });
+    });
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Hello Web did not start in time');
+    expect(alert.textContent).toContain(
+      'It did not accept connections within 5 seconds. Its last output:',
+    );
+    expect(screen.getByLabelText('Last output of Hello Web').textContent).toBe(logTail.join('\n'));
+    fireEvent.click(screen.getByRole('button', { name: 'Show logs' }));
+    expect(harness.window.openLogs).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Relaunch' }));
+    await waitFor(() => {
+      expect(harness.window.relaunch).toHaveBeenCalledOnce();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(harness.window.close).toHaveBeenCalledOnce();
+  });
+
+  it('a Harness that exits on its own shows Crashed with its exit code', async () => {
+    const harness = fakeWebHarness({ ...STARTING, state: 'ready' });
+    await act(() => render(<HarnessWindowApp />));
+    await screen.findByText('Hello Web');
+    act(() => {
+      harness.emit('window.state', {
+        ...STARTING,
+        state: 'failed',
+        reason: 'exit_nonzero',
+        exitCode: 3,
+      });
+    });
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Hello Web stopped unexpectedly');
+    expect(alert.textContent).toContain('Exit code 3');
+    expect(screen.queryByLabelText('Last output of Hello Web')).toBeNull();
+    // The title keeps the name only: the exit code is in the window.
+    expect(document.title).toBe('Hello Web — Harness Store');
+    expect(screen.getByRole('button', { name: 'Reload' })).toHaveProperty('disabled', true);
+  });
+
+  it('a process that could not start says so, and a refused Relaunch says why', async () => {
+    const harness = fakeWebHarness();
+    harness.window.relaunch.mockReturnValueOnce(
+      Promise.resolve({
+        ok: false as const,
+        error: {
+          code: 'slot_unbound',
+          messageKey: 'error.slot_unbound',
+          message: 'No model',
+          params: { slot: 'default' },
+        },
+      }) as never,
+    );
+    await act(() => render(<HarnessWindowApp />));
+    await screen.findByText('Starting Hello Web…');
+    act(() => {
+      harness.emit('window.state', { ...STARTING, state: 'failed', reason: 'spawn_error' });
+    });
+    expect(screen.getAllByRole('alert')[0]?.textContent).toContain('Hello Web could not start');
+    fireEvent.click(screen.getByRole('button', { name: 'Relaunch' }));
+    await waitFor(() => {
+      expect(screen.getAllByRole('alert')).toHaveLength(2);
+    });
+  });
+
+  it('refreshes its model indicator when main says the window gained focus', async () => {
+    const harness = fakeWebHarness({ ...STARTING, state: 'ready' });
+    await act(() => render(<HarnessWindowApp />));
+    await screen.findByRole('button', { name: 'Model · default: qwen3:8b' });
+    expect(harness.window.slots).toHaveBeenCalledOnce();
+    act(() => {
+      harness.emit('window.focus', null);
+    });
+    expect(harness.window.slots).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders in zh-CN', async () => {
+    const harness = fakeWebHarness(STARTING, 'zh-CN');
+    await act(() => render(<HarnessWindowApp />));
+    expect(await screen.findByText('正在启动 Hello Web…')).toBeDefined();
+    expect(screen.getByRole('button', { name: '重新加载' })).toBeDefined();
+    act(() => {
+      harness.emit('window.state', {
+        ...STARTING,
+        state: 'failed',
+        reason: 'ready_timeout',
+        exitCode: 143,
+        logTail: [],
+      });
+    });
+    expect(screen.getByRole('alert').textContent).toContain('Hello Web 启动超时');
+    expect(screen.getByRole('alert').textContent).toContain('它没有任何输出。');
+    // Open logs in the bar, Show logs in the overlay: both 查看日志.
+    expect(screen.getAllByRole('button', { name: '查看日志' })).toHaveLength(2);
   });
 });

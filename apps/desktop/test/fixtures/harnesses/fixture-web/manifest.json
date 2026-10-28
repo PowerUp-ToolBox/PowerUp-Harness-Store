@@ -13,14 +13,35 @@
     "win32-x64",
     "win32-arm64"
   ],
-  "runtime": { "kind": "node", "node": "22" },
+  "runtime": {
+    "kind": "node",
+    "node": "22"
+  },
   "entry": "index.mjs",
-  "ui": { "kind": "web" },
+  "ui": {
+    "kind": "web",
+    "path": "/",
+    "readyTimeoutSeconds": 10,
+    "window": {
+      "width": 900,
+      "height": 600
+    }
+  },
   "workspace": "none",
-  "models": { "slots": { "default": { "description": "Answers the test's messages." } } },
+  "models": {
+    "slots": {
+      "default": {
+        "description": "Answers the test's messages."
+      }
+    }
+  },
   "permissions": {
-    "filesystem": { "scope": "none" },
+    "filesystem": {
+      "scope": "none"
+    },
     "shell": false,
-    "network": { "domains": [] }
+    "network": {
+      "domains": []
+    }
   }
 }

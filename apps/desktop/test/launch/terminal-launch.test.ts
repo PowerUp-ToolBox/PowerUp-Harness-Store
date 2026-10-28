@@ -158,6 +158,14 @@ function createFakeWindows() {
       open.set(spec.launchId, onClosed);
       queueMicrotask(() => void windowCall(spec.launchId, 'terminal.ready', SIZE));
     },
+    // Web windows are covered by web-launch.test.ts.
+    openWeb() {
+      throw new Error('No web window in these tests');
+    },
+    showWeb: () => undefined,
+    hideWeb: () => undefined,
+    reloadWeb: () => undefined,
+    layoutWeb: () => undefined,
     send(launchId, event, payload) {
       if (open.has(launchId)) sent.push({ launchId, event, payload });
     },
@@ -546,6 +554,7 @@ describe('a Harness that exits on its own', () => {
         harnessId: 'acme/fixture-crash',
         name: 'Fixture Crash',
         uiKind: 'terminal',
+        readyTimeoutSeconds: null,
         locale: 'zh-CN',
         iconDataUrl: expect.stringMatching(/^data:image\/png;base64,/) as unknown,
         status: { state: 'failed', reason: 'exit_nonzero', exitCode: 3 },
@@ -589,14 +598,6 @@ describe('refused and failed launches', () => {
     });
     expect(states).toEqual([]);
     expect(launchRows()).toEqual([]);
-  });
-
-  it('does not launch a web UI Kind yet (P0-05.3)', async () => {
-    await install('fixture-web');
-    await expect(call('launch.start', { harnessId: 'acme/fixture-web' })).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'not_implemented' },
-    });
   });
 
   it('a platform the Harness does not declare fails before any token, row or window', async () => {

@@ -28,8 +28,21 @@ export interface HarnessWindowMethods {
    * opens its own. Fails as `launch.start` does.
    */
   'window.relaunch': { input: undefined; output: null };
-  /** Closes this window; while the Harness runs, that stops it. */
+  /**
+   * Closes this window; while the Harness runs, that stops it. The Starting state's Cancel is
+   * this call too.
+   */
   'window.close': { input: undefined; output: null };
+  /**
+   * Reloads a ready web Harness's page in place; its process keeps running. Does nothing before
+   * the page is shown or after the launch ended.
+   */
+  'web.reload': { input: undefined; output: null };
+  /**
+   * Where the Harness's page goes in this window: the rectangle under the top bar, in the page's
+   * CSS pixels, sent again whenever it changes. Web UI Kind only.
+   */
+  'web.layout': { input: WebContentArea; output: null };
   /**
    * The terminal is on screen with this size: the Runtime starts the Harness's process in a pty
    * of that size now, so none of its output is lost. Later calls only resize.
@@ -51,11 +64,24 @@ export interface HarnessWindowInfo {
   /** The Manifest's display name. */
   readonly name: string;
   readonly uiKind: 'web' | 'terminal';
+  /**
+   * How many seconds a web Harness has to accept connections (`ui.readyTimeoutSeconds`, default
+   * 30); null for a terminal one.
+   */
+  readonly readyTimeoutSeconds: number | null;
   /** The Harness's `assets/icon.png` as a `data:` URL; null when it cannot be read. */
   readonly iconDataUrl: string | null;
   /** The app's UI language now; the window's own text follows it. */
   readonly locale: Locale;
   readonly status: LaunchStatus;
+}
+
+/** A rectangle of a Harness window's page, in CSS pixels. */
+export interface WebContentArea {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
 }
 
 /** A terminal's size in character cells. */
@@ -70,6 +96,11 @@ export interface HarnessWindowEvents {
   'terminal.data': string;
   /** Its launch changed state (the process exited, for example). */
   'window.state': LaunchStatus;
+  /**
+   * The window gained focus. A web Harness's page has the focus then, not the window's own page,
+   * which therefore cannot see it by itself.
+   */
+  'window.focus': null;
 }
 
 export type HarnessWindowMethodName = keyof HarnessWindowMethods;
@@ -82,6 +113,8 @@ const HARNESS_METHOD_NAMES: Readonly<Record<HarnessWindowMethodName, true>> = {
   'window.openLogs': true,
   'window.relaunch': true,
   'window.close': true,
+  'web.reload': true,
+  'web.layout': true,
   'terminal.ready': true,
   'terminal.input': true,
   'terminal.resize': true,
@@ -95,7 +128,7 @@ export const HARNESS_WINDOW_METHODS = Object.freeze(
 );
 
 export function isHarnessWindowEventName(name: string): name is HarnessWindowEventName {
-  return name === 'terminal.data' || name === 'window.state';
+  return name === 'terminal.data' || name === 'window.state' || name === 'window.focus';
 }
 
 /** The channel a Harness window's page invokes every method on. */

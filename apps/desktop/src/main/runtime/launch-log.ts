@@ -12,6 +12,8 @@ export type LogSource = 'out' | 'err' | 'pty' | 'runtime';
 export const LOG_MAX_BYTES = 10 * 1024 * 1024;
 /** How many launch logs of one Harness are kept: the newest. */
 export const KEPT_LAUNCH_LOGS = 20;
+/** How many of its last lines a launch log keeps in memory, for a launch that did not start in time. */
+export const LOG_TAIL_LINES = 50;
 /** A line longer than this is written as it is, without waiting for its end. */
 const MAX_PENDING = 64 * 1024;
 
@@ -24,6 +26,11 @@ export interface LaunchLog {
    * a file that cannot be written loses the output, not the launch.
    */
   write(source: LogSource, text: string): void;
+  /**
+   * The last {@link LOG_TAIL_LINES} complete lines, as the file has them (timestamp and source
+   * included), kept in memory rather than read back; lines past the size cap count too.
+   */
+  tail(): readonly string[];
   /** Writes the lines still waiting for their end and closes the file. Idempotent. */
   close(): Promise<void>;
 }
@@ -51,10 +58,14 @@ export function openLaunchLog(path: string, options: LaunchLogOptions = {}): Lau
   let written = 0;
   let truncated = false;
   let ended: Promise<void> | undefined;
+  const tail: string[] = [];
 
   const line = (source: LogSource, text: string) => {
+    const stamped = `${now().toISOString()} [${source}] ${text}`;
+    tail.push(stamped);
+    if (tail.length > LOG_TAIL_LINES) tail.shift();
     if (truncated) return;
-    const entry = `${now().toISOString()} [${source}] ${text}\n`;
+    const entry = `${stamped}\n`;
     const bytes = Buffer.byteLength(entry);
     if (written + bytes > maxBytes) {
       truncated = true;
@@ -81,6 +92,7 @@ export function openLaunchLog(path: string, options: LaunchLogOptions = {}): Lau
       }
       pending.set(source, rest);
     },
+    tail: () => [...tail],
     close() {
       ended ??= (async () => {
         for (const [source, rest] of pending) if (rest !== '') line(source, rest);

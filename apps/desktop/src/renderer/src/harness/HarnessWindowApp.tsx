@@ -4,13 +4,17 @@ import type { IpcError, LaunchStatus, ResolvedSlot } from '../../../shared/ipc.j
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { LocaleProvider, useI18n } from '../i18n/I18nProvider.js';
 import { TerminalView } from './TerminalView.js';
+import { WebArea } from './WebArea.js';
 
 /**
- * A Harness window's own page (docs/ux/screens.md, Harness terminal window): a thin top bar with
- * the Harness's icon and name, one model indicator per Model Slot and Open logs, then the embedded
- * terminal. Once the process has ended, the terminal stays readable and the bar shows "Exited with
- * code N" (or "Could not start") with Relaunch and Close; the window title adds the exit code. Its
- * text is in the app's language when the window opened.
+ * A Harness window's own page (docs/ux/screens.md, Harness web window chrome and Harness terminal
+ * window): a thin top bar with the Harness's icon and name, one model indicator per Model Slot,
+ * Reload (web) and Open logs, then the embedded terminal or the room for the web Harness's page.
+ *
+ * A terminal stays readable once the process has ended, and the bar shows "Exited with code N" (or
+ * "Could not start") with Relaunch and Close; the window title adds the exit code. A web window
+ * shows its Starting, Crashed and Timed-out states in that room ({@link WebArea}). Its text is in
+ * the app's language when the window opened.
  */
 export function HarnessWindowApp() {
   const [info, setInfo] = useState<HarnessWindowInfo | null>(null);
@@ -38,13 +42,14 @@ function HarnessWindow({ info }: { readonly info: HarnessWindowInfo }) {
   useEffect(() => window.harness.on('window.state', setStatus), []);
 
   const ended = status.state === 'stopped' || status.state === 'failed';
+  const terminal = info.uiKind === 'terminal';
   const { exitCode } = status;
   useEffect(() => {
     document.title =
-      ended && exitCode !== undefined
+      terminal && ended && exitCode !== undefined
         ? t('harness.title.exited', { name: info.name, code: exitCode })
         : t('harness.title', { name: info.name });
-  }, [ended, exitCode, info.name, t]);
+  }, [terminal, ended, exitCode, info.name, t]);
 
   const relaunch = async () => {
     setError(null);
@@ -65,7 +70,7 @@ function HarnessWindow({ info }: { readonly info: HarnessWindowInfo }) {
         <span className="harness-bar-name">{info.name}</span>
         <ModelIndicator name={info.name} />
         <div className="harness-bar-actions">
-          {ended ? (
+          {terminal && ended ? (
             <span
               className={
                 status.state === 'failed' ? 'harness-bar-status failed' : 'harness-bar-status'
@@ -77,6 +82,16 @@ function HarnessWindow({ info }: { readonly info: HarnessWindowInfo }) {
                 : t('harness.exited', { code: exitCode })}
             </span>
           ) : null}
+          {terminal ? null : (
+            <button
+              type="button"
+              className="button-secondary"
+              disabled={status.state !== 'ready'}
+              onClick={() => void window.harness.web.reload()}
+            >
+              {t('harness.reload')}
+            </button>
+          )}
           <button
             type="button"
             className="button-secondary"
@@ -84,7 +99,7 @@ function HarnessWindow({ info }: { readonly info: HarnessWindowInfo }) {
           >
             {t('harness.openLogs')}
           </button>
-          {ended ? (
+          {terminal && ended ? (
             <>
               <button type="button" className="button-primary" onClick={() => void relaunch()}>
                 {t('harness.relaunch')}
@@ -100,12 +115,16 @@ function HarnessWindow({ info }: { readonly info: HarnessWindowInfo }) {
           ) : null}
         </div>
       </header>
-      {error === null ? null : (
+      {terminal && error !== null ? (
         <div className="harness-bar-error">
           <ErrorMessage error={error} />
         </div>
+      ) : null}
+      {terminal ? (
+        <TerminalView name={info.name} />
+      ) : (
+        <WebArea info={info} status={status} error={error} onRelaunch={() => void relaunch()} />
       )}
-      {info.uiKind === 'terminal' ? <TerminalView name={info.name} /> : null}
     </div>
   );
 }
@@ -126,9 +145,12 @@ function ModelIndicator({ name }: { readonly name: string }) {
       });
     };
     load();
+    // A web Harness's page holds the focus in its window, so main tells this page.
+    const unsubscribe = window.harness.on('window.focus', load);
     window.addEventListener('focus', load);
     return () => {
       current = false;
+      unsubscribe();
       window.removeEventListener('focus', load);
     };
   }, []);

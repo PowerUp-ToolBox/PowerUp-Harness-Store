@@ -2,6 +2,7 @@ import type {
   HarnessWindowMethodName,
   HarnessWindowMethods,
   TerminalSize,
+  WebContentArea,
 } from '../../shared/harness-ipc.js';
 import type { IpcResult } from '../../shared/ipc.js';
 import type { BindingsService } from './bindings.js';
@@ -79,6 +80,16 @@ export function createHarnessWindowHandlers(
         window.close();
         return ok(null);
       }),
+    'web.reload': (input) =>
+      withWindow('web.reload', input, none, (window) => {
+        window.reload();
+        return ok(null);
+      }),
+    'web.layout': (input) =>
+      withWindow('web.layout', input, isContentArea, (window) => {
+        window.webLayout(input as WebContentArea);
+        return ok(null);
+      }),
     'terminal.ready': (input) =>
       withWindow('terminal.ready', input, isTerminalSize, (window) => {
         window.terminalReady(input as TerminalSize);
@@ -106,6 +117,19 @@ export function createHarnessWindowHandlers(
 
 function isText(input: unknown): boolean {
   return typeof input === 'string' && input.length <= MAX_TEXT;
+}
+
+/** A rectangle of the window's page: finite, not negative, at most 100000 CSS pixels each way. */
+function isContentArea(input: unknown): boolean {
+  if (typeof input !== 'object' || input === null) return false;
+  const { x, y, width, height } = input as Record<string, unknown>;
+  return (
+    Object.keys(input).length === 4 &&
+    [x, y, width, height].every(
+      (value) =>
+        typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100_000,
+    )
+  );
 }
 
 /** A pty size: whole numbers of cells, 1 to 1000 each way. */
