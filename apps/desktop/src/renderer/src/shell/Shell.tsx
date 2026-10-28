@@ -2,13 +2,14 @@ import { NavLink, Outlet, useLocation } from 'react-router';
 import { useConnectivity } from '../connectivity/ConnectivityProvider.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { PublishProvider } from '../publish/PublishProvider.js';
+import { StoreSearchProvider } from '../store/StoreSearchProvider.js';
 import { OfflineIcon } from './icons.js';
 import { SECTIONS, sectionFor } from './sections.js';
 
 /**
  * The main window frame: sidebar navigation, the offline banner while the Store is unreachable,
- * the page title header and the current screen. The Publish flow's state lives here, above the
- * screens, so it outlasts a visit to another screen.
+ * the page title header and the current screen. The Publish flow's state and the Store search's
+ * live here, above the screens, so they outlast a visit to another screen.
  */
 export function Shell() {
   const { t } = useI18n();
@@ -37,7 +38,9 @@ export function Shell() {
         </header>
         <div className="page">
           <PublishProvider>
-            <Outlet />
+            <StoreSearchProvider>
+              <Outlet />
+            </StoreSearchProvider>
           </PublishProvider>
         </div>
       </main>

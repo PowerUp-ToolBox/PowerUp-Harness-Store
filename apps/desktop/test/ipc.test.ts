@@ -7,7 +7,7 @@ import { fail, ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { StoreAuthError } from '../src/main/runtime/store-auth.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
-import { IPC_METHODS, type StoreHomeRequest } from '../src/shared/ipc.js';
+import { IPC_METHODS, type StoreHomeRequest, type StoreSearchRequest } from '../src/shared/ipc.js';
 
 const MAIN_WINDOW = { id: 'main window webContents' };
 const quit = vi.fn();
@@ -18,6 +18,13 @@ const home = vi.fn((request?: StoreHomeRequest) =>
     request?.refresh === true
       ? fail('store_unreachable')
       : ok({ platform: 'darwin-arm64' as const, featured: [], mostDownloaded: [], newest: [] }),
+  ),
+);
+const search = vi.fn((request: StoreSearchRequest) =>
+  Promise.resolve(
+    request.q === 'offline'
+      ? fail('store_unreachable')
+      : ok({ platform: 'darwin-arm64' as const, listings: [], hasMore: false }),
   ),
 );
 const fakeServices: Services = {
@@ -41,7 +48,7 @@ const fakeServices: Services = {
     get: () => ({ state: 'offline' }),
     check: () => Promise.resolve({ state: 'online' }),
   },
-  store: { home },
+  store: { home, search },
   providers: { list: () => providerPresets() },
   connections: createConnectionsStub(),
   bindings: {
@@ -196,6 +203,59 @@ describe('IPC handlers against a fake service container', () => {
       expect(home).not.toHaveBeenCalled();
     },
   );
+
+  it('store.search searches the Store with the request as it came', async () => {
+    const { dispatch } = dispatcherFor();
+    const request = { q: '写作', tags: ['writing', 'coding'], allPlatforms: true, offset: 24 };
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'store.search', input: request }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { platform: 'darwin-arm64', listings: [], hasMore: false },
+    });
+    expect(search).toHaveBeenLastCalledWith(request);
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'store.search',
+        input: { q: 'offline', tags: [], allPlatforms: false, offset: 0 },
+      }),
+    ).resolves.toMatchObject({ ok: false, error: { code: 'store_unreachable' } });
+  });
+
+  const SEARCH = { q: 'notes', tags: ['writing'], allPlatforms: false, offset: 0 };
+  it.each([
+    undefined,
+    'notes',
+    [],
+    { q: 'notes' },
+    { ...SEARCH, extra: 1 },
+    { ...SEARCH, q: 42 },
+    { ...SEARCH, q: 'x'.repeat(201) },
+    { ...SEARCH, tags: 'writing' },
+    { ...SEARCH, tags: ['not-a-tag'] },
+    { ...SEARCH, tags: ['writing', 'writing'] },
+    { ...SEARCH, allPlatforms: 'yes' },
+    { ...SEARCH, offset: -24 },
+    { ...SEARCH, offset: 1.5 },
+    { ...SEARCH, offset: '24' },
+    { ...SEARCH, offset: 2 ** 31 },
+  ])('store.search rejects %j as invalid_input', async (input) => {
+    const { dispatch } = dispatcherFor();
+    search.mockClear();
+    await expect(dispatch(MAIN_WINDOW, { method: 'store.search', input })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input', params: { method: 'store.search' } },
+    });
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it('store.search takes 200 characters of text', async () => {
+    const { dispatch } = dispatcherFor();
+    const input = { ...SEARCH, q: 'x'.repeat(200) };
+    await expect(dispatch(MAIN_WINDOW, { method: 'store.search', input })).resolves.toMatchObject({
+      ok: true,
+    });
+  });
 
   it.each([
     'app.status',

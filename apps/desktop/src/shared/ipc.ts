@@ -1,6 +1,6 @@
 /**
  * The IPC contract between the renderer and the Runtime (main process), defined once and used by
- * the main handlers, the preload bridge and the renderer. It is types plus two constant lists; it
+ * the main handlers, the preload bridge and the renderer. It is types plus a few constants; it
  * imports only types, so every process can bundle it.
  *
  * Transport: one `ipcMain.handle` channel carries `{ method, input }` and always resolves to an
@@ -162,6 +162,14 @@ export interface IpcMethods {
    * is checked again), `store_error` when it answered with something else.
    */
   'store.home': { input: StoreHomeRequest; output: StoreHome };
+  /**
+   * One page of a Store search (P0-09.2): `search_harnesses` with the anon key, at most
+   * {@link STORE_SEARCH_PAGE_SIZE} results in the Store's order (never re-sorted), limited to this
+   * machine's platform unless `allPlatforms`. Never kept in memory. `store_unreachable` when the
+   * Store did not answer (connectivity is checked again), `store_error` when it answered with
+   * something else.
+   */
+  'store.search': { input: StoreSearchRequest; output: StoreSearchPage };
   /** Every Provider of the Gateway's table, in its order, local ones (Ollama, LM Studio) included. */
   'providers.list': { input: undefined; output: readonly ProviderPreset[] };
   /**
@@ -695,6 +703,31 @@ export interface StoreHome {
   readonly newest: readonly StoreListing[];
 }
 
+/** How many results one page of a Store search has; "Load more" asks for the next one. */
+export const STORE_SEARCH_PAGE_SIZE = 24;
+
+/** A Store search: text, tags and platform together, and which page. */
+export interface StoreSearchRequest {
+  /** `websearch_to_tsquery` syntax; blank means no text filter. At most 200 characters. */
+  readonly q: string;
+  /** The Harness has every one of them; none means no tag filter. */
+  readonly tags: readonly Tag[];
+  /** Every platform; false keeps only Harnesses whose latest version declares this machine's. */
+  readonly allPlatforms: boolean;
+  /** How many results to skip: 0, then one page size more for each "Load more". */
+  readonly offset: number;
+}
+
+/** One page of Store search results. */
+export interface StoreSearchPage {
+  /** This machine's platform, as in {@link StoreHome}; null searches every platform. */
+  readonly platform: Platform | null;
+  /** Most relevant first, as the Store ranks them. */
+  readonly listings: readonly StoreListing[];
+  /** The page was full: the next one may have more ("Load more"). */
+  readonly hasMore: boolean;
+}
+
 /** A Harness as a Store list shows it on its card (api.md `<list columns>`). */
 export interface StoreListing {
   readonly harnessId: string;
@@ -984,6 +1017,7 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'connectivity.get': true,
   'connectivity.check': true,
   'store.home': true,
+  'store.search': true,
   'providers.list': true,
   'connections.detectLocal': true,
   'connections.list': true,

@@ -67,7 +67,7 @@ export function TagChips({ tags }: { readonly tags: readonly Tag[] }) {
 }
 
 /** The catalog key of a tag's name: typed, so a schema tag without an entry fails typecheck. */
-function tagKey(tag: Tag): `tag.${Tag}` {
+export function tagKey(tag: Tag): `tag.${Tag}` {
   return `tag.${tag}`;
 }
 

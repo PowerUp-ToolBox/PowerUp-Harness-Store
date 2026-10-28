@@ -1,5 +1,13 @@
 import { manifestSchema, type Platform, type Tag } from '@harness-store/manifest';
-import type { IpcResult, StoreHome, StoreHomeRequest, StoreListing } from '../../shared/ipc.js';
+import {
+  STORE_SEARCH_PAGE_SIZE,
+  type IpcResult,
+  type StoreHome,
+  type StoreHomeRequest,
+  type StoreListing,
+  type StoreSearchPage,
+  type StoreSearchRequest,
+} from '../../shared/ipc.js';
 import { fail, ok } from './ipc-result.js';
 import { storeAssetUrl } from './store-assets.js';
 import type { StoreFetch } from './store-auth.js';
@@ -52,6 +60,8 @@ export interface StoreCatalogueOptions {
 export interface StoreCatalogue {
   /** The Store home's rows (`store.home`). */
   home(request?: StoreHomeRequest): Promise<IpcResult<StoreHome>>;
+  /** One page of a search (`store.search`). */
+  search(request: StoreSearchRequest): Promise<IpcResult<StoreSearchPage>>;
 }
 
 /**
@@ -70,15 +80,22 @@ export function createStoreCatalogue(options: StoreCatalogueOptions): StoreCatal
   /** The last Store home read, with when and from which Store. */
   let cachedHome: { baseUrl: string; at: number; home: StoreHome } | null = null;
 
-  const read = async (path: string): Promise<IpcResult<unknown[]>> => {
+  /** A PostgREST read: a GET of `path`, or with `body` a POST of it as JSON (an RPC). */
+  const read = async (path: string, body?: unknown): Promise<IpcResult<unknown[]>> => {
     const base = options.storeBaseUrl().replace(/\/+$/, '');
+    const headers: Record<string, string> = {
+      apikey: options.anonKey,
+      authorization: `Bearer ${options.anonKey}`,
+    };
+    if (body !== undefined) headers['content-type'] = 'application/json';
     let response: Response;
     let text = '';
     try {
       // The timeout covers the body too: a Store that answers and then stalls did not answer.
       response = await options.fetch(`${base}/rest/v1/${path}`, {
-        method: 'GET',
-        headers: { apikey: options.anonKey, authorization: `Bearer ${options.anonKey}` },
+        method: body === undefined ? 'GET' : 'POST',
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(readTimeoutMs),
       });
       if (response.ok) text = await response.text();
@@ -86,13 +103,13 @@ export function createStoreCatalogue(options: StoreCatalogueOptions): StoreCatal
       return fail('store_unreachable');
     }
     if (!response.ok) return fail('store_error');
-    let body: unknown;
+    let rows: unknown;
     try {
-      body = JSON.parse(text);
+      rows = JSON.parse(text);
     } catch {
       return fail('store_error');
     }
-    return Array.isArray(body) ? ok(body) : fail('store_error');
+    return Array.isArray(rows) ? ok(rows) : fail('store_error');
   };
 
   return {
@@ -130,12 +147,47 @@ export function createStoreCatalogue(options: StoreCatalogueOptions): StoreCatal
       cachedHome = { baseUrl, at, home };
       return ok(home);
     },
+
+    async search(request) {
+      // POST: in a GET, PostgREST would take `limit` and `offset` as its own paging (api.md).
+      const result = await read('rpc/search_harnesses', {
+        q: request.q,
+        tags: request.tags,
+        platform: request.allPlatforms ? null : options.platform,
+        limit: STORE_SEARCH_PAGE_SIZE,
+        offset: request.offset,
+      });
+      if (!result.ok) {
+        if (result.error.code === 'store_unreachable') options.onStoreUnreachable?.();
+        return result;
+      }
+      return ok({
+        platform: options.platform,
+        listings: searchListingsOf(result.data),
+        // Counted before a malformed row is skipped: a full page from the Store may have a next.
+        hasMore: result.data.length >= STORE_SEARCH_PAGE_SIZE,
+      });
+    },
   };
 }
 
 /** The cards of a list read's rows; a row that is not one (no ID, name or version) is skipped. */
 export function listingsOf(rows: readonly unknown[]): readonly StoreListing[] {
   return rows.map(listingOf).filter((listing) => listing !== null);
+}
+
+/**
+ * The cards of `search_harnesses` rows, which carry the latest version's `platforms` themselves
+ * instead of embedding `harness_versions`; otherwise they are list rows.
+ */
+export function searchListingsOf(rows: readonly unknown[]): readonly StoreListing[] {
+  return listingsOf(
+    rows.map((row) =>
+      isRecord(row)
+        ? { ...row, harness_versions: [{ version: row.latest_version, platforms: row.platforms }] }
+        : row,
+    ),
+  );
 }
 
 /** One row of `<list columns>` as a card shows it, or null when it is not such a row. */

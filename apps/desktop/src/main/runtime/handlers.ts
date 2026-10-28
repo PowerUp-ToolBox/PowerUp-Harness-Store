@@ -7,8 +7,10 @@ import type {
   LaunchRequest,
   PublishRequest,
   StoreHomeRequest,
+  StoreSearchRequest,
   UnpublishRequest,
 } from '../../shared/ipc.js';
+import { isTag } from '../../shared/tags.js';
 import {
   isHarnessIdInput,
   parseGlobalBindingChange,
@@ -77,6 +79,11 @@ export function createHandlers(services: Services): IpcHandlers {
       const request = parseStoreHomeRequest(input);
       if (request === null) return fail('invalid_input', { method: 'store.home' });
       return services.store.home(request);
+    },
+    'store.search': (input) => {
+      const request = parseStoreSearchRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'store.search' });
+      return services.store.search(request);
     },
     'providers.list': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'providers.list' });
@@ -250,6 +257,35 @@ function parseStoreHomeRequest(input: unknown): StoreHomeRequest | null {
   if (Object.keys(rest).length > 0) return null;
   if (refresh === undefined) return {};
   return typeof refresh === 'boolean' ? { refresh } : null;
+}
+
+/** The longest search text `store.search` takes. */
+const MAX_SEARCH_LENGTH = 200;
+
+/** The greatest `offset` Postgres takes as an `int`. */
+const MAX_SEARCH_OFFSET = 2_147_483_647;
+
+/**
+ * `{ q, tags, allPlatforms, offset }`, nothing else: text of at most 200 characters, curated tags
+ * (each once), a boolean and a whole offset from 0 that Postgres takes as an `int`.
+ */
+function parseStoreSearchRequest(input: unknown): StoreSearchRequest | null {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return null;
+  const { q, tags, allPlatforms, offset, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0) return null;
+  if (typeof q !== 'string' || q.length > MAX_SEARCH_LENGTH) return null;
+  if (!Array.isArray(tags) || !tags.every(isTag) || new Set(tags).size !== tags.length) {
+    return null;
+  }
+  if (typeof allPlatforms !== 'boolean') return null;
+  if (
+    !Number.isInteger(offset) ||
+    (offset as number) < 0 ||
+    (offset as number) > MAX_SEARCH_OFFSET
+  ) {
+    return null;
+  }
+  return { q, tags, allPlatforms, offset: offset as number };
 }
 
 /** `{ harnessId, version }`, a `<publisher>/<slug>` ID and a version string, nothing else. */

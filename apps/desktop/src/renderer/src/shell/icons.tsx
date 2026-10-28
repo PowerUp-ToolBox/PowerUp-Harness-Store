@@ -163,3 +163,12 @@ export function FolderUploadIcon() {
     </Icon>
   );
 }
+
+export function SearchIcon() {
+  return (
+    <Icon>
+      <circle cx="11" cy="11" r="7" />
+      <path d="M20 20l-3.5-3.5" />
+    </Icon>
+  );
+}
