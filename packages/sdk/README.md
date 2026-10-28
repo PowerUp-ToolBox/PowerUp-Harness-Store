@@ -34,15 +34,15 @@ try {
 | `SlotUnboundError`          | Typed `slot_unbound` error with `slot`; `SlotUnboundError.from(err)` converts a recognised `openai` error.                                                                                                                                                                               |
 | `GatewayError`              | Any other non-2xx Gateway answer from `listSlots()` or `getGatewayContext()`, with `status`, `code` and `slot`.                                                                                                                                                                          |
 
-The SDK is deliberately small: no agent loop and no prompt helpers ([ADR-0001](../../docs/adr/0001-harness-is-a-declarative-package.md), [ADR-0004](../../docs/adr/0004-harness-is-a-standalone-process-behind-a-model-gateway.md)). The reference Harnesses in [`examples/`](../../examples) are built with it. Spec: [`P0-06`](../../docs/delivery/specs/P0-06-sdk-and-reference-harnesses.md); wire protocol: [`gateway-protocol.md`](../../docs/tech/gateway-protocol.md).
+The SDK is deliberately small: no agent loop and no prompt helpers ([ADR-0001](../../docs/adr/0001-harness-is-a-declarative-package.md), [ADR-0004](../../docs/adr/0004-harness-is-a-standalone-process-behind-a-model-gateway.md)). The reference Harnesses in [`examples/`](../../examples) are built with it, and the [authoring guide](../../docs/guides/authoring-harnesses.md) shows how to use it, from an empty folder to a published Harness. Spec: [`P0-06`](../../docs/delivery/specs/P0-06-sdk-and-reference-harnesses.md); wire protocol: [`gateway-protocol.md`](../../docs/tech/gateway-protocol.md).
 
 ESM only. Version `0.1.0`, private until the npm publishing pipeline exists.
 
 ## Scripts
 
-| Command          | What it does                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------- |
-| `pnpm test`      | Vitest: unit tests, and integration tests against a real Model Gateway and the fake Provider |
-| `pnpm lint`      | ESLint with the shared root config                                                           |
-| `pnpm typecheck` | `tsc --noEmit` against `tsconfig.json` (sources and tests)                                   |
-| `pnpm build`     | Emits `dist/` from `tsconfig.build.json`                                                     |
+| Command          | What it does                                                                                                                                                                                                                                                                                                                     |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm test`      | Vitest: unit tests, and integration tests against a real Model Gateway and the fake Provider. `test/guide.test.ts` checks that every TypeScript snippet of the authoring guide is a file of `test/guide/` (type-checked and linted with the tests) and runs each one; they import the SDK by its name, so run `pnpm build` first |
+| `pnpm lint`      | ESLint with the shared root config                                                                                                                                                                                                                                                                                               |
+| `pnpm typecheck` | `tsc --noEmit` against `tsconfig.json` (sources and tests)                                                                                                                                                                                                                                                                       |
+| `pnpm build`     | Emits `dist/` from `tsconfig.build.json`                                                                                                                                                                                                                                                                                         |

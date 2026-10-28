@@ -10,6 +10,7 @@ Status: **design complete; P0 implementation has started** with the monorepo sca
 - [`docs/product/prd.md`](./docs/product/prd.md) — PRD (with 中文摘要), [`requirements.md`](./docs/product/requirements.md), [`roadmap.md`](./docs/product/roadmap.md)
 - [`docs/tech/`](./docs/tech) — [architecture](./docs/tech/architecture.md), [Manifest spec](./docs/tech/manifest-spec.md), [Gateway protocol](./docs/tech/gateway-protocol.md), [data model](./docs/tech/data-model.md), [API](./docs/tech/api.md), [security](./docs/tech/security.md)
 - [`docs/ux/`](./docs/ux) — [principles](./docs/ux/design-principles.md), [flows](./docs/ux/flows.md), [screens](./docs/ux/screens.md)
+- [`docs/guides/authoring-harnesses.md`](./docs/guides/authoring-harnesses.md) — for Publishers: build, test and publish a Harness with the SDK
 - [`docs/delivery/specs/`](./docs/delivery/specs) — one spec per feature, mirrored to GitHub issues labelled `spec` + phase (`P0`, `P0.5`, `P1`, `P2`), ordered by ID and linked by "blocked by".
 
 ## Phases
