@@ -221,6 +221,69 @@ describe('Install this folder locally', () => {
     expect(api.installs.inspectFolder).toHaveBeenCalledTimes(2);
   });
 
+  it('a folder that checks valid again shows a fresh dialog saying why it is back', async () => {
+    const api = folderPicked();
+    api.installs.inspectFolder.mockResolvedValue({ ok: true, data: VALID });
+    api.installs.installFromFolder.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'package_invalid',
+        messageKey: 'error.package_invalid',
+        message: 'This folder is not a valid Harness, or it changed since it was checked.',
+      },
+    });
+    await chooseFolder();
+    const install = within(await screen.findByRole('dialog')).getByRole<HTMLButtonElement>(
+      'button',
+      { name: 'Install' },
+    );
+    await waitFor(
+      () => {
+        expect(install.disabled).toBe(false);
+      },
+      { timeout: 2000 },
+    );
+    fireEvent.click(install);
+    await waitFor(() => {
+      expect(api.installs.inspectFolder).toHaveBeenCalledTimes(2);
+    });
+    const fresh = await screen.findByRole('dialog');
+    expect((await within(fresh).findByRole('alert')).textContent).toBe(
+      'This folder is not a valid Harness, or it changed since it was checked. Check it again.',
+    );
+  });
+
+  // The file is still unreadable when the folder is inspected again, which would find it valid
+  // and reopen the dialog without a word, on every click.
+  it('a file that cannot be opened stays in the dialog, naming it, without inspecting again', async () => {
+    const api = folderPicked();
+    api.installs.inspectFolder.mockResolvedValue({ ok: true, data: VALID });
+    api.installs.installFromFolder.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'file_unreadable',
+        messageKey: 'error.file_unreadable',
+        params: { path: 'node_modules/left-pad/index.js' },
+        message: 'unused fallback',
+      },
+    });
+    await chooseFolder();
+    const dialog = await screen.findByRole('dialog');
+    const install = within(dialog).getByRole<HTMLButtonElement>('button', { name: 'Install' });
+    await waitFor(
+      () => {
+        expect(install.disabled).toBe(false);
+      },
+      { timeout: 2000 },
+    );
+    fireEvent.click(install);
+    expect((await within(dialog).findByRole('alert')).textContent).toBe(
+      'Harness Store cannot open "node_modules/left-pad/index.js" in this folder. Make sure your user account can read it, then try again.',
+    );
+    expect(api.installs.inspectFolder).toHaveBeenCalledOnce();
+    expect(screen.getByRole('dialog')).toBe(dialog);
+  });
+
   it('another install error stays in the dialog', async () => {
     const api = folderPicked();
     api.installs.inspectFolder.mockResolvedValue({ ok: true, data: VALID });

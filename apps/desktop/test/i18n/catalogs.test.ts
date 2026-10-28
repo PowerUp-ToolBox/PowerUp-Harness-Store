@@ -18,6 +18,7 @@ const IPC_OWN_CODES = [
   'sign_in_cancelled',
   'store_unreachable',
   'package_invalid',
+  'file_unreadable',
   'harness_running',
   'not_installed',
 ] as const;

@@ -6,12 +6,13 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/main/runtime/database.js';
@@ -196,6 +197,20 @@ describe('createInstaller', () => {
     expect(downloads()).toEqual([]);
   });
 
+  // The previous row's path is compared by the folder it names, not as a string: the case-only
+  // test above catches a string comparison only on a case-insensitive file system, this one on any.
+  it('a reinstall keeps the folder when the row spells its path differently', async () => {
+    await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+    const spelled = [userData(), 'harnesses', 'acme', '.', 'fixture-web', '1.0.0'].join(sep);
+    db.prepare('UPDATE installs SET install_path = ?').run(spelled);
+
+    await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+    expect(store.get('acme/fixture-web')).toMatchObject({ installPath: installedAt('1.0.0') });
+    expect(existsSync(join(installedAt('1.0.0'), 'manifest.json'))).toBe(true);
+    expect(versionFolders()).toEqual(['1.0.0']);
+    expect(downloads()).toEqual([]);
+  });
+
   it('runs two installs of one folder one after the other', async () => {
     const both = installer();
     const results = await Promise.all([
@@ -283,16 +298,22 @@ describe('createInstaller', () => {
     },
   );
 
-  // A file validation never reads (the Entry is only looked for) that cannot be opened stands in
-  // for one removed or swapped between validation and copying. Root reads it anyway.
+  // Validation never opens the Entry (it only looks for it), so the folder inspects valid; the
+  // copy then cannot open it. It is file_unreadable, naming the file: package_invalid would make
+  // the dialog inspect again, find the folder valid again, and loop. Root reads it anyway.
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-    'a file that cannot be read while copying is package_invalid, and nothing is left behind',
+    'a file that cannot be read while copying is file_unreadable, and nothing is left behind',
     async () => {
       chmodSync(join(folder, 'index.mjs'), 0o000);
       try {
-        await expect(installer().installFromFolder(folder)).resolves.toMatchObject({
+        const install = installer();
+        await expect(install.inspectFolder(folder)).resolves.toMatchObject({
+          ok: true,
+          data: { valid: true },
+        });
+        await expect(install.installFromFolder(folder)).resolves.toMatchObject({
           ok: false,
-          error: { code: 'package_invalid' },
+          error: { code: 'file_unreadable', params: { path: 'index.mjs' } },
         });
       } finally {
         chmodSync(join(folder, 'index.mjs'), 0o644);
@@ -300,6 +321,26 @@ describe('createInstaller', () => {
       expect(store.all()).toEqual([]);
       expect(readdirSync(join(root, 'userData', 'downloads'))).toEqual([]);
       expect(existsSync(join(root, 'userData', 'harnesses'))).toBe(false);
+    },
+  );
+
+  // A file validation reads (manifest.json, the icon) that cannot be opened: validatePackage
+  // throws the I/O error, which must not escape as internal_error. Root reads it anyway.
+  it
+    .skipIf(process.platform === 'win32' || process.getuid?.() === 0)
+    .each(['manifest.json', 'assets/icon.png'])(
+    'a folder whose %s cannot be read is package_invalid',
+    async (file) => {
+      chmodSync(join(folder, file), 0o000);
+      try {
+        const install = installer();
+        const refused = { ok: false, error: { code: 'package_invalid' } };
+        await expect(install.inspectFolder(folder)).resolves.toMatchObject(refused);
+        await expect(install.installFromFolder(folder)).resolves.toMatchObject(refused);
+      } finally {
+        chmodSync(join(folder, file), 0o644);
+      }
+      expect(store.all()).toEqual([]);
     },
   );
 
@@ -336,6 +377,57 @@ describe('createInstaller', () => {
     ]);
     // No icon file in these installs.
     expect(listed.every((install) => install.iconDataUrl === null)).toBe(true);
+  });
+});
+
+// An install the app quit or crashed in: its folders stay in downloads/, cleaned up by the next
+// installer before it installs or lists anything.
+describe('an interrupted install', () => {
+  const download = (name: string) => join(userData(), 'downloads', name);
+
+  it('deletes partial copies and folders moved aside whose install is in place', async () => {
+    await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+    const before = store.get('acme/fixture-web');
+    mkdirSync(download('install-partial'), { recursive: true });
+    writeFileSync(download('install-partial/index.mjs'), '// half');
+    cpSync(installedAt('1.0.0'), download('replaced-stale'), { recursive: true });
+    writeFileSync(download('kept.zip'), 'not an install folder');
+
+    await installer().list();
+    expect(downloads()).toEqual(['kept.zip']);
+    expect(store.get('acme/fixture-web')).toEqual(before);
+    expect(readFileSync(join(installedAt('1.0.0'), 'index.mjs'), 'utf8')).toBe(
+      readFileSync(join(FIXTURE, 'index.mjs'), 'utf8'),
+    );
+  });
+
+  it('moves back the installed version a same-version reinstall had moved aside', async () => {
+    await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+    // Stopped between moving the installed folder aside and moving the new copy in.
+    renameSync(installedAt('1.0.0'), download('replaced-interrupted'));
+    mkdirSync(download('install-interrupted'));
+    writeFileSync(download('install-interrupted/index.mjs'), '// half');
+
+    const [listed] = await installer().list();
+    expect(downloads()).toEqual([]);
+    expect(readFileSync(join(installedAt('1.0.0'), 'index.mjs'), 'utf8')).toBe(
+      readFileSync(join(FIXTURE, 'index.mjs'), 'utf8'),
+    );
+    expect(listed).toMatchObject({ harnessId: 'acme/fixture-web', version: '1.0.0' });
+    expect(listed?.iconDataUrl).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it('cleans up before the first install runs', async () => {
+    mkdirSync(download('install-partial'), { recursive: true });
+    await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+    expect(downloads()).toEqual([]);
+  });
+
+  it('deletes a folder moved aside that belongs to no install', async () => {
+    cpSync(folder, download('replaced-orphan'), { recursive: true });
+    await installer().list();
+    expect(downloads()).toEqual([]);
+    expect(existsSync(join(userData(), 'harnesses'))).toBe(false);
   });
 });
 

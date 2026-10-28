@@ -1,6 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { constants, createWriteStream } from 'node:fs';
-import { chmod, mkdir, open, readFile, rename, rm, stat, type FileHandle } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  type FileHandle,
+} from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { validatePackage, type Manifest, type Platform } from '@harness-store/manifest';
@@ -15,6 +25,10 @@ import type {
 import { entryFor, harnessPaths, isInside, type HarnessPaths } from './harness-paths.js';
 import type { InstallRow, InstallStore } from './install-store.js';
 import { fail, ok } from './ipc-result.js';
+
+/** The `downloads/` folders of an install: its copy of the Harness folder, and the one it replaces. */
+const STAGING_PREFIX = 'install-';
+const ASIDE_PREFIX = 'replaced-';
 
 /** The installer as the IPC handlers use it. */
 export interface InstallsService {
@@ -69,6 +83,14 @@ export interface InstallerOptions {
  * install created and leaves the previous install as it was. Once the row is written the install
  * has succeeded: deleting the replaced folders and creating the Data Directory are best effort
  * (a failure is logged; a launch creates a missing Data Directory again).
+ *
+ * A file of the listing the User's account cannot open (left by another user, or with no read
+ * permission) is refused with `file_unreadable`, naming it: it is still there when inspected
+ * again, so it is never reported as a folder that changed.
+ *
+ * An install the app quit or crashed in leaves its folders in `downloads/`. Before the first
+ * install or listing, the installer puts back a folder moved aside whose install is missing, then
+ * deletes what the interrupted installs left there (see {@link recoverInterruptedInstalls}).
  */
 export function createInstaller(options: InstallerOptions): InstallsService {
   const { store, platform } = options;
@@ -83,7 +105,8 @@ export function createInstaller(options: InstallerOptions): InstallsService {
   const inspected = new Map<string, string>();
   /** The icons read so far, by install path: an installed version's files never change. */
   const icons = new Map<string, string | null>();
-  let queue: Promise<unknown> = Promise.resolve();
+  const recovered = recoverInterruptedInstalls(paths, store, logError);
+  let queue: Promise<unknown> = recovered;
   const oneAtATime = <T>(work: () => Promise<T>): Promise<T> => {
     const run = queue.then(work, work);
     queue = run.catch(() => undefined);
@@ -91,15 +114,17 @@ export function createInstaller(options: InstallerOptions): InstallsService {
   };
 
   const validateFolder = async (path: string) => {
-    let source: DirectorySource;
+    // A folder, or a file validation reads (manifest.json, the icon), that cannot be read or is
+    // gone by the time it is read: `validatePackage` throws the I/O error. It answers
+    // `package_invalid`, as a folder that cannot be listed does.
     try {
-      source = await DirectorySource.open(path);
+      const source = await DirectorySource.open(path);
+      // Local installs are the Publisher's own tests: no publisher or published-version check, so
+      // "Install this folder locally" works signed out and offline.
+      return { source, result: await validatePackage(source) };
     } catch {
       return null;
     }
-    // Local installs are the Publisher's own tests: no publisher or published-version check, so
-    // "Install this folder locally" works signed out and offline.
-    return { source, result: await validatePackage(source) };
   };
 
   return {
@@ -141,11 +166,14 @@ export function createInstaller(options: InstallerOptions): InstallsService {
         if (options.isRunning?.(harnessId) === true) return fail('harness_running');
 
         const target = paths.installPath(harnessId, manifest.version);
-        const staging = join(paths.downloads, `install-${randomUUID()}`);
+        const staging = join(paths.downloads, `${STAGING_PREFIX}${randomUUID()}`);
         try {
           try {
             await copyListedFiles(source, staging);
           } catch (error) {
+            if (error instanceof FileUnreadableError) {
+              return fail('file_unreadable', { path: error.file });
+            }
             if (error instanceof FolderChangedError) return fail('package_invalid');
             throw error;
           }
@@ -185,6 +213,7 @@ export function createInstaller(options: InstallerOptions): InstallsService {
       }),
 
     async list() {
+      await recovered;
       const rows = store.all().sort(byRecentUseThenName);
       return Promise.all(
         rows.map(async (row): Promise<InstalledHarness> => {
@@ -267,11 +296,24 @@ class FolderChangedError extends Error {
   override name = 'FolderChangedError';
 }
 
+/** A file of the Harness folder that the User's account is not allowed to open. */
+class FileUnreadableError extends Error {
+  override name = 'FileUnreadableError';
+  constructor(
+    /** The file, relative to the Harness folder, with `/` separators. */
+    readonly file: string,
+    options: ErrorOptions,
+  ) {
+    super(`${file} cannot be opened`, options);
+  }
+}
+
 /**
  * Copies every file of the validated listing (and nothing else: no ignore list) into `target`.
  * Each file is opened without following a symbolic link, as `DirectorySource.readFile` does, and
  * must still be a regular file: a file removed, or replaced by a link, since validation throws
- * {@link FolderChangedError}.
+ * {@link FolderChangedError}. A file the OS refuses to open (no permission) throws
+ * {@link FileUnreadableError}: validation reads only some files, so it can list one it never opens.
  */
 async function copyListedFiles(source: DirectorySource, target: string): Promise<void> {
   const noFollow = (constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
@@ -282,6 +324,9 @@ async function copyListedFiles(source: DirectorySource, target: string): Promise
     try {
       handle = await open(join(source.root, ...file.split('/')), constants.O_RDONLY | noFollow);
     } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EACCES' || code === 'EPERM')
+        throw new FileUnreadableError(file, { cause: error });
       throw new FolderChangedError(`${file} can no longer be opened`, { cause: error });
     }
     try {
@@ -334,7 +379,7 @@ async function putInPlace(
   await mkdir(dirname(target), { recursive: true });
   let aside: string | null = null;
   if (await exists(target)) {
-    aside = join(paths.downloads, `replaced-${randomUUID()}`);
+    aside = join(paths.downloads, `${ASIDE_PREFIX}${randomUUID()}`);
     await rename(target, aside);
   }
   try {
@@ -372,6 +417,72 @@ async function sameFolder(a: string, b: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Cleans up after installs the app quit or crashed in, which leave their folders in `downloads/`:
+ *
+ * 1. A folder moved aside (`replaced-*`) holds the files of an installed version while the same
+ *    version is reinstalled. When its row's install folder is missing (the app stopped between
+ *    moving the old folder aside and moving the new one in, or before moving it back), it is moved
+ *    back, so the row names the files it was installed with.
+ * 2. Every other `replaced-*` folder and every partial copy (`install-*`) is deleted. A folder that
+ *    could not be moved back is kept for the next start.
+ *
+ * Nothing else in `downloads/` is touched. It never throws: a failure is logged, and an install
+ * or listing goes ahead.
+ */
+async function recoverInterruptedInstalls(
+  paths: HarnessPaths,
+  store: InstallStore,
+  logError: (message: string, error: unknown) => void,
+): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(paths.downloads);
+  } catch {
+    return; // No downloads folder: nothing was ever installed.
+  }
+  for (const name of names) {
+    const folder = join(paths.downloads, name);
+    if (name.startsWith(ASIDE_PREFIX)) {
+      try {
+        const row = await rowOfAside(folder, store);
+        if (
+          row !== undefined &&
+          isInside(paths.harnesses, row.installPath) &&
+          !(await exists(row.installPath))
+        ) {
+          await mkdir(dirname(row.installPath), { recursive: true });
+          await rename(folder, row.installPath);
+          continue;
+        }
+      } catch (error) {
+        logError(`Could not restore the install folder moved aside to ${folder}`, error);
+        continue;
+      }
+    } else if (!name.startsWith(STAGING_PREFIX)) {
+      continue;
+    }
+    await rm(folder, { recursive: true, force: true }).catch((error: unknown) => {
+      logError(`Could not delete the interrupted install folder ${folder}`, error);
+    });
+  }
+}
+
+/** The row whose installed version a folder moved aside holds, by its Manifest's ID and version. */
+async function rowOfAside(aside: string, store: InstallStore): Promise<InstallRow | undefined> {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(await readFile(join(aside, 'manifest.json'), 'utf8'));
+  } catch {
+    return undefined;
+  }
+  if (typeof manifest !== 'object' || manifest === null) return undefined;
+  const { id, version } = manifest as { id?: unknown; version?: unknown };
+  if (typeof id !== 'string') return undefined;
+  const row = store.get(id);
+  return row !== undefined && row.version === version ? row : undefined;
 }
 
 async function exists(path: string): Promise<boolean> {

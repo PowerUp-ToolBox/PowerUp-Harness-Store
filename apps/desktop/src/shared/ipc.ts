@@ -43,6 +43,12 @@ export type IpcErrorCode =
    * themselves come from `installs.inspectFolder`, never in the error.
    */
   | 'package_invalid'
+  /**
+   * A file of a Harness folder that the User's account is not allowed to open, named in the
+   * `path` param (relative to the folder). Unlike `package_invalid` it does not go away when the
+   * folder is checked again: the User has to fix the file's permissions.
+   */
+  | 'file_unreadable'
   /** The Harness is running, so it cannot be installed over (or uninstalled) now. */
   | 'harness_running'
   /** No Harness with this ID is installed. */
@@ -187,7 +193,8 @@ export interface IpcMethods {
    * consented: validates it again, copies its files into the install layout and records it.
    * Installing the version already installed replaces it; another version replaces the installed
    * one. `package_invalid` when the folder no longer validates or its Manifest changed since
-   * `installs.inspectFolder`; `harness_running` while that Harness runs.
+   * `installs.inspectFolder`; `file_unreadable` when a file of the folder cannot be opened while
+   * copying; `harness_running` while that Harness runs.
    */
   'installs.installFromFolder': { input: string; output: InstalledVersion };
   /**

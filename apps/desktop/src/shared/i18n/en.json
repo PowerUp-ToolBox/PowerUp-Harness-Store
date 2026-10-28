@@ -255,6 +255,7 @@
   "error.sign_in_cancelled": "This sign-in was replaced by a newer one or by signing out.",
   "error.store_unreachable": "The Store did not answer. Check your connection and try again.",
   "error.package_invalid": "This folder is not a valid Harness, or it changed since it was checked. Check it again.",
+  "error.file_unreadable": "Harness Store cannot open \"{path}\" in this folder. Make sure your user account can read it, then try again.",
   "error.harness_running": "This Harness is running. Close it, then try again.",
   "error.not_installed": "This Harness is not installed.",
   "error.encryption_unavailable": "Harness Store cannot store this secret: this computer offers no secure storage for secrets. On Linux, install and unlock a keyring such as GNOME Keyring or KWallet, then restart Harness Store. Keys and sign-in sessions are never stored unencrypted.",

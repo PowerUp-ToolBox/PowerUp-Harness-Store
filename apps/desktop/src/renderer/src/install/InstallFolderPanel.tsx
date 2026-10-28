@@ -24,7 +24,9 @@ type Step =
  *    language) with Re-check; a valid one opens the consent dialog. Warnings show either way: on
  *    the page beside the problems, in the dialog for a valid folder.
  * 3. Install in the dialog runs `installs.installFromFolder`. When the folder changed in between
- *    (`package_invalid`) it is inspected again, which shows its problems or a fresh dialog.
+ *    (`package_invalid`) it is inspected again, which shows its problems, or a fresh dialog that
+ *    says why it is back. Any other error (a file that cannot be opened, the Harness running)
+ *    stays in the dialog: inspecting again would not change it.
  * 4. An inline confirmation with a link to the Library.
  */
 export function InstallFolderPanel() {
@@ -35,13 +37,14 @@ export function InstallFolderPanel() {
   const [installing, setInstalling] = useState(false);
   const [installError, setInstallError] = useState<IpcError | null>(null);
 
-  const inspect = async (path: string) => {
+  /** `reason`: the install error that made this inspection, shown in the fresh dialog. */
+  const inspect = async (path: string, reason: IpcError | null = null) => {
     setError(null);
     setStep({ kind: 'checking', path });
     const result = await window.api.installs.inspectFolder(path);
     if (!mounted.current) return;
     if (result.ok) {
-      setInstallError(null);
+      setInstallError(result.data.valid ? reason : null);
       setStep({ kind: 'inspected', path, inspection: result.data });
     } else {
       setError(result.error);
@@ -66,7 +69,7 @@ export function InstallFolderPanel() {
     if (result.ok) {
       setStep({ kind: 'installed', name: summary.name, version: result.data.version });
     } else if (result.error.code === 'package_invalid') {
-      await inspect(path);
+      await inspect(path, result.error);
     } else {
       setInstallError(result.error);
     }
