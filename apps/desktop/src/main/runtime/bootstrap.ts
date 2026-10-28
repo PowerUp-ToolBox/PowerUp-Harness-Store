@@ -170,8 +170,8 @@ export interface Runtime {
   };
   /**
    * Stops every running Harness (the shutdown sequence, at most 10 s in all), the Publish flow's
-   * folder watcher, the Store connectivity checks and the Model Gateway (it stops listening and hands over its last Usage
-   * Records), then closes the database. Idempotent: later calls return the first call's promise.
+   * folder watcher and uploads, the Store connectivity checks and the Model Gateway (it stops
+   * listening and hands over its last Usage Records), then closes the database. Idempotent: later calls return the first call's promise.
    */
   shutdown(): Promise<void>;
 }
@@ -360,6 +360,8 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     anonKey: options.storeAnonKey ?? storeAnonKey(),
     auth,
     onFolderChanged: (path) => options.emit?.('publish.folderChanged', { path }),
+    onProgress: (jobId, progress) => options.emit?.(`progress:${jobId}`, progress),
+    onStoreUnreachable: () => void connectivity.check(),
   });
 
   return {

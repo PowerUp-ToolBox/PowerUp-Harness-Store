@@ -398,6 +398,75 @@ code {
   list-style: none;
 }
 
+/* The upload: its share sent, then an indeterminate bar while the Store processes it. */
+.publish-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 520px;
+}
+
+.publish-upload-label {
+  font-weight: 600;
+}
+
+.progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--color-info-bg);
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 0.2s ease-out;
+}
+
+.progress[data-indeterminate='true'] .progress-fill {
+  animation: progress-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes progress-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
+
+  .progress[data-indeterminate='true'] .progress-fill {
+    animation: none;
+  }
+}
+
+.publish-failure-text {
+  margin: 0;
+}
+
+.publish-success {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 620px;
+  padding: 20px;
+  border-radius: 14px;
+  background: var(--color-success-bg);
+  color: var(--color-text);
+}
+
+.publish-success p {
+  margin: 0;
+}
+
+.publish-success-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
 /* README and changelogs, as plain text until P0-09 renders them as Markdown. */
 .listing-text {
   margin: 0;

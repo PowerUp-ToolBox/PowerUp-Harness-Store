@@ -6,10 +6,20 @@ import {
   ArchiveSource,
   PackageReadError,
   validatePackage,
+  type Manifest,
   type Problem,
 } from '@harness-store/manifest';
 import semver from 'semver';
-import type { FolderValidation, IpcResult, VersionCheck } from '../../shared/ipc.js';
+import type {
+  FolderValidation,
+  IpcError,
+  IpcErrorCode,
+  IpcResult,
+  PublishedVersion,
+  PublishRequest,
+  UploadProgress,
+  VersionCheck,
+} from '../../shared/ipc.js';
 import { fail, ok } from './ipc-result.js';
 import {
   buildPackage,
@@ -20,6 +30,7 @@ import {
   type Listing,
 } from './package-archive.js';
 import { HARNESS_IGNORE_FILE, type ExclusionRules } from './package-exclusions.js';
+import { uploadPackage, type UploadOutcome } from './package-upload.js';
 import type { StoreAuth, StoreFetch } from './store-auth.js';
 
 /** The watcher reports a change once the folder has been quiet this long. */
@@ -45,6 +56,12 @@ export interface PublishServiceOptions {
   readonly auth: Pick<StoreAuth, 'login' | 'accessToken' | 'sessionRejected'>;
   /** Told when the watched folder changed (`publish.folderChanged`). */
   readonly onFolderChanged?: (path: string) => void;
+  /** Told how far an upload is (`progress:<jobId>`). */
+  readonly onProgress?: (jobId: string, progress: UploadProgress) => void;
+  /** Told when an upload got no answer from the Store, so connectivity is checked again. */
+  readonly onStoreUnreachable?: () => void;
+  /** Sends a Harness Package to the `publish` function; default {@link uploadPackage}. */
+  readonly upload?: typeof uploadPackage;
   /** Default: {@link FOLDER_CHANGE_DEBOUNCE_MS}. */
   readonly debounceMs?: number;
   /** The archive size limit; default `PACKAGE_LIMITS.maxArchiveBytes`. Tests lower it. */
@@ -68,21 +85,26 @@ export interface PublishService {
   validateFolder(path: string): Promise<IpcResult<FolderValidation>>;
   /** `publish.stopWatching`. */
   stopWatching(): void;
-  /** The zip of the latest validation while it is still the latest, else null (P0-08.2). */
+  /** The zip of the latest validation while it is still the latest, else null: what is uploaded. */
   archive(archiveId: string): Uint8Array | null;
+  /** `publish.publish`. */
+  publish(request: PublishRequest): Promise<IpcResult<PublishedVersion>>;
+  /** `publish.cancel`. */
+  cancel(jobId: string): void;
   /** Stops watching, on shutdown. */
   close(): void;
 }
 
 /**
- * The Publish flow's folder validation (P0-08.1), Electron-free. Every run builds the Harness
- * Package the upload would send (./package-archive.ts) and validates that zip, so what the
- * Publisher sees is what the Store will check: `validatePackage` from `@harness-store/manifest`
- * over `ArchiveSource`, with the signed-in Publisher's login (`publisher_mismatch`) and, when the
- * Harness ID's publisher segment is that login, every version of the Harness the Store has, in any
- * status (`version_not_greater`), read with the Publisher's session (api.md, "Own versions"). A
- * read that fails leaves `publishedVersions` out (`versionCheck: 'failed'`): the Store checks
- * again on upload. A 401 ends the session (`session_expired`).
+ * The Publish flow's folder validation (P0-08.1) and upload (P0-08.2), Electron-free. Every run
+ * builds the Harness Package the upload would send (./package-archive.ts) and validates that zip,
+ * so what the Publisher sees is what the Store will check: `validatePackage` from
+ * `@harness-store/manifest` over `ArchiveSource`, with the signed-in Publisher's login
+ * (`publisher_mismatch`) and, when the Harness ID's publisher segment is that login, every version
+ * of the Harness the Store has, in any status (`version_not_greater`), read with the Publisher's
+ * session (api.md, "Own versions"). A read that fails leaves `publishedVersions` out
+ * (`versionCheck: 'failed'`): the Store checks again on upload. A 401 ends the session
+ * (`session_expired`).
  *
  * Runs are numbered: the newest wins, and an older one still going is stopped between folders,
  * files and a file's chunks, and before it opens its zip or asks the Store. Only the newest run's
@@ -98,14 +120,22 @@ export interface PublishService {
  * watcher that could not start, that failed, or whose folder itself was deleted or moved is
  * dropped, after one last report: the next validation of the folder (that report's, a Re-check, a
  * new pick) watches it afresh.
+ *
+ * The upload (P0-08.2) sends the latest run's zip, unchanged, to the Store's `publish` function
+ * (./package-upload.ts) with the Publisher's session, reporting the bytes sent after each chunk;
+ * it can be cancelled until all of them are sent. A 401 ends the session (`session_expired`), and
+ * no answer at all has connectivity checked again.
  */
 export function createPublishService(options: PublishServiceOptions): PublishService {
   const debounceMs = options.debounceMs ?? FOLDER_CHANGE_DEBOUNCE_MS;
   const watchFolder = options.watch ?? watch;
   const recursive = options.recursiveWatch ?? process.platform !== 'linux';
+  const upload = options.upload ?? uploadPackage;
   let runs = 0;
-  let latest: { readonly id: string; readonly bytes: Uint8Array } | null = null;
+  let latest: LatestArchive | null = null;
   let watched: Watched | null = null;
+  /** The uploads in flight, by job. */
+  const jobs = new Map<string, AbortController>();
 
   const stopWatching = () => {
     if (watched === null) return;
@@ -289,7 +319,12 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
       if (!isCurrent()) return fail('package_invalid');
 
       const archiveId = randomUUID();
-      latest = { id: archiveId, bytes: built.bytes };
+      latest = {
+        id: archiveId,
+        bytes: built.bytes,
+        // Only a Harness Package without problems is uploaded.
+        fileName: result.ok ? packageFileName(result.manifest) : null,
+      };
       const highest = versions === undefined ? null : (semver.rsort([...versions])[0] ?? null);
       return ok({
         ...empty,
@@ -311,12 +346,145 @@ export function createPublishService(options: PublishServiceOptions): PublishSer
       return latest?.id === archiveId ? latest.bytes : null;
     },
 
+    async publish({ archiveId, jobId }) {
+      const archive = latest;
+      if (archive?.id !== archiveId || archive.fileName === null || jobs.has(jobId)) {
+        return fail('package_invalid');
+      }
+      const controller = new AbortController();
+      jobs.set(jobId, controller);
+      try {
+        let token: string | null;
+        try {
+          token = await options.auth.accessToken();
+        } catch {
+          // The session's refresh got no answer: the session is kept.
+          options.onStoreUnreachable?.();
+          return fail('store_unreachable');
+        }
+        if (token === null) return fail('unauthenticated');
+        if (controller.signal.aborted) return fail('upload_cancelled');
+        const base = options.storeBaseUrl().replace(/\/+$/, '');
+        const outcome = await upload({
+          url: `${base}/functions/v1/publish`,
+          headers: { apikey: options.anonKey, authorization: `Bearer ${token}` },
+          fileName: archive.fileName,
+          bytes: archive.bytes,
+          signal: controller.signal,
+          onProgress: (sent, total) => options.onProgress?.(jobId, { sent, total }),
+        });
+        if (outcome.kind === 'cancelled') return fail('upload_cancelled');
+        if (outcome.kind === 'unreachable') {
+          options.onStoreUnreachable?.();
+          return fail('store_unreachable');
+        }
+        if (outcome.status === 401) await options.auth.sessionRejected(token);
+        return publishAnswer(outcome);
+      } finally {
+        jobs.delete(jobId);
+      }
+    },
+
+    cancel(jobId) {
+      jobs.get(jobId)?.abort();
+    },
+
     close() {
       runs += 1;
       latest = null;
+      for (const controller of jobs.values()) controller.abort();
       stopWatching();
     },
   };
+}
+
+/** The latest validation's zip, kept for the upload. */
+interface LatestArchive {
+  readonly id: string;
+  readonly bytes: Uint8Array;
+  /** The upload's file name, `<slug>-<version>.zip`; null when the zip has problems. */
+  readonly fileName: string | null;
+}
+
+/** The Store's refusals of a publish, by `error.code`, each kept as it is. */
+const PUBLISH_REFUSALS: ReadonlySet<string> = new Set<IpcErrorCode>([
+  'publisher_mismatch',
+  'version_not_greater',
+  'invalid_manifest',
+  'package_too_large',
+  'rate_limited',
+  'harness_taken_down',
+  'forbidden',
+  'not_found',
+]);
+
+/** Refusals without a known code, by HTTP status. */
+const REFUSAL_BY_STATUS: Readonly<Record<number, IpcErrorCode>> = {
+  401: 'unauthenticated',
+  403: 'forbidden',
+  404: 'not_found',
+  413: 'package_too_large',
+  429: 'rate_limited',
+};
+
+/**
+ * The `publish` function's answer (docs/tech/api.md): `201 { harness_id, version, url }`, or
+ * `{ error: { code, message, problems? } }`. A refusal keeps the Store's code when the app knows
+ * it, else goes by status; its English message and its problems (ordered by path) come along. A 5xx is
+ * `store_unreachable`; anything else unexpected `internal_error`.
+ */
+function publishAnswer(
+  outcome: Extract<UploadOutcome, { kind: 'answered' }>,
+): IpcResult<PublishedVersion> {
+  const { status, body } = outcome;
+  if (status === 201 && isRecord(body)) {
+    const { harness_id: harnessId, version, url } = body;
+    if (typeof harnessId === 'string' && typeof version === 'string') {
+      // The listing's in-app route; built from the ID when the Store sent anything else.
+      const route =
+        typeof url === 'string' && url.startsWith('/store/h/') ? url : `/store/h/${harnessId}`;
+      return ok({ harnessId, version, url: route });
+    }
+  }
+  if (status >= 500) return fail('store_unreachable');
+  const error = isRecord(body) && isRecord(body.error) ? body.error : {};
+  const code =
+    status === 401
+      ? 'unauthenticated'
+      : typeof error.code === 'string' && PUBLISH_REFUSALS.has(error.code)
+        ? (error.code as IpcErrorCode)
+        : (REFUSAL_BY_STATUS[status] ?? 'internal_error');
+  const failed = fail(code);
+  const refusal: IpcError = {
+    ...failed.error,
+    ...(typeof error.message === 'string' && error.message !== ''
+      ? { message: error.message }
+      : {}),
+    ...(Array.isArray(error.problems)
+      ? { problems: sortByPath(error.problems.filter(isProblem)) }
+      : {}),
+  };
+  return { ok: false, error: refusal };
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** A Problem as validatePackage returns it, params of strings and numbers only. */
+function isProblem(value: unknown): value is Problem {
+  if (!isRecord(value)) return false;
+  const { path, code, message, messageKey, params } = value;
+  return (
+    typeof path === 'string' &&
+    typeof code === 'string' &&
+    typeof message === 'string' &&
+    typeof messageKey === 'string' &&
+    (params === undefined ||
+      (isRecord(params) &&
+        Object.values(params).every(
+          (param) => typeof param === 'string' || typeof param === 'number',
+        )))
+  );
 }
 
 /** The folder being watched, with the exclusion rules its latest build read. */
@@ -326,6 +494,11 @@ interface Watched {
   /** One recursive watch, or one per folder listed; none once dropped. */
   watchers: FSWatcher[];
   timer: ReturnType<typeof setTimeout> | null;
+}
+
+/** The upload's file name, `<slug>-<version>.zip`. */
+function packageFileName(manifest: Manifest): string {
+  return `${manifest.id.slice(manifest.id.indexOf('/') + 1)}-${manifest.version}.zip`;
 }
 
 /** The publisher segment of a Harness ID, lower-cased. */

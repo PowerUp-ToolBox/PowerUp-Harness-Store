@@ -8,7 +8,14 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import type { AuthState, FolderValidation, IpcError } from '../../../shared/ipc.js';
+import type {
+  AuthState,
+  FolderValidation,
+  IpcError,
+  IpcResult,
+  PublishedVersion,
+  UploadProgress,
+} from '../../../shared/ipc.js';
 
 /** Where the validation of the chosen folder is. */
 export type FolderCheck =
@@ -17,7 +24,25 @@ export type FolderCheck =
   | { readonly kind: 'done'; readonly result: FolderValidation }
   | { readonly kind: 'error'; readonly error: IpcError };
 
-/** The "New version" flow: the chosen folder, its validation, and whether it is in review. */
+/** Where the upload of the reviewed Harness Package is (flow F5, steps 6 and 7). */
+export type UploadState =
+  /**
+   * `sent` of `total` bytes of the request sent; `total` is 0 until the first report. Once all
+   * are sent the Store is processing it, and it can no longer be cancelled.
+   */
+  | {
+      readonly kind: 'uploading';
+      readonly jobId: string;
+      readonly sent: number;
+      readonly total: number;
+    }
+  /** Cancelled before it was all sent: the review again, which says so. */
+  | { readonly kind: 'cancelled' }
+  /** The Store refused it or did not answer: Retry sends the same Harness Package again. */
+  | { readonly kind: 'failed'; readonly error: IpcError }
+  | { readonly kind: 'published'; readonly version: PublishedVersion };
+
+/** The "New version" flow: the chosen folder, its validation, the review and the upload. */
 export interface PublishFlow {
   /** The folder chosen to publish from, absolute; null before one is chosen. */
   readonly folder: string | null;
@@ -30,6 +55,8 @@ export interface PublishFlow {
   readonly reviewing: boolean;
   /** The last drop was not a folder; cleared by the next action. */
   readonly dropRefused: boolean;
+  /** Null until Publish is pressed, and again once the folder is validated again. */
+  readonly upload: UploadState | null;
 }
 
 export interface PublishContextValue {
@@ -58,11 +85,26 @@ export interface PublishContextValue {
   readonly review: () => void;
   /** Back from the review step. */
   readonly back: () => void;
+  /**
+   * Publish, and Retry after a failure: uploads the Harness Package the folder's validation built,
+   * once it has no problem.
+   */
+  readonly publish: () => Promise<void>;
+  /** Cancels the upload while it is still being sent. */
+  readonly cancelUpload: () => Promise<void>;
+  /** "Publish another", after a success: no folder chosen, nothing watched. */
+  readonly publishAnother: () => void;
 }
 
 const PublishContext = createContext<PublishContextValue | null>(null);
 
-const NO_FOLDER: PublishFlow = { folder: null, check: null, reviewing: false, dropRefused: false };
+const NO_FOLDER: PublishFlow = {
+  folder: null,
+  check: null,
+  reviewing: false,
+  dropRefused: false,
+  upload: null,
+};
 
 /** The chosen folder, validated again, is no longer a folder (`invalid_input`). */
 const FOLDER_GONE: IpcError = {
@@ -80,6 +122,13 @@ const FOLDER_GONE: IpcError = {
  * Re-check, when the Runtime reports it changed (`publish.folderChanged`), and after a sign-in,
  * since the checks depend on who is signed in. Runs are numbered and only the newest one's answer
  * is kept. A sign-out, an expired session included, keeps the folder.
+ *
+ * Publish uploads the Harness Package the validation built (`publish.publish`), following its
+ * `progress:<jobId>` events, and follows the flow's states: valid → uploading → published or
+ * failed; failed → uploading (Retry, the same archive) or valid again (any new validation: an
+ * edit, Re-check, a sign-in after the session expired). Nothing validates the folder while it
+ * uploads: a change on disk meanwhile is validated once the upload failed or was cancelled. After
+ * a success the folder is no longer watched.
  */
 export function PublishProvider({ children }: { readonly children: ReactNode }) {
   const [auth, setAuth] = useState<AuthState | null>(null);
@@ -90,6 +139,8 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
   const flowRef = useRef(flow);
   const runs = useRef(0);
   const mounted = useRef(true);
+  /** The folder changed on disk while it uploaded. */
+  const changedWhileUploading = useRef(false);
 
   const setFlow = useCallback((next: PublishFlow | ((current: PublishFlow) => PublishFlow)) => {
     flowRef.current = typeof next === 'function' ? next(flowRef.current) : next;
@@ -117,6 +168,7 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
           check: { kind: 'checking', previous },
           reviewing: same && before.reviewing,
           dropRefused: false,
+          upload: null,
         });
         const result = await window.api.publish.validateFolder(target);
         if (!mounted.current || at !== runs.current) return false;
@@ -161,7 +213,9 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
       if (reason === 'signed_in') setSessionExpired(false);
     });
     const offFolder = window.api.on('publish.folderChanged', ({ path }) => {
-      if (flowRef.current.folder === path) void validate(path);
+      if (flowRef.current.folder !== path) return;
+      if (isUploading(flowRef.current)) changedWhileUploading.current = true;
+      else void validate(path);
     });
     return () => {
       mounted.current = false;
@@ -178,7 +232,7 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
     const changed = login !== null && login !== lastLogin.current;
     lastLogin.current = login;
     const { folder } = flowRef.current;
-    if (changed && folder !== null) void validate(folder);
+    if (changed && folder !== null && !isUploading(flowRef.current)) void validate(folder);
   }, [login, validate]);
 
   const signIn = useCallback(async () => {
@@ -212,13 +266,16 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
   }, []);
 
   const chooseFolder = useCallback(async () => {
+    if (isUploading(flowRef.current)) return;
     setFlow((current) => ({ ...current, dropRefused: false }));
     const result = await window.api.installs.chooseFolder();
-    if (mounted.current && result.ok && result.data !== null) await validate(result.data);
+    if (!mounted.current || !result.ok || result.data === null) return;
+    if (!isUploading(flowRef.current)) await validate(result.data);
   }, [setFlow, validate]);
 
   const dropFolder = useCallback(
     async (path: string) => {
+      if (isUploading(flowRef.current)) return;
       if (path === '') setFlow((current) => ({ ...current, dropRefused: true }));
       else await validate(path);
     },
@@ -227,7 +284,7 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
 
   const recheck = useCallback(async () => {
     const { folder } = flowRef.current;
-    if (folder !== null) await validate(folder);
+    if (folder !== null && !isUploading(flowRef.current)) await validate(folder);
   }, [validate]);
 
   const review = useCallback(() => {
@@ -239,7 +296,72 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
   }, [setFlow]);
 
   const back = useCallback(() => {
-    setFlow((current) => ({ ...current, reviewing: false }));
+    setFlow((current) =>
+      isUploading(current) ? current : { ...current, reviewing: false, upload: null },
+    );
+  }, [setFlow]);
+
+  const publish = useCallback(async () => {
+    const { check, upload, reviewing } = flowRef.current;
+    if (!reviewing || upload?.kind === 'uploading' || upload?.kind === 'published') return;
+    if (check?.kind !== 'done' || check.result.problems.length > 0) return;
+    const { archiveId } = check.result;
+    if (archiveId === null) return;
+
+    const jobId = crypto.randomUUID();
+    setFlow((current) => ({ ...current, upload: { kind: 'uploading', jobId, sent: 0, total: 0 } }));
+    // Subscribed before the call, so no report is missed.
+    const off = window.api.on(`progress:${jobId}`, (payload) => {
+      if (!isUploadProgress(payload)) return;
+      setFlow((current) =>
+        current.upload?.kind === 'uploading' && current.upload.jobId === jobId
+          ? { ...current, upload: { ...current.upload, sent: payload.sent, total: payload.total } }
+          : current,
+      );
+    });
+    let result: IpcResult<PublishedVersion>;
+    try {
+      result = await window.api.publish.publish({ archiveId, jobId });
+    } finally {
+      off();
+    }
+    if (!mounted.current) return;
+    const changed = changedWhileUploading.current;
+    changedWhileUploading.current = false;
+    const { folder } = flowRef.current;
+
+    if (result.ok) {
+      const version = result.data;
+      setFlow((current) => ({ ...current, upload: { kind: 'published', version } }));
+      void window.api.publish.stopWatching();
+      return;
+    }
+    const { error } = result;
+    if (error.code === 'package_invalid') {
+      // The archive is not the latest validation's any more: validate again, back to the review.
+      if (folder !== null) await validate(folder);
+      return;
+    }
+    setFlow((current) => ({
+      ...current,
+      upload: error.code === 'upload_cancelled' ? { kind: 'cancelled' } : { kind: 'failed', error },
+    }));
+    // The folder changed meanwhile: the edit path, validated again.
+    if (changed && folder !== null) await validate(folder);
+  }, [setFlow, validate]);
+
+  const cancelUpload = useCallback(async () => {
+    const { upload } = flowRef.current;
+    if (upload?.kind === 'uploading' && !allSent(upload)) {
+      await window.api.publish.cancel(upload.jobId);
+    }
+  }, []);
+
+  const publishAnother = useCallback(() => {
+    if (isUploading(flowRef.current)) return;
+    runs.current += 1;
+    setFlow(NO_FOLDER);
+    void window.api.publish.stopWatching();
   }, [setFlow]);
 
   const value = useMemo<PublishContextValue>(
@@ -258,6 +380,9 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
       recheck,
       review,
       back,
+      publish,
+      cancelUpload,
+      publishAnother,
     }),
     [
       auth,
@@ -274,9 +399,27 @@ export function PublishProvider({ children }: { readonly children: ReactNode }) 
       recheck,
       review,
       back,
+      publish,
+      cancelUpload,
+      publishAnother,
     ],
   );
   return <PublishContext.Provider value={value}>{children}</PublishContext.Provider>;
+}
+
+/** Whether all of an upload's bytes are sent: the Store is processing it. */
+export function allSent(upload: Extract<UploadState, { kind: 'uploading' }>): boolean {
+  return upload.total > 0 && upload.sent >= upload.total;
+}
+
+function isUploading(flow: PublishFlow): boolean {
+  return flow.upload?.kind === 'uploading';
+}
+
+function isUploadProgress(payload: unknown): payload is UploadProgress {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const { sent, total } = payload as Record<string, unknown>;
+  return typeof sent === 'number' && typeof total === 'number';
 }
 
 export function usePublish(): PublishContextValue {

@@ -1,4 +1,5 @@
 import type { Manifest } from '@harness-store/manifest';
+import type { ReactNode } from 'react';
 import type { FolderValidation } from '../../../shared/ipc.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { HarnessCard } from '../listing/HarnessCard.js';
@@ -19,17 +20,18 @@ export const LARGE_PACKAGE_BYTES = 100 * 1024 * 1024;
  * read-only (nothing is edited in P0), the changelog, what the Harness Package leaves out and its
  * size, then the listing as the Store will show it: its card and its detail page, built from the
  * Manifest with the signed-in Publisher and no downloads yet. Screenshots are not previewed.
+ * `actions` (Publish and Back, or the upload) come last.
  */
 export function PublishReview({
   validation,
   manifest,
   publisher,
-  onBack,
+  actions,
 }: {
   readonly validation: FolderValidation;
   readonly manifest: Manifest;
   readonly publisher: PublisherIdentity;
-  readonly onBack: () => void;
+  readonly actions: ReactNode;
 }) {
   const { t, formatBytes } = useI18n();
   const facts: readonly (readonly [string, string])[] = [
@@ -111,11 +113,7 @@ export function PublishReview({
         />
       </section>
 
-      <div className="publish-actions">
-        <button type="button" className="button-secondary" onClick={onBack}>
-          {t('publish.back')}
-        </button>
-      </div>
+      {actions}
     </div>
   );
 }

@@ -6,8 +6,8 @@ import { usePublish } from '../publish/PublishProvider.js';
 
 /**
  * The Publish screen (docs/ux/screens.md, Publish; flow F5). Signed out: the GitHub sign-in card.
- * Signed in: the Publisher's account and "New version", which validates a folder and previews its
- * listing (P0-08.1); the upload (P0-08.2) and My Harnesses (P0-08.3) come next. The state lives
+ * Signed in: the Publisher's account and "New version", which validates a folder, previews its
+ * listing (P0-08.1) and publishes it (P0-08.2); My Harnesses (P0-08.3) comes next. The state lives
  * in the PublishProvider above the screens, so it survives leaving the screen. "Install this
  * folder locally" (P0-05.1) is its own panel with its own folder picker, and works signed out and
  * offline too.

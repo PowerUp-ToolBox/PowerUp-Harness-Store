@@ -1,11 +1,12 @@
-import type { Problem } from '@harness-store/manifest';
 import type { DragEvent } from 'react';
 import type { FolderValidation } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { FolderUploadIcon } from '../shell/icons.js';
 import { usePublish } from './PublishProvider.js';
+import { ProblemList } from './ProblemList.js';
 import { PublishReview, type PublisherIdentity } from './PublishReview.js';
+import { PublishSuccess, UploadActions } from './PublishUpload.js';
 import { VersionStatus } from './VersionStatus.js';
 
 /**
@@ -14,13 +15,15 @@ import { VersionStatus } from './VersionStatus.js';
  * the upload would send and validates that). Problems are listed by Manifest path, each with its
  * message in the UI language and its stable code; warnings separately, and they never block.
  * Continue is enabled exactly when there is no problem, and leads to the review: the facts from
- * the Manifest and the listing preview. The folder is validated again when it changes on disk, and
- * on Re-check.
+ * the Manifest and the listing preview, then Publish, the upload and its outcome (./PublishUpload).
+ * The folder is validated again when it changes on disk, and on Re-check; while it uploads the
+ * folder cannot be changed or checked again.
  */
 export function NewVersion({ publisher }: { readonly publisher: PublisherIdentity }) {
   const { t } = useI18n();
-  const { flow, chooseFolder, dropFolder, recheck, review, back } = usePublish();
-  const { folder, check, reviewing, dropRefused } = flow;
+  const { flow, chooseFolder, dropFolder, recheck, review } = usePublish();
+  const { folder, check, reviewing, dropRefused, upload } = flow;
+  const uploading = upload?.kind === 'uploading';
 
   const onDragOver = (event: DragEvent) => {
     event.preventDefault();
@@ -57,12 +60,17 @@ export function NewVersion({ publisher }: { readonly publisher: PublisherIdentit
           <button
             type="button"
             className="button-secondary"
-            disabled={checking}
+            disabled={checking || uploading}
             onClick={() => void recheck()}
           >
             {t('publish.recheck')}
           </button>
-          <button type="button" className="button-secondary" onClick={() => void chooseFolder()}>
+          <button
+            type="button"
+            className="button-secondary"
+            disabled={uploading}
+            onClick={() => void chooseFolder()}
+          >
             {t('publish.chooseAnother')}
           </button>
         </div>
@@ -79,12 +87,14 @@ export function NewVersion({ publisher }: { readonly publisher: PublisherIdentit
         </p>
       ) : null}
       {check?.kind === 'error' ? <ErrorMessage error={check.error} /> : null}
-      {result === null ? null : reviewing && result.manifest !== null ? (
+      {upload?.kind === 'published' ? (
+        <PublishSuccess version={upload.version} />
+      ) : result === null ? null : reviewing && result.manifest !== null ? (
         <PublishReview
           validation={result}
           manifest={result.manifest}
           publisher={publisher}
-          onBack={back}
+          actions={<UploadActions checking={checking} />}
         />
       ) : (
         <ValidationResult validation={result} checking={checking} onContinue={review} />
@@ -135,22 +145,5 @@ function ValidationResult({
         </button>
       </div>
     </div>
-  );
-}
-
-/** Validation findings in path order: the path, the message in the UI language, the code. */
-function ProblemList({ problems }: { readonly problems: readonly Problem[] }) {
-  const { problemText } = useI18n();
-  return (
-    <ul className="problem-list">
-      {problems.map((problem, index) => (
-        // Paths repeat (one file can have several problems) and the list never reorders.
-        <li key={index}>
-          <code>{problem.path}</code>
-          <span>{problemText(problem)}</span>
-          <code className="problem-code">{problem.code}</code>
-        </li>
-      ))}
-    </ul>
   );
 }

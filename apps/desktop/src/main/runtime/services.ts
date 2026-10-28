@@ -44,6 +44,9 @@ export interface Services {
     Supervisor,
     'start' | 'chooseWorkspace' | 'lastWorkspace' | 'status' | 'openLogs' | 'openDataFolder'
   >;
-  /** The Publish flow: building and validating a folder's Harness Package, and watching it. */
-  readonly publish: Pick<PublishService, 'validateFolder' | 'stopWatching'>;
+  /**
+   * The Publish flow: building and validating a folder's Harness Package, watching it, and
+   * uploading it.
+   */
+  readonly publish: Pick<PublishService, 'validateFolder' | 'stopWatching' | 'publish' | 'cancel'>;
 }

@@ -23,6 +23,16 @@ const IPC_OWN_CODES = [
   'harness_installing',
   'not_installed',
   'open_failed',
+  'unauthenticated',
+  'publisher_mismatch',
+  'version_not_greater',
+  'invalid_manifest',
+  'package_too_large',
+  'rate_limited',
+  'harness_taken_down',
+  'forbidden',
+  'not_found',
+  'upload_cancelled',
 ] as const;
 
 describe('catalog parity (CI)', () => {

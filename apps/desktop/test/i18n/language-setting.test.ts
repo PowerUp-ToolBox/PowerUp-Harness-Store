@@ -71,6 +71,8 @@ function launch(osLocale: string) {
     publish: {
       validateFolder: () => Promise.resolve(fail('not_implemented')),
       stopWatching: () => undefined,
+      publish: () => Promise.resolve(fail('not_implemented')),
+      cancel: () => undefined,
     },
   };
   const dispatch = createDispatcher({

@@ -57,7 +57,12 @@ describe('buildApi (window.api)', () => {
       'openDataFolder',
     ]);
     expect(Object.keys(api.providers)).toEqual(['list']);
-    expect(Object.keys(api.publish)).toEqual(['validateFolder', 'stopWatching']);
+    expect(Object.keys(api.publish)).toEqual([
+      'validateFolder',
+      'stopWatching',
+      'publish',
+      'cancel',
+    ]);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
     expect(Object.isFrozen(api)).toBe(true);
     expect(Object.isFrozen(api.app)).toBe(true);

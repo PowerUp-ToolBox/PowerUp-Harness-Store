@@ -12,6 +12,7 @@ import { IPC_METHODS } from '../src/shared/ipc.js';
 const MAIN_WINDOW = { id: 'main window webContents' };
 const quit = vi.fn();
 const stopWatching = vi.fn();
+const cancel = vi.fn();
 const fakeServices: Services = {
   app: {
     version: '1.2.3',
@@ -82,6 +83,11 @@ const fakeServices: Services = {
   publish: {
     validateFolder: (path) => Promise.resolve(fail('file_unreadable', { path })),
     stopWatching,
+    publish: ({ archiveId, jobId }) =>
+      Promise.resolve(
+        ok({ harnessId: 'octo-cat/hello', version: `${archiveId}-${jobId}`, url: '/store/h/x' }),
+      ),
+    cancel,
   },
 };
 const en = translatorFor('en');
@@ -273,6 +279,15 @@ describe('IPC handlers against a fake service container', () => {
     ['publish.validateFolder', 'relative/folder'],
     ['publish.validateFolder', { path: '/folder' }],
     ['publish.stopWatching', '/folder'],
+    ['publish.publish', undefined],
+    ['publish.publish', 'archive-1'],
+    ['publish.publish', { archiveId: 'archive-1' }],
+    ['publish.publish', { archiveId: 'archive-1', jobId: '' }],
+    ['publish.publish', { archiveId: 'archive/1', jobId: 'job-1' }],
+    ['publish.publish', { archiveId: 'archive-1', jobId: 'job-1', path: '/folder' }],
+    ['publish.cancel', undefined],
+    ['publish.cancel', { jobId: 'job-1' }],
+    ['publish.cancel', 'job 1'],
   ])('%s rejects %j as invalid_input', async (method, input) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
@@ -294,6 +309,23 @@ describe('IPC handlers against a fake service container', () => {
       data: null,
     });
     expect(stopWatching).toHaveBeenCalledOnce();
+  });
+
+  it('publish.publish passes the archive and job on; publish.cancel cancels the job', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'publish.publish',
+        input: { archiveId: 'archive-1', jobId: 'job-1' },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { harnessId: 'octo-cat/hello', version: 'archive-1-job-1', url: '/store/h/x' },
+    });
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'publish.cancel', input: 'job-1' }),
+    ).resolves.toEqual({ ok: true, data: null });
+    expect(cancel).toHaveBeenCalledExactlyOnceWith('job-1');
   });
 
   it('launch.start starts the Harness named and answers the launch', async () => {

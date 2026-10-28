@@ -32,6 +32,8 @@ import type {
   ModelOverrideChange,
   ModelOverrideClear,
   ProviderPreset,
+  PublishedVersion,
+  PublishRequest,
   ResolvedSlot,
   Settings,
   SettingsPatch,
@@ -169,8 +171,9 @@ export interface FakeApiOptions {
  * in as `octo-cat` and `auth.signOut` signs out; nothing is installed, the folder picker is
  * cancelled, and inspecting or installing a folder answers `not_implemented`; nothing was
  * launched, launching answers `not_implemented`, no Harness has a last Workspace and the
- * Workspace picker is cancelled; validating a folder to publish answers `not_implemented`, and a
- * dropped file's path is `/dropped/<name>`; a test changes
+ * Workspace picker is cancelled; validating a folder to publish and publishing answer
+ * `not_implemented`, cancelling an upload does nothing, and a dropped file's path is
+ * `/dropped/<name>`; a test changes
  * `app.status`, `diagnostics.get`, the `connectivity`, `connections`, `bindings` or `installs`
  * methods before rendering to say otherwise, and pushes events with `emit`.
  */
@@ -341,6 +344,12 @@ export function installFakeApi(
         notImplemented('publish.validateFolder', path),
       ),
       stopWatching: vi.fn((): Promise<IpcResult<null>> =>
+        Promise.resolve({ ok: true, data: null }),
+      ),
+      publish: vi.fn((request: PublishRequest): Promise<IpcResult<PublishedVersion>> =>
+        notImplemented('publish.publish', request.archiveId),
+      ),
+      cancel: vi.fn<(jobId: string) => Promise<IpcResult<null>>>(() =>
         Promise.resolve({ ok: true, data: null }),
       ),
     },

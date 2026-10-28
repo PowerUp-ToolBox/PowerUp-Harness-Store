@@ -5,6 +5,7 @@ import type {
   IpcOutput,
   IpcResult,
   LaunchRequest,
+  PublishRequest,
 } from '../../shared/ipc.js';
 import {
   isHarnessIdInput,
@@ -212,7 +213,30 @@ export function createHandlers(services: Services): IpcHandlers {
       services.publish.stopWatching();
       return ok(null);
     },
+    'publish.publish': (input) => {
+      const request = parsePublishRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'publish.publish' });
+      return services.publish.publish(request);
+    },
+    'publish.cancel': (input) => {
+      if (!isJobId(input)) return fail('invalid_input', { method: 'publish.cancel' });
+      services.publish.cancel(input);
+      return ok(null);
+    },
   };
+}
+
+/** `{ archiveId, jobId }`, both IDs, nothing else. */
+function parsePublishRequest(input: unknown): PublishRequest | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { archiveId, jobId, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0 || !isJobId(archiveId) || !isJobId(jobId)) return null;
+  return { archiveId, jobId };
+}
+
+/** An archive or job ID: a UUID, or at least something as plain. */
+function isJobId(input: unknown): input is string {
+  return typeof input === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(input);
 }
 
 /** `{ harnessId, workspace? }`, the Workspace an absolute path or null, nothing else. */
