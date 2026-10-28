@@ -46,7 +46,9 @@ export interface Gateway extends EventEmitter<GatewayEvents> {
   listen(host?: string, port?: number): Promise<ListenResult>;
   /**
    * Revokes every Gateway Token, stops every in-flight request, destroys open connections and
-   * stops listening. Idempotent: later calls return the first call's promise.
+   * stops listening, then resolves once every Usage Record (the stopped requests' `aborted` ones
+   * included) has been through `onUsage` and the `usage` event. Idempotent: later calls return
+   * the first call's promise.
    */
   close(): Promise<void>;
   /**
@@ -75,6 +77,8 @@ class ModelGateway extends EventEmitter<GatewayEvents> implements Gateway {
   readonly #options: GatewayOptions;
   /** Launches with tokens from {@link issueToken}, so {@link close} can revoke them all. */
   readonly #launches = new Set<string>();
+  /** Usage Records not yet through `onUsage` and `usage` listeners, so {@link close} waits. */
+  readonly #deliveries = new Set<Promise<void>>();
   #state: GatewayState = 'new';
   #server: Promise<LoopbackServer> | undefined;
   #port: number | undefined;
@@ -112,22 +116,23 @@ class ModelGateway extends EventEmitter<GatewayEvents> implements Gateway {
   /**
    * Hands a Usage Record to `onUsage`, then to `usage` listeners, on a later turn of the event loop
    * so that neither delays the response. A rejecting `onUsage` or a throwing listener is logged.
+   * The delivery is tracked until it settles, so {@link close} can wait for it.
    */
   #deliverUsage(record: UsageRecord): void {
-    setTimeout(() => {
-      void (async () => {
-        try {
-          await this.#options.onUsage(record);
-        } catch (error) {
-          this.#logger.error('onUsage failed', { harnessId: record.harnessId, error });
-        }
-        try {
-          this.emit('usage', record);
-        } catch (error) {
-          this.#logger.error('usage listener failed', { harnessId: record.harnessId, error });
-        }
-      })();
-    }, 0);
+    const delivery = new Promise((resolve) => setTimeout(resolve, 0)).then(async () => {
+      try {
+        await this.#options.onUsage(record);
+      } catch (error) {
+        this.#logger.error('onUsage failed', { harnessId: record.harnessId, error });
+      }
+      try {
+        this.emit('usage', record);
+      } catch (error) {
+        this.#logger.error('usage listener failed', { harnessId: record.harnessId, error });
+      }
+    });
+    this.#deliveries.add(delivery);
+    void delivery.finally(() => this.#deliveries.delete(delivery));
   }
 
   async listen(host = '127.0.0.1', port = 0): Promise<ListenResult> {
@@ -178,6 +183,11 @@ class ModelGateway extends EventEmitter<GatewayEvents> implements Gateway {
       this.#inFlight.abortAll();
       const server = await this.#server?.catch(() => undefined);
       await server?.close();
+      // The requests stopped above end on later turns (a dropped stream once its socket is gone),
+      // each handing over its `aborted` Usage Record: wait for them, then for every delivery, so
+      // a host may release its usage store as soon as this resolves.
+      await this.#inFlight.ended();
+      await Promise.allSettled(this.#deliveries);
     })();
     return this.#closed;
   }

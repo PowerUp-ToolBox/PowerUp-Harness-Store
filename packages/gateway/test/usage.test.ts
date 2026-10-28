@@ -415,8 +415,10 @@ describe('aborted requests', () => {
     expect(record).toMatchObject({ model: 'fake/stall', status: 'aborted' });
   });
 
-  it('records an open stream that close() drops with status aborted', async () => {
+  it('records an open stream that close() drops before close() resolves', async () => {
     const { gateway, url, token, records } = await start();
+    const events: UsageRecord[] = [];
+    gateway.on('usage', (record) => events.push(record));
     const response = await complete(url, token, {
       model: `${FAKE}/fake/stall`,
       messages: hello,
@@ -425,8 +427,62 @@ describe('aborted requests', () => {
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
     await readUntil(reader, '"content":"hello');
     await gateway.close();
-    const [record] = await recorded(records, 1);
-    expect(record).toMatchObject({ model: 'fake/stall', status: 'aborted' });
+    // No waiting: the host may close its usage store right after close() resolves.
+    expect(records).toEqual([
+      recordOf('fake/stall', { promptTokens: null, completionTokens: null, status: 'aborted' }),
+    ]);
+    expect(events).toEqual(records);
+  });
+
+  it('records a non-streamed call that close() stops before close() resolves', async () => {
+    const { gateway, url, token, records } = await start();
+    // close() drops the connection: the Harness sees a network error.
+    const pending = complete(url, token, { model: `${FAKE}/fake/slow`, messages: hello }).catch(
+      () => undefined,
+    );
+    await vi.waitFor(() => {
+      expect(fake.requests).toHaveLength(1);
+    });
+    await gateway.close();
+    expect(records).toEqual([
+      recordOf('fake/slow', { promptTokens: null, completionTokens: null, status: 'aborted' }),
+    ]);
+    await pending;
+  });
+
+  it('waits in close() for onUsage to settle, for stopped and already finished requests', async () => {
+    const stored: UsageRecord[] = [];
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { gateway, url, token } = await start({
+      // A slow store: the record counts as written once this promise settles.
+      onUsage: async (record) => {
+        await held;
+        stored.push(record);
+      },
+    });
+    const done = await complete(url, token, { model: `${FAKE}/fake/echo`, messages: hello });
+    await done.text();
+    const response = await complete(url, token, {
+      model: `${FAKE}/fake/stall`,
+      messages: hello,
+      stream: true,
+    });
+    await readUntil((response.body as ReadableStream<Uint8Array>).getReader(), '"content":"hello');
+    let closed = false;
+    const closing = gateway.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(closed).toBe(false);
+    release();
+    await closing;
+    expect(stored.map(({ model, status }) => ({ model, status }))).toEqual([
+      { model: 'fake/echo', status: 'ok' },
+      { model: 'fake/stall', status: 'aborted' },
+    ]);
   });
 });
 

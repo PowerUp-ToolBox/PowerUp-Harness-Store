@@ -410,9 +410,10 @@ async function completeStream(
     if (ended) return;
     ended = true;
     if (status !== 'ok') stop.abort();
+    // The record first: the Gateway's close() waits for the flight to end, then for deliveries.
+    meter.finish(status);
     endInFlight();
     streamEnded();
-    meter.finish(status);
   };
   /**
    * The events that end the stream after a failure (`undefined` when nobody reads them), and the

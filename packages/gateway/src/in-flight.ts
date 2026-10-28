@@ -18,7 +18,10 @@ export class RequestAbortedError extends Error {
 export interface InFlight {
   /** Aborted, with a {@link RequestAbortedError} as its reason, when the request must stop. */
   readonly signal: AbortSignal;
-  /** Removes the request from the registry; call once its response has ended. */
+  /**
+   * Removes the request from the registry; call once its response has ended (and its Usage
+   * Record, if any, has been handed over).
+   */
   end(): void;
 }
 
@@ -29,17 +32,32 @@ interface Entry {
 }
 
 export class InFlightRegistry {
+  /** The requests that can still be aborted. */
   readonly #entries = new Set<Entry>();
+  /** One promise per request that has not ended yet, aborted or not; settles at its `end()`. */
+  readonly #open = new Set<Promise<void>>();
 
   start(launchId: string, tokenHash: string): InFlight {
     const entry: Entry = { launchId, tokenHash, controller: new AbortController() };
     this.#entries.add(entry);
+    let ended: () => void = () => undefined;
+    const open = new Promise<void>((resolve) => {
+      ended = resolve;
+    });
+    this.#open.add(open);
     return {
       signal: entry.controller.signal,
       end: () => {
         this.#entries.delete(entry);
+        this.#open.delete(open);
+        ended();
       },
     };
+  }
+
+  /** Resolves once every request started so far has ended, including the aborted ones. */
+  async ended(): Promise<void> {
+    await Promise.all(this.#open);
   }
 
   abortToken(tokenHash: string): void {

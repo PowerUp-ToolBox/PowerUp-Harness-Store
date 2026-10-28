@@ -172,7 +172,7 @@ Model listing: for each Connection the app calls the Provider's model list where
 
 ## 7. Usage Records
 
-For every request it attempted an upstream call for, whatever the outcome, the Gateway writes exactly one Usage Record: `{ timestamp, harnessId, harnessVersion, slot, provider, model, promptTokens, completionTokens, cachedPromptTokens?, durationMs, status }`. A request answered before any upstream call (`invalid_token`, `invalid_request`, `unknown_slot`, `slot_unbound`, `provider_not_connected`) writes none: no Provider was contacted.
+For every request it attempted an upstream call for, whatever the outcome, the Gateway writes exactly one Usage Record: `{ timestamp, harnessId, harnessVersion, slot, provider, model, promptTokens, completionTokens, cachedPromptTokens?, durationMs, status }`. A request answered before any upstream call (`invalid_token`, `invalid_request`, `unknown_slot`, `slot_unbound`, `provider_not_connected`) writes none: no Provider was contacted. Stopping the Gateway completes only once the Usage Records of the requests it stopped have been written.
 
 - `status`: `ok`; `provider_error` for any upstream failure, before or after the first byte (a refused connection included); `timeout` for the first-byte or idle timeout; `aborted` when the Harness disconnected, its Gateway Token was revoked or the Gateway closed.
 - `timestamp`: when the request arrived, ISO-8601 UTC. `durationMs`: from then until the response ended (for a stream, its last event), whole milliseconds, at least 1.
