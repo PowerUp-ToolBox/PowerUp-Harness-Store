@@ -706,9 +706,15 @@ export interface StoreHome {
 /** How many results one page of a Store search has; "Load more" asks for the next one. */
 export const STORE_SEARCH_PAGE_SIZE = 24;
 
+/** The longest search text `store.search` takes; the search box takes no more. */
+export const STORE_SEARCH_MAX_LENGTH = 200;
+
 /** A Store search: text, tags and platform together, and which page. */
 export interface StoreSearchRequest {
-  /** `websearch_to_tsquery` syntax; blank means no text filter. At most 200 characters. */
+  /**
+   * `websearch_to_tsquery` syntax; blank means no text filter. At most
+   * {@link STORE_SEARCH_MAX_LENGTH} characters.
+   */
   readonly q: string;
   /** The Harness has every one of them; none means no tag filter. */
   readonly tags: readonly Tag[];

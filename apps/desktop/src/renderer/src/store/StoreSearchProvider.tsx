@@ -62,6 +62,11 @@ export interface StoreSearchContextValue {
   readonly state: StoreSearchState;
   /** The search box changed: searched 300 ms after the last change; blank and no tag is home. */
   readonly type: (input: string) => void;
+  /**
+   * The search box changed while an input method composes text (pinyin before a candidate is
+   * picked): kept, not searched; `type` follows once the text is committed.
+   */
+  readonly compose: (input: string) => void;
   /** Enter: searches the box's text now, without waiting. */
   readonly submit: () => void;
   /** Selects or clears one tag chip, and searches now. */
@@ -116,7 +121,8 @@ function merged(
  * The Store search (P0-09.2): the search box's text, the tag chips, the platform toggle and the
  * results, held above the screens so that a detail page, a Publisher page or another tab and back
  * finds them as they were; kept in memory only. Typed text is searched 300 ms after the last
- * keystroke, Enter, a tag and the toggle search at once. Results come from `store.search` a page of
+ * keystroke (text an input method is still composing waits until it is committed), Enter, a tag
+ * and the toggle search at once. Results come from `store.search` a page of
  * 24 at a time in the Store's order; "Load more" appends the next page. Searches are numbered and
  * only the newest one's answers are kept, "Load more" included.
  */
@@ -185,6 +191,15 @@ export function StoreSearchProvider({ children }: { readonly children: ReactNode
       timer.current = setTimeout(apply, SEARCH_DEBOUNCE_MS);
     },
     [apply, cancelTimer, commit],
+  );
+
+  const compose = useCallback(
+    (input: string) => {
+      commit((state) => ({ ...state, input }));
+      // A search still waiting would read the uncommitted text.
+      cancelTimer();
+    },
+    [cancelTimer, commit],
   );
 
   const toggleTag = useCallback(
@@ -256,6 +271,7 @@ export function StoreSearchProvider({ children }: { readonly children: ReactNode
     () => ({
       state,
       type,
+      compose,
       submit: apply,
       toggleTag,
       setAllPlatforms,
@@ -263,7 +279,7 @@ export function StoreSearchProvider({ children }: { readonly children: ReactNode
       loadMore,
       retry: apply,
     }),
-    [state, type, apply, toggleTag, setAllPlatforms, clearFilters, loadMore],
+    [state, type, compose, apply, toggleTag, setAllPlatforms, clearFilters, loadMore],
   );
   return <StoreSearchContext.Provider value={value}>{children}</StoreSearchContext.Provider>;
 }

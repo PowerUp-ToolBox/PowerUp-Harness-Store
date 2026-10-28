@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { STORE_SEARCH_MAX_LENGTH } from '../../../shared/ipc.js';
 import { TAGS } from '../../../shared/tags.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
@@ -10,17 +11,17 @@ import { useStoreSearch, type SearchResults } from './StoreSearchProvider.js';
 /** The skeleton cards the results show while a search is under way. */
 const SKELETON_CARDS = 4;
 
-/** The longest text the search box takes (`store.search` takes no more). */
-const MAX_SEARCH_LENGTH = 200;
-
 /**
  * The Store's filter row (docs/ux/screens.md, Store search): the search box, the curated tags as
  * chips in the Manifest schema's order, and "My platform only", on by default. Enter searches at
- * once; typing searches once it pauses for 300 ms.
+ * once; typing searches once it pauses for 300 ms, and text an input method composes (pinyin)
+ * only once it is committed.
  */
 export function StoreFilters() {
   const { t } = useI18n();
-  const { state, type, submit, toggleTag, setAllPlatforms } = useStoreSearch();
+  const { state, type, compose, submit, toggleTag, setAllPlatforms } = useStoreSearch();
+  /** An input method is composing text in the box: it is searched once committed. */
+  const composing = useRef(false);
   return (
     <div className="store-filters">
       <form
@@ -36,10 +37,18 @@ export function StoreFilters() {
           type="search"
           aria-label={t('store.search.label')}
           placeholder={t('store.search.label')}
-          maxLength={MAX_SEARCH_LENGTH}
+          maxLength={STORE_SEARCH_MAX_LENGTH}
           value={state.input}
+          onCompositionStart={() => {
+            composing.current = true;
+          }}
+          onCompositionEnd={(event) => {
+            composing.current = false;
+            type(event.currentTarget.value);
+          }}
           onChange={(event) => {
-            type(event.target.value);
+            if (composing.current) compose(event.target.value);
+            else type(event.target.value);
           }}
         />
       </form>

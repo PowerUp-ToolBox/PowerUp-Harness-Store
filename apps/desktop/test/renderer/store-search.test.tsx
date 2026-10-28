@@ -169,6 +169,57 @@ describe('Store search', () => {
     expect(resultNames()).toEqual(['Note Writer', 'Notes']);
   });
 
+  // Chromium sends the committed text's change before compositionend, WebKit after it.
+  it.each(['before', 'after'] as const)(
+    'searches text an input method composes only once it is committed (last change %s compositionend)',
+    async (order) => {
+      const api = await renderStore('zh-CN');
+      const box = searchBox('搜索 Harness');
+      expect(box.maxLength).toBe(200);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+      act(() => {
+        fireEvent.compositionStart(box);
+      });
+      for (const text of ['x', 'xie', 'xie z', 'xie zuo']) {
+        typeText(text, '搜索 Harness');
+        act(() => {
+          vi.advanceTimersByTime(1000);
+        });
+      }
+      // The pinyin is never searched, and the home sections stay.
+      expect(api.store.search).not.toHaveBeenCalled();
+      expect(box.value).toBe('xie zuo');
+      expect(screen.queryByRole('region', { name: '精选' })).not.toBeNull();
+
+      act(() => {
+        if (order === 'before') fireEvent.change(box, { target: { value: '写作' } });
+        fireEvent.compositionEnd(box);
+        if (order === 'after') fireEvent.change(box, { target: { value: '写作' } });
+      });
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(api.store.search.mock.calls).toEqual([[request({ q: '写作' })]]);
+      await settle();
+      expect(resultNames('搜索结果')).toEqual(['写作助手']);
+    },
+  );
+
+  it('drops a search still waiting for the pause once an input method starts composing', async () => {
+    const api = await renderStore();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    typeText('notes');
+    act(() => {
+      fireEvent.compositionStart(searchBox());
+    });
+    typeText('notes x');
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(api.store.search).not.toHaveBeenCalled();
+  });
+
   it('searches at once on Enter, without waiting for the pause', async () => {
     const api = await renderStore();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -371,6 +422,71 @@ describe('Store search', () => {
     });
     await settle();
     expect(resultNames()).toEqual(['Notes']);
+  });
+
+  it('drops a Load more answer once the filters changed', async () => {
+    const api = await renderStore();
+    const first = Array.from({ length: 24 }, (_, index) => listing(`erin/tool-${String(index)}`));
+    let answerMore: (result: IpcResult<StoreSearchPage>) => void = () => undefined;
+    api.store.search
+      .mockResolvedValueOnce({
+        ok: true,
+        data: { platform: 'darwin-arm64', listings: first, hasMore: true },
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerMore = resolve;
+          }),
+      );
+    await searchFor('tool');
+    await click(screen.getByRole('button', { name: 'Load more' }));
+    expect(api.store.search).toHaveBeenLastCalledWith(request({ q: 'tool', offset: 24 }));
+
+    // A tag changes the search while the next page of the old one is on its way.
+    await click(screen.getByRole('button', { name: 'Writing' }));
+    expect(api.store.search).toHaveBeenLastCalledWith(request({ q: 'tool', tags: ['writing'] }));
+    expect(screen.getByText('No Harnesses match')).toBeDefined();
+    await act(async () => {
+      answerMore({
+        ok: true,
+        data: { platform: 'darwin-arm64', listings: [LINUX_NOTES], hasMore: false },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    // The old search's page is not added to the new search's (empty) results.
+    expect(screen.getByText('No Harnesses match')).toBeDefined();
+    expect(screen.queryByRole('list', { name: 'Search results' })).toBeNull();
+  });
+
+  it('keeps the first page and Load more when the next page fails, and shows why', async () => {
+    const api = await renderStore();
+    const first = Array.from({ length: 24 }, (_, index) => listing(`erin/tool-${String(index)}`));
+    api.store.search
+      .mockResolvedValueOnce({
+        ok: true,
+        data: { platform: 'darwin-arm64', listings: first, hasMore: true },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'store_error', messageKey: 'error.store_error', message: 'Unexpected.' },
+      });
+    await searchFor('tool');
+    const list = screen.getByRole('list', { name: 'Search results' });
+    await click(screen.getByRole('button', { name: 'Load more' }));
+
+    expect(screen.getByRole('list', { name: 'Search results' })).toBe(list);
+    expect(resultNames()).toEqual(first.map((item) => item.name));
+    expect(screen.getByRole('alert').textContent).toBe(
+      'The Store answered with something unexpected. Try again in a moment.',
+    );
+    const loadMore = screen.getByRole('button', { name: 'Load more' });
+    expect(loadMore.hasAttribute('disabled')).toBe(false);
+
+    // Asking again loads the page.
+    await click(loadMore);
+    expect(api.store.search).toHaveBeenLastCalledWith(request({ q: 'tool', offset: 24 }));
   });
 
   it('shows a failed search inline with Retry', async () => {

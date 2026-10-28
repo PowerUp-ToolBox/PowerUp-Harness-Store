@@ -221,6 +221,8 @@ describe('Chinese substring search (P0-09.2)', () => {
     });
     // Holds `x` and `9`, which an unescaped `_` or `%` in the query would match.
     rows.literal = await listed(publisher, { name: `${after}x9` });
+    // Holds a backslash before the word, as no token of its own (`x`, then the word and `9`).
+    rows.backslash = await listed(publisher, { name: `x\\${after}9` });
   });
 
   afterAll(async () => {
@@ -257,7 +259,10 @@ describe('Chinese substring search (P0-09.2)', () => {
     expect(await ids({ q: `${after}x9` })).toEqual([rows.literal?.harness_id]);
     expect(await ids({ q: `${after}_9` })).toEqual([]);
     expect(await ids({ q: `${after}%` })).toEqual([]);
-    expect(await ids({ q: `${after}\\` })).toEqual([]);
+    // Unescaped, `\\` would quote the character after it, and these would match the word anywhere
+    // and `x9`.
+    expect(await ids({ q: `\\${after}` })).toEqual([rows.backslash?.harness_id]);
+    expect(await ids({ q: `${after}\\x` })).toEqual([]);
   });
 });
 

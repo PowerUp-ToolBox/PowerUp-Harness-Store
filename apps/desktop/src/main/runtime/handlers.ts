@@ -1,14 +1,15 @@
 import { isAbsolute } from 'node:path';
-import type {
-  AuthState,
-  IpcMethodName,
-  IpcOutput,
-  IpcResult,
-  LaunchRequest,
-  PublishRequest,
-  StoreHomeRequest,
-  StoreSearchRequest,
-  UnpublishRequest,
+import {
+  STORE_SEARCH_MAX_LENGTH,
+  type AuthState,
+  type IpcMethodName,
+  type IpcOutput,
+  type IpcResult,
+  type LaunchRequest,
+  type PublishRequest,
+  type StoreHomeRequest,
+  type StoreSearchRequest,
+  type UnpublishRequest,
 } from '../../shared/ipc.js';
 import { isTag } from '../../shared/tags.js';
 import {
@@ -259,9 +260,6 @@ function parseStoreHomeRequest(input: unknown): StoreHomeRequest | null {
   return typeof refresh === 'boolean' ? { refresh } : null;
 }
 
-/** The longest search text `store.search` takes. */
-const MAX_SEARCH_LENGTH = 200;
-
 /** The greatest `offset` Postgres takes as an `int`. */
 const MAX_SEARCH_OFFSET = 2_147_483_647;
 
@@ -273,7 +271,7 @@ function parseStoreSearchRequest(input: unknown): StoreSearchRequest | null {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return null;
   const { q, tags, allPlatforms, offset, ...rest } = input as Record<string, unknown>;
   if (Object.keys(rest).length > 0) return null;
-  if (typeof q !== 'string' || q.length > MAX_SEARCH_LENGTH) return null;
+  if (typeof q !== 'string' || q.length > STORE_SEARCH_MAX_LENGTH) return null;
   if (!Array.isArray(tags) || !tags.every(isTag) || new Set(tags).size !== tags.length) {
     return null;
   }
