@@ -68,17 +68,91 @@ async function inflateEntry(
   const chunks: Uint8Array[] = [];
   let produced = 0;
   let crc = 0;
+  for await (const inflated of inflateSlices(reader, entry, dataStart, maxBytes)) {
+    for (const chunk of inflated) {
+      chunks.push(chunk);
+      produced += chunk.length;
+      if (!prefixOnly) crc = crc32(chunk, crc);
+    }
+    if (prefixOnly && produced >= maxBytes) return concat(chunks, maxBytes);
+  }
+  if (crc !== entry.crc32) throw new ZipFormatError('its content is corrupt (CRC-32 mismatch)');
+  return concat(chunks, maxBytes);
+}
+
+/**
+ * Bytes of a stored entry read at a time by {@link streamEntry}. Stored bytes do not expand, so
+ * a larger slice costs only its own size and saves reads.
+ */
+const STORED_SLICE = 1024 * 1024;
+
+/**
+ * Reads a whole entry's content a slice at a time, yielding each part as it is read or inflated,
+ * so an entry of any size is held in memory a slice at a time: at most {@link STORED_SLICE} bytes
+ * stored, or what {@link MAX_SLICE} compressed bytes inflate to (about a thousand times as much).
+ * Each part is a new array the caller may keep. Nothing is written anywhere.
+ *
+ * The entry's size and CRC-32 can only be checked once every part is read, so the last step
+ * throws when they do not match the central directory: the caller discards what it did with the
+ * parts. An entry that inflates beyond its declared size throws before that part is yielded.
+ *
+ * @throws {ZipFormatError} when the entry cannot be read.
+ */
+export async function* streamEntry(
+  reader: RandomAccessReader,
+  entry: ZipEntry,
+  dataStart: number,
+): AsyncGenerator<Uint8Array, void, undefined> {
+  if (entry.flags & FLAG_ENCRYPTED) throw new ZipFormatError('it is encrypted');
+  let crc = 0;
+  if (entry.method === METHOD_STORED) {
+    if (entry.compressedSize !== entry.uncompressedSize) {
+      throw new ZipFormatError('its stored size does not match its size');
+    }
+    for (let read = 0; read < entry.uncompressedSize;) {
+      const length = Math.min(STORED_SLICE, entry.uncompressedSize - read);
+      // A copy: the reader may return a view of the caller's archive bytes.
+      const part = new Uint8Array(await reader.read(dataStart + read, length));
+      read += length;
+      crc = crc32(part, crc);
+      yield part;
+    }
+  } else if (entry.method === METHOD_DEFLATE) {
+    for await (const inflated of inflateSlices(reader, entry, dataStart, entry.uncompressedSize)) {
+      for (const part of inflated) {
+        crc = crc32(part, crc);
+        yield part;
+      }
+    }
+  } else {
+    throw new ZipFormatError(`it uses compression method ${String(entry.method)}`);
+  }
+  if (crc !== entry.crc32) throw new ZipFormatError('its content is corrupt (CRC-32 mismatch)');
+}
+
+/**
+ * Inflates a Deflate entry one slice of compressed bytes at a time, yielding what each slice
+ * inflated to. It throws as soon as the entry inflates beyond its declared size, and, once every
+ * slice is read, when it inflated to less. `wanted` sizes the first slice; a caller that has
+ * enough stops early.
+ */
+async function* inflateSlices(
+  reader: RandomAccessReader,
+  entry: ZipEntry,
+  dataStart: number,
+  wanted: number,
+): AsyncGenerator<Uint8Array[], void, undefined> {
+  let pending: Uint8Array[] = [];
+  let produced = 0;
   const inflater = new Inflate((chunk) => {
-    chunks.push(chunk);
+    pending.push(chunk);
     produced += chunk.length;
-    if (!prefixOnly) crc = crc32(chunk, crc);
   });
 
   // Start with about as many compressed bytes as bytes are wanted: an entry that inflates far
   // beyond its declared size is caught after a small slice too.
   let consumed = 0;
-  const wanted = Math.min(maxBytes, entry.uncompressedSize);
-  let slice = Math.min(FIRST_SLICE, Math.max(MIN_SLICE, wanted));
+  let slice = Math.min(FIRST_SLICE, Math.max(MIN_SLICE, Math.min(wanted, entry.uncompressedSize)));
   while (consumed < entry.compressedSize) {
     const length = Math.min(slice, entry.compressedSize - consumed);
     const input = await reader.read(dataStart + consumed, length);
@@ -91,14 +165,14 @@ async function inflateEntry(
     if (produced > entry.uncompressedSize) {
       throw new ZipFormatError('it inflates to more than its declared size');
     }
-    if (prefixOnly && produced >= maxBytes) return concat(chunks, maxBytes);
+    const inflated = pending;
+    pending = [];
+    yield inflated;
     slice = Math.min(slice * 2, MAX_SLICE);
   }
   if (produced !== entry.uncompressedSize) {
     throw new ZipFormatError('it inflates to less than its declared size');
   }
-  if (crc !== entry.crc32) throw new ZipFormatError('its content is corrupt (CRC-32 mismatch)');
-  return concat(chunks, maxBytes);
 }
 
 function concat(chunks: readonly Uint8Array[], maxBytes: number): Uint8Array {

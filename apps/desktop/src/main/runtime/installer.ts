@@ -9,10 +9,10 @@ import {
   rename,
   rm,
   stat,
-  writeFile,
   type FileHandle,
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { isDeepStrictEqual } from 'node:util';
 import {
@@ -654,24 +654,27 @@ async function holdsManifest(file: string, manifest: Manifest): Promise<boolean>
 }
 
 /**
- * Writes every file of the validated Harness Package `file` into `target`, each read whole (so its
- * CRC-32 and size are checked) and created new: the archive lists only regular files with safe,
- * distinct paths, which validation checked. An entry that cannot be read from the zip answers
- * `integrity_error`; anything else (an I/O error) throws.
+ * Writes every file of the validated Harness Package `file` into `target`, each created new and
+ * streamed a part at a time (so a large or highly compressible file is never held in memory),
+ * with its CRC-32 and size checked once it is written: the archive lists only regular files with
+ * safe, distinct paths, which validation checked. An entry that cannot be read from the zip
+ * answers `integrity_error`, and the caller deletes `target` with whatever was written; anything
+ * else (an I/O error) throws.
  */
 async function unpackArchive(file: string, target: string): Promise<IpcResult<null>> {
   const archive = await openArchiveFile(file);
   for (const path of archive.listFiles()) {
-    let bytes: Uint8Array;
+    const destination = join(target, ...path.split('/'));
+    await mkdir(dirname(destination), { recursive: true });
     try {
-      bytes = await archive.readFile(path);
+      await pipeline(
+        Readable.from(archive.streamFile(path)),
+        createWriteStream(destination, { flags: 'wx' }),
+      );
     } catch (error) {
       if (error instanceof PackageReadError) return fail('integrity_error');
       throw error;
     }
-    const destination = join(target, ...path.split('/'));
-    await mkdir(dirname(destination), { recursive: true });
-    await writeFile(destination, bytes, { flag: 'wx' });
   }
   return ok(null);
 }

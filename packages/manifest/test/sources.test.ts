@@ -248,6 +248,79 @@ describe('ArchiveSource: reading', () => {
     expect(reader.bytesRead - bytesRead).toBeLessThanOrEqual(200);
   });
 
+  it('streams a whole file in parts, stored or deflated, with the same bytes as readFile', async () => {
+    const source = await open([
+      { name: 'deflated.txt', data: big },
+      { name: 'stored.txt', data: big, method: 0 },
+      { name: 'empty.txt' },
+    ]);
+    for (const path of ['deflated.txt', 'stored.txt', 'empty.txt']) {
+      const parts: Uint8Array[] = [];
+      for await (const part of source.streamFile(path)) parts.push(part);
+      expect(Buffer.concat(parts)).toEqual(Buffer.from(await source.readFile(path)));
+    }
+    // Copies, never views of the archive bytes.
+    for await (const part of source.streamFile('stored.txt')) part.fill(0);
+    expect(text(await source.readFile('stored.txt'))).toBe(big);
+  });
+
+  it('streams a highly compressible file in bounded parts, never holding it whole', async () => {
+    // 256 MB of zeros deflate to about 256 KB: read whole, they would need 256 MB at once.
+    const zeros = new Uint8Array(256 * 1024 * 1024);
+    const bomb: ZipEntrySpec = {
+      name: 'data.bin',
+      method: 8,
+      compressedData: deflateRawSync(zeros),
+      declaredSize: zeros.length,
+      crc: nodeCrc32(zeros),
+    };
+    const source = await ArchiveSource.open(buildZip([bomb]));
+    let total = 0;
+    let largest = 0;
+    for await (const part of source.streamFile('data.bin')) {
+      total += part.length;
+      largest = Math.max(largest, part.length);
+    }
+    expect(total).toBe(zeros.length);
+    expect(largest).toBeLessThanOrEqual(17 * 1024 * 1024);
+  });
+
+  it('reads a large stored file in parts too', async () => {
+    const data = new Uint8Array(3 * 1024 * 1024 + 5).fill(7);
+    const source = await open([{ name: 'f', data, method: 0 }]);
+    const sizes: number[] = [];
+    for await (const part of source.streamFile('f')) sizes.push(part.length);
+    expect(sizes).toEqual([1024 * 1024, 1024 * 1024, 1024 * 1024, 5]);
+  });
+
+  it.each<[string, ZipEntrySpec, RegExp]>([
+    ['a CRC-32 that does not match', { name: 'f', data: 'hello', crc: 1 }, /CRC-32/],
+    ['a stored CRC-32', { name: 'f', data: 'hello', method: 0, crc: 1 }, /CRC-32/],
+    [
+      'more bytes than declared',
+      { name: 'f', data: 'x'.repeat(5000), declaredSize: 10 },
+      /more than/,
+    ],
+    ['fewer bytes than declared', { name: 'f', data: 'hello', declaredSize: 50 }, /less than/],
+    [
+      'a stored size that differs',
+      { name: 'f', data: 'hello', method: 0, declaredSize: 4 },
+      /stored size/,
+    ],
+    ['an encrypted entry', { name: 'f', data: 'x', flags: 0x0001 }, /encrypted/],
+    ['an unsupported method', { name: 'f', data: 'x', method: 12 }, /compression method 12/],
+  ])('streaming refuses %s, after the parts it read', async (_name, entry, message) => {
+    const source = await open([entry]);
+    const parts: Uint8Array[] = [];
+    const error = await (async () => {
+      for await (const part of source.streamFile('f')) parts.push(part);
+    })().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PackageReadError);
+    expect(String(error)).toMatch(message);
+    // An entry that inflates beyond its size throws before the excess is handed out.
+    expect(Buffer.concat(parts).length).toBeLessThanOrEqual(10);
+  });
+
   it('stops inflating as soon as an entry exceeds its declared size', async () => {
     const zeros = new Uint8Array(64 * 1024 * 1024);
     const lying: ZipEntrySpec = {

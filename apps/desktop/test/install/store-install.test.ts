@@ -429,6 +429,42 @@ describe('installs.install and installs.confirm', () => {
     expect(existsSync(join(userDataDir(), 'escaped.txt'))).toBe(false);
   });
 
+  it('unpacks a large, highly compressible file a part at a time', async () => {
+    // 64 MB of zeros deflate to about 64 KB: what a zip bomb looks like, but honest about its size.
+    const zeros = new Uint8Array(64 * 1024 * 1024);
+    publish('fixture-web', {}, { 'data/zeros.bin': zeros });
+    const { call } = await launch();
+    await expect(
+      call('installs.install', { harnessId: WEB, jobId: 'job-1' }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(call('installs.confirm', 'job-1')).resolves.toMatchObject({ ok: true });
+    const written = join(harnessesFolder(), 'acme', 'fixture-web', '1.0.0', 'data', 'zeros.bin');
+    expect(statSync(written).size).toBe(zeros.length);
+    expect(readFileSync(written).every((byte) => byte === 0)).toBe(true);
+  });
+
+  it('answers integrity_error for an entry whose content is corrupt, keeping nothing of it', async () => {
+    // A stored entry whose bytes are changed after zipping: the package's SHA-256 is the Store's
+    // and it validates (validation reads no other file's content), but its CRC-32 no longer holds.
+    const marker = new TextEncoder().encode('corrupt-me:'.repeat(1000));
+    const zip = zipSync({ ...folderFiles('fixture-web'), 'data/blob.bin': [marker, { level: 0 }] });
+    const at = Buffer.from(zip).indexOf(Buffer.from(marker));
+    expect(at).toBeGreaterThan(0);
+    zip.fill(0xff, at + marker.length - 1, at + marker.length);
+    published.set(WEB, { zip, manifest: reordered(fixtureManifest('fixture-web')) });
+    const { call } = await launch();
+    await expect(
+      call('installs.install', { harnessId: WEB, jobId: 'job-1' }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(call('installs.confirm', 'job-1')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'integrity_error' },
+    });
+    expect(installRows()).toEqual([]);
+    expect(downloads()).toEqual([]);
+    expect(existsSync(join(harnessesFolder(), 'acme', 'fixture-web'))).toBe(false);
+  });
+
   it('refuses a package whose Manifest is not the one the Store answered with', async () => {
     publish('fixture-web');
     const harness = published.get(WEB);

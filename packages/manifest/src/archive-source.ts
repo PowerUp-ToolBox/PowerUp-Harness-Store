@@ -5,7 +5,7 @@ import { readCentralDirectory, ZipFormatError } from './zip/central-directory.js
 import type { CentralDirectory, RandomAccessReader, ZipEntry } from './zip/central-directory.js';
 import { FLAG_ENCRYPTED, readLocalHeaders } from './zip/local-headers.js';
 import type { LocalHeader, LocalLayout } from './zip/local-headers.js';
-import { METHOD_DEFLATE, METHOD_STORED, readEntry } from './zip/read-entry.js';
+import { METHOD_DEFLATE, METHOD_STORED, readEntry, streamEntry } from './zip/read-entry.js';
 
 export type { RandomAccessReader } from './zip/central-directory.js';
 
@@ -13,8 +13,9 @@ export type { RandomAccessReader } from './zip/central-directory.js';
  * A Harness Package in a zip archive. Opening it reads the central directory (the zip's list of
  * entries) and every entry's local header. The only content it reads is that of entries with a
  * data descriptor, which it inflates or scans (500 MB at most for the whole archive) to confirm
- * where each one ends. {@link readFile} inflates one entry into memory, up to the bytes asked for.
- * Nothing is ever extracted or written to disk, so it is safe on an untrusted upload.
+ * where each one ends. {@link readFile} inflates one entry into memory, up to the bytes asked for;
+ * {@link streamFile} reads a whole one a part at a time. Nothing is ever extracted or written to
+ * disk, so it is safe on an untrusted upload.
  *
  * The listing is what every unpacker would find: an entry whose local header disagrees with the
  * central directory, and bytes that belong to no entry (where a streaming unpacker could find
@@ -99,6 +100,35 @@ export class ArchiveSource implements PackageSource {
 
   async readFile(path: string, options?: ReadFileOptions): Promise<Uint8Array> {
     const maxBytes = maxBytesOf(options);
+    const { entry, dataStart } = this.#readable(path);
+    try {
+      return await readEntry(this.#reader, entry, dataStart, maxBytes);
+    } catch (error) {
+      if (error instanceof ZipFormatError) throw new PackageReadError(error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Reads a whole file a part at a time, for writing it out without holding it in memory: a part
+   * is at most about 16 MB however large the file is or how well it compresses. Its size and
+   * CRC-32 are checked like {@link readFile}'s, but only after the last part, so a caller that
+   * writes the parts discards them when this throws.
+   *
+   * @throws {PackageReadError} when the file cannot be read from the archive.
+   */
+  async *streamFile(path: string): AsyncGenerator<Uint8Array, void, undefined> {
+    const { entry, dataStart } = this.#readable(path);
+    try {
+      yield* streamEntry(this.#reader, entry, dataStart);
+    } catch (error) {
+      if (error instanceof ZipFormatError) throw new PackageReadError(error.message);
+      throw error;
+    }
+  }
+
+  /** The entry of the file `path` and where its data starts, when it can be read at all. */
+  #readable(path: string): { entry: ZipEntry; dataStart: number } {
     const index = this.#files.get(path);
     const entry = index === undefined ? undefined : this.#entries[index];
     const header = index === undefined ? undefined : this.#headers[index];
@@ -112,12 +142,7 @@ export class ArchiveSource implements PackageSource {
         'its local header names a different file than the central directory',
       );
     }
-    try {
-      return await readEntry(this.#reader, entry, header.dataStart, maxBytes);
-    } catch (error) {
-      if (error instanceof ZipFormatError) throw new PackageReadError(error.message);
-      throw error;
-    }
+    return { entry, dataStart: header.dataStart };
   }
 }
 
