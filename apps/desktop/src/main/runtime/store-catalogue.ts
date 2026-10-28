@@ -44,6 +44,8 @@ export interface StoreCatalogueOptions {
   readonly onStoreUnreachable?: () => void;
   /** The clock of the in-memory cache. Default: the system clock. */
   readonly now?: () => Date;
+  /** How long a read, its body included, may take. Default: 15 seconds. */
+  readonly readTimeoutMs?: number;
 }
 
 /** The Store's public catalogue as the Store tab reads it (P0-09). */
@@ -64,24 +66,33 @@ export interface StoreCatalogue {
  */
 export function createStoreCatalogue(options: StoreCatalogueOptions): StoreCatalogue {
   const now = options.now ?? (() => new Date());
+  const readTimeoutMs = options.readTimeoutMs ?? READ_TIMEOUT_MS;
   /** The last Store home read, with when and from which Store. */
   let cachedHome: { baseUrl: string; at: number; home: StoreHome } | null = null;
 
   const read = async (path: string): Promise<IpcResult<unknown[]>> => {
     const base = options.storeBaseUrl().replace(/\/+$/, '');
     let response: Response;
-    let body: unknown;
+    let text = '';
     try {
+      // The timeout covers the body too: a Store that answers and then stalls did not answer.
       response = await options.fetch(`${base}/rest/v1/${path}`, {
         method: 'GET',
         headers: { apikey: options.anonKey, authorization: `Bearer ${options.anonKey}` },
-        signal: AbortSignal.timeout(READ_TIMEOUT_MS),
+        signal: AbortSignal.timeout(readTimeoutMs),
       });
-      body = response.ok ? await response.json().catch(() => null) : null;
+      if (response.ok) text = await response.text();
     } catch {
       return fail('store_unreachable');
     }
-    return response.ok && Array.isArray(body) ? ok(body) : fail('store_error');
+    if (!response.ok) return fail('store_error');
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      return fail('store_error');
+    }
+    return Array.isArray(body) ? ok(body) : fail('store_error');
   };
 
   return {

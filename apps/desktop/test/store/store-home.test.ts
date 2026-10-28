@@ -59,6 +59,10 @@ let requests: { url: URL; apikey: string | undefined; authorization: string | un
 let failWith: number | null;
 /** Answers every request with this JSON body instead, when set. */
 let answerWith: unknown;
+/** Answers every request with this raw body instead, when set. */
+let answerRaw: string | undefined;
+/** Sends 200 and the start of a body, then stalls ('stall') or drops the connection ('reset'). */
+let breakBody: 'stall' | 'reset' | null;
 let clock: Date;
 let unreachable: ReturnType<typeof vi.fn<() => void>>;
 
@@ -66,6 +70,8 @@ beforeEach(async () => {
   requests = [];
   failWith = null;
   answerWith = undefined;
+  answerRaw = undefined;
+  breakBody = null;
   clock = new Date('2026-10-28T09:00:00.000Z');
   unreachable = vi.fn<() => void>();
   harnesses = seed();
@@ -173,6 +179,17 @@ function serve(request: IncomingMessage, response: ServerResponse) {
     json(200, answerWith);
     return;
   }
+  if (answerRaw !== undefined) {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(answerRaw);
+    return;
+  }
+  if (breakBody !== null) {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.write('[{"harness_id":');
+    if (breakBody === 'reset') setTimeout(() => response.destroy(), 20);
+    return;
+  }
   if (request.method !== 'GET' || url.pathname !== '/rest/v1/harnesses') {
     json(404, { message: 'Not here.' });
     return;
@@ -225,6 +242,7 @@ function dispatcherFor(storeBaseUrl: () => string = () => baseUrl) {
     platform: 'darwin-arm64',
     onStoreUnreachable: unreachable,
     now: () => clock,
+    readTimeoutMs: 1000,
   });
   const handlers = createHandlers({ store } as unknown as Services);
   const dispatch = createDispatcher({
@@ -377,6 +395,18 @@ describe('store.home', () => {
       expect(unreachable).toHaveBeenCalledOnce();
     });
 
+    it.each(['stall', 'reset'] as const)(
+      'is store_unreachable when the Store answers 200 and its body then %ss',
+      async (how) => {
+        breakBody = how;
+        await expect(dispatcherFor()()).resolves.toMatchObject({
+          ok: false,
+          error: { code: 'store_unreachable' },
+        });
+        expect(unreachable).toHaveBeenCalledOnce();
+      },
+    );
+
     it.each([500, 503, 400, 404])(
       'is store_error when the Store answers %i; the Store is not offline',
       async (status) => {
@@ -397,7 +427,17 @@ describe('store.home', () => {
           ok: false,
           error: { code: 'store_error' },
         });
+        expect(unreachable).not.toHaveBeenCalled();
       },
     );
+
+    it('is store_error when the body is not JSON', async () => {
+      answerRaw = '<html>Bad gateway</html>';
+      await expect(dispatcherFor()()).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'store_error' },
+      });
+      expect(unreachable).not.toHaveBeenCalled();
+    });
   });
 });

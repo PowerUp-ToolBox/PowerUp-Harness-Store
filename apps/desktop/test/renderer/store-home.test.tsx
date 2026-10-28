@@ -155,7 +155,7 @@ describe('Store home', () => {
     ]);
   });
 
-  it('opens the detail page from a card and the Publisher page from its login', async () => {
+  it('opens the detail page from a card’s name', async () => {
     const { answer } = installPendingHome();
     await renderApp('#/store');
     await answer({ ok: true, data: HOME });
@@ -168,6 +168,21 @@ describe('Store home', () => {
     });
     expect(window.location.hash).toBe('#/store/h/alice/writer');
     expect(screen.getByText('Details of the Harness alice/writer appear here.')).toBeDefined();
+  });
+
+  it('opens the Publisher page from a card’s login', async () => {
+    const { answer } = installPendingHome();
+    await renderApp('#/store');
+    await answer({ ok: true, data: HOME });
+
+    const writer = within(section('Featured')).getAllByRole('article')[1];
+    if (writer === undefined) throw new Error('Missing card');
+    await act(async () => {
+      fireEvent.click(within(writer).getByRole('link', { name: 'alice' }));
+      await Promise.resolve();
+    });
+    expect(window.location.hash).toBe('#/store/p/alice');
+    expect(screen.getByText('Harnesses by the Publisher alice appear here.')).toBeDefined();
   });
 
   it('hides an empty row', async () => {

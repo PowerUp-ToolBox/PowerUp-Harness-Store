@@ -2,8 +2,9 @@
  * Ticket P0-07.5: the Store home rows (Featured, Most downloaded, New) and the Publisher page,
  * which are plain PostgREST reads with the anon key, called exactly as docs/tech/api.md writes
  * them (with the platforms of the published versions embedded since P0-09.1), against the seed
- * catalogue (scripts/seed.ts) plus the Harnesses of one test Publisher: two visible, one Unpublished-only and one taken down, the hidden two Featured with the lowest
- * ranks so that only row-level security can keep them out.
+ * catalogue (scripts/seed.ts) plus the Harnesses of one test Publisher: two visible, one
+ * Unpublished-only and one taken down, the hidden two Featured with the lowest ranks so that only
+ * row-level security can keep them out.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
