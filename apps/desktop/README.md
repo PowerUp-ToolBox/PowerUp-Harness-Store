@@ -1,6 +1,6 @@
 # @harness-store/desktop
 
-> Status: shell, i18n, the embedded Runtime, offline handling and the first-run wizard (P0-04.1 to P0-04.5): sidebar navigation, placeholder screens, typed IPC, window state, every UI string in `en` and `zh-CN`, the Model Gateway and local SQLite database starting with the app, an offline banner and Store offline panel when the Store is unreachable, and a skippable five-step setup wizard. Provider Connections with encrypted keys on the Models page (P0-03.1), Connection tests and model listing with a "Type a model name" picker (P0-03.2), detection of a running Ollama or LM Studio (P0-03.3). Default Models follow in the rest of P0-03; the Runtime's installer and Process Supervisor in P0-05 and P0-10.
+> Status: shell, i18n, the embedded Runtime, offline handling and the first-run wizard (P0-04.1 to P0-04.5): sidebar navigation, placeholder screens, typed IPC, window state, every UI string in `en` and `zh-CN`, the Model Gateway and local SQLite database starting with the app, an offline banner and Store offline panel when the Store is unreachable, and a skippable five-step setup wizard. Provider Connections with encrypted keys on the Models page (P0-03.1), Connection tests and model listing with a "Type a model name" picker (P0-03.2), detection of a running Ollama or LM Studio (P0-03.3), and Default Models (global Slot Bindings) with the Slot resolver behind the Gateway (P0-03.4). Model Overrides and Recommended Models follow in P0-03.5; the Runtime's installer and Process Supervisor in P0-05 and P0-10.
 
 The Harness Store desktop app, built with Electron + React + TypeScript ([ADR-0003](../../docs/adr/0003-typescript-electron-stack.md)).
 
@@ -8,7 +8,7 @@ The Harness Store desktop app, built with Electron + React + TypeScript ([ADR-00
 - **Renderer.** A sandboxed React UI (Library, Store, Models, Publish, Usage, Settings, first-run wizard) with `en` and `zh-CN` catalogs, talking to the Runtime only over typed IPC.
 - It validates every **Manifest** with [`packages/manifest`](../../packages/manifest).
 
-References: [`docs/tech/architecture.md`](../../docs/tech/architecture.md) §2 and §4. Specs: [`P0-04`](../../docs/delivery/specs/P0-04-desktop-shell-i18n-first-run.md), [`P0-05`](../../docs/delivery/specs/P0-05-runtime-launch-and-supervise.md).
+References: [`docs/tech/architecture.md`](../../docs/tech/architecture.md) §2 and §4. Specs: [`P0-03`](../../docs/delivery/specs/P0-03-connections-and-slot-bindings.md), [`P0-04`](../../docs/delivery/specs/P0-04-desktop-shell-i18n-first-run.md), [`P0-05`](../../docs/delivery/specs/P0-05-runtime-launch-and-supervise.md).
 
 ## Layout
 
