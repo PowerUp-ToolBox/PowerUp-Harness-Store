@@ -32,7 +32,8 @@ export async function readSse(response: Response): Promise<SseBody> {
 /** The first choice's delta of each chunk that has one. */
 export function deltas(body: SseBody): Record<string, unknown>[] {
   return body.chunks.flatMap((chunk) => {
-    const [choice] = chunk.choices as { delta: Record<string, unknown> }[];
+    // An error event has no choices.
+    const [choice] = (chunk.choices as { delta: Record<string, unknown> }[] | undefined) ?? [];
     return choice ? [choice.delta] : [];
   });
 }

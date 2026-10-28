@@ -19,3 +19,4 @@ export { MAX_BODY_BYTES } from './body.js';
 export { PROVIDER_IDS } from './providers.js';
 export type { ProviderId } from './providers.js';
 export type { ChatCompletion } from './openai/translate.js';
+export type { ChatCompletionChunk } from './openai/stream.js';

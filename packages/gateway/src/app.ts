@@ -47,6 +47,8 @@ interface AppEnv {
     signal: AbortSignal;
     /** What a chat completion resolved to and got from upstream, for the request log. */
     trace: CompletionTrace;
+    /** Keeps the request in flight past the handler (a stream); returns what ends it. */
+    detach: () => () => void;
   };
 }
 
@@ -122,10 +124,18 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     const flight = inFlight.start(claims.launchId, hashToken(token));
     c.set('claims', claims);
     c.set('signal', flight.signal);
+    // A streamed response outlives the handler; its handler then ends the flight itself.
+    const handover = { detached: false };
+    c.set('detach', () => {
+      handover.detached = true;
+      return () => {
+        flight.end();
+      };
+    });
     try {
       await next();
     } finally {
-      flight.end();
+      if (!handover.detached) flight.end();
     }
     return undefined;
   });
@@ -152,8 +162,8 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
 
   app.post('/v1/chat/completions', (c) =>
     handleChatCompletion(
-      { options, timeouts },
-      { request: c.req.raw, signal: c.var.signal, trace: c.var.trace },
+      { options, timeouts, logger },
+      { request: c.req.raw, signal: c.var.signal, trace: c.var.trace, detach: c.var.detach },
     ),
   );
 
