@@ -9,26 +9,41 @@ import {
   rename,
   rm,
   stat,
+  writeFile,
   type FileHandle,
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { validatePackage, type Manifest, type Platform } from '@harness-store/manifest';
-import { DirectorySource } from '@harness-store/manifest/node';
+import { isDeepStrictEqual } from 'node:util';
+import {
+  PackageReadError,
+  validatePackage,
+  type Manifest,
+  type Platform,
+} from '@harness-store/manifest';
+import { DirectorySource, openArchiveFile } from '@harness-store/manifest/node';
 import type {
+  DownloadProgress,
   FolderInspection,
   InstalledHarness,
   InstalledVersion,
+  InstallSource,
   IpcResult,
   ManifestSummary,
+  StoreInstallRequest,
 } from '../../shared/ipc.js';
 import { entryFor, harnessPaths, isInside, type HarnessPaths } from './harness-paths.js';
 import type { InstallRow, InstallStore } from './install-store.js';
 import { fail, ok } from './ipc-result.js';
+import type { StoreDownloader } from './store-download.js';
 
-/** The `downloads/` folders of an install: its copy of the Harness folder, and the one it replaces. */
+/**
+ * The `downloads/` entries of an install: its copy of the Harness files, the folder it replaces,
+ * and the Harness Package a Store install downloaded (`download-<jobId>.zip`).
+ */
 const STAGING_PREFIX = 'install-';
 const ASIDE_PREFIX = 'replaced-';
+const DOWNLOAD_PREFIX = 'download-';
 
 /** The installer as the IPC handlers use it. */
 export interface InstallsService {
@@ -38,6 +53,15 @@ export interface InstallsService {
   inspectFolder(path: string): Promise<IpcResult<FolderInspection>>;
   /** Validates a Harness folder again, copies it into the install layout and records it. */
   installFromFolder(path: string): Promise<IpcResult<InstalledVersion>>;
+  /**
+   * Downloads the Harness's latest version from the Store and verifies it, up to the consent
+   * dialog: what it shows, once the package waits for consent.
+   */
+  install(request: StoreInstallRequest): Promise<IpcResult<ManifestSummary>>;
+  /** Installs the package of a job waiting for consent: the User consented. */
+  confirm(jobId: string): Promise<IpcResult<InstalledVersion>>;
+  /** Cancels a job that downloads or waits for consent; nothing for any other. */
+  cancel(jobId: string): Promise<void>;
   /** Every installed Harness, the most recently launched first, then by name. */
   list(): Promise<readonly InstalledHarness[]>;
   /**
@@ -63,6 +87,12 @@ export interface InstallerOptions {
   readonly isRunning?: (harnessId: string) => boolean;
   /** Told after an install replaced what `list` returns. */
   readonly onChanged?: (harnessId: string) => void;
+  /** The Store's `download` function and the transfer; without it Store installs are refused. */
+  readonly downloader?: StoreDownloader;
+  /** Told how far a Store install's download is (`progress:<jobId>`). */
+  readonly onProgress?: (jobId: string, progress: DownloadProgress) => void;
+  /** Told when the Store did not answer, so connectivity is checked again. */
+  readonly onStoreUnreachable?: () => void;
   /** The clock of `installed_at`. Default: the system clock. */
   readonly now?: () => Date;
   /** Reports a cleanup that failed after an install was recorded. Default: `console.error`. */
@@ -70,38 +100,57 @@ export interface InstallerOptions {
 }
 
 /**
- * The Runtime's installer for local folders ("Install this folder locally", docs/ux/flows.md F5):
- * the Publisher's way to run their own Harness exactly as Users will, before publishing.
+ * The Runtime's installer. One install code path with two entry points, which differ only in
+ * where the files come from:
  *
- * The renderer inspects the folder first (`inspectFolder`), shows its problems or the consent
- * dialog, and only after the User consented calls `installFromFolder`. That validates the folder
- * again, as it may have changed in between: a folder that no longer validates, or whose Manifest is
- * not the one last inspected, is refused with `package_invalid` and nothing is written. Then:
+ * - **A local folder** ("Install this folder locally", docs/ux/flows.md F5): the Publisher's way
+ *   to run their own Harness exactly as Users will, before publishing. The renderer inspects the
+ *   folder first (`inspectFolder`), shows its problems or the consent dialog, and only after the
+ *   User consented calls `installFromFolder`. That validates the folder again, as it may have
+ *   changed in between: a folder that no longer validates, or whose Manifest is not the one last
+ *   inspected, is refused with `package_invalid` and nothing is written. The files of the
+ *   validated listing are then copied, each opened without following a link that replaced it
+ *   since it was listed.
+ * - **The Store** (flows F2): `install` calls the Store's `download` function for the latest
+ *   version on this platform, writes the Harness's `installs` row in a transient state
+ *   (`downloading`, `verifying`, `awaiting_consent`, then `unpacking`), and streams the Harness
+ *   Package to `downloads/download-<jobId>.zip`. The package must have the size and SHA-256 the
+ *   Store reported (`checksum_mismatch`), validate with `validatePackage` (archive safety
+ *   included: no links, special files, `..` or absolute names) and hold the Manifest the Store
+ *   answered with, as JSON values (`integrity_error`). Only then does it answer the consent
+ *   dialog's facts. `confirm` (the User consented) unpacks the files of the validated listing,
+ *   each read whole so its CRC-32 is checked; `cancel` discards the download. A failed or
+ *   cancelled Store install deletes its row and its download, so nothing is left behind.
  *
- * 1. Exactly the files of the validated listing are copied into a new folder under `downloads/`,
- *    each opened without following a link that replaced it since it was listed. Binary Entries of
- *    every declared platform are made executable (macOS and Linux).
- * 2. That folder is renamed to `harnesses/<publisher>/<slug>/<version>/`. The same version already
- *    installed is replaced; the row is switched to the new version; another version's folder is
- *    deleted after the row no longer names it. One version per Harness is installed.
- * 3. The Data Directory is created if it is missing; a reinstall never touches its content.
- * 4. The `installs` row is written with `source = 'local'` (also over a Store install of the same
- *    Harness ID) and the Declared Permissions as consented.
+ * Then, alike for both:
  *
- * Installs run one at a time, and never while the Harness runs: from the check that it does not
- * run until the install is done, {@link InstallsService.isInstalling} answers true and the
- * Supervisor launches nothing of it. A failure at any step up to writing the row removes what that
- * install created and leaves the previous install as it was. Once the row is written the install
- * has succeeded: deleting the replaced folders and creating the Data Directory are best effort
- * (a failure is logged; a launch creates a missing Data Directory again).
+ * 1. Binary Entries of every declared platform are made executable (macOS and Linux).
+ * 2. The files are renamed from their folder under `downloads/` to
+ *    `harnesses/<publisher>/<slug>/<version>/`. The same version already installed is replaced;
+ *    the row is switched to the new version; another version's folder is deleted after the row
+ *    no longer names it. One version per Harness is installed.
+ * 3. The `installs` row is written, `installed`, with its `source` (`local` also over a Store
+ *    install of the same Harness ID) and the Declared Permissions as consented.
+ * 4. The Data Directory is created if it is missing; a reinstall never touches its content.
+ *
+ * Installs run one at a time from step 1, and never while the Harness runs: from the check that it
+ * does not run until the install is done, {@link InstallsService.isInstalling} answers true and the
+ * Supervisor launches nothing of it. Downloads run side by side, one per Harness: a Harness with a
+ * Store install under way is refused another (`harness_installing`), and so is a folder install of
+ * it. A Store install is never made over an installed Harness (`invalid_input`). A failure at any
+ * step up to writing the row removes what that install created and leaves the previous install as
+ * it was. Once the row is written the install has succeeded: deleting the replaced folders, the
+ * download and creating the Data Directory are best effort (a failure is logged; a launch creates
+ * a missing Data Directory again).
  *
  * A file of the listing the User's account cannot open (left by another user, or with no read
  * permission) is refused with `file_unreadable`, naming it: it is still there when inspected
  * again, so it is never reported as a folder that changed.
  *
- * An install the app quit or crashed in leaves its folders in `downloads/`. Before the first
- * install or listing, the installer puts back a folder moved aside whose install is missing, then
- * deletes what the interrupted installs left there (see {@link recoverInterruptedInstalls}).
+ * An install the app quit or crashed in leaves its row in a transient state and its files in
+ * `downloads/`. Before the first install or listing, the installer deletes those rows, puts back
+ * a folder moved aside whose install is missing, then deletes what the interrupted installs left
+ * there (see {@link recoverInterruptedInstalls}).
  */
 export function createInstaller(options: InstallerOptions): InstallsService {
   const { store, platform } = options;
@@ -118,6 +167,8 @@ export function createInstaller(options: InstallerOptions): InstallsService {
   const icons = new Map<string, string | null>();
   /** The Harnesses whose install is past its checks and not done yet. */
   const installing = new Set<string>();
+  /** The Store installs under way, by job ID. */
+  const jobs = new Map<string, StoreJob>();
   const recovered = recoverInterruptedInstalls(paths, store, logError);
   let queue: Promise<unknown> = recovered;
   const oneAtATime = <T>(work: () => Promise<T>): Promise<T> => {
@@ -140,24 +191,40 @@ export function createInstaller(options: InstallerOptions): InstallsService {
     }
   };
 
-  /** Steps 1 to 4 of an install that passed its checks; see {@link createInstaller}. */
-  const copyAndRecord = async (
+  /** Whether a Store install of the Harness is under way: a job, or a transient row. */
+  const storeInstallUnderWay = (harnessId: string) =>
+    [...jobs.values()].some((job) => job.harnessId === harnessId) ||
+    (store.stateOf(harnessId) ?? 'installed') !== 'installed';
+
+  /**
+   * Why a Store install of the Harness cannot begin now, or null: one is under way, or an install
+   * is putting files in place (`harness_installing`); it is installed (`invalid_input`).
+   */
+  const storeInstallRefusal = (harnessId: string) => {
+    if (storeInstallUnderWay(harnessId) || installing.has(harnessId)) {
+      return fail('harness_installing');
+    }
+    if (store.stateOf(harnessId) === 'installed') {
+      return fail('invalid_input', { method: 'installs.install' });
+    }
+    return null;
+  };
+
+  /**
+   * Steps 1 to 4 of an install that passed its checks (see {@link createInstaller}): `fill` puts
+   * the Harness's files into the new staging folder, or answers why it could not.
+   */
+  const placeAndRecord = async (
     harnessId: string,
-    source: DirectorySource,
     manifest: Manifest,
+    source: InstallSource,
+    fill: (staging: string) => Promise<IpcResult<null>>,
   ): Promise<IpcResult<InstalledVersion>> => {
     const target = paths.installPath(harnessId, manifest.version);
     const staging = join(paths.downloads, `${STAGING_PREFIX}${randomUUID()}`);
     try {
-      try {
-        await copyListedFiles(source, staging);
-      } catch (error) {
-        if (error instanceof FileUnreadableError) {
-          return fail('file_unreadable', { path: error.file });
-        }
-        if (error instanceof FolderChangedError) return fail('package_invalid');
-        throw error;
-      }
+      const filled = await fill(staging);
+      if (!filled.ok) return filled;
       await makeEntriesExecutable(manifest, staging);
       const replaced = await putInPlace(paths, {
         staging,
@@ -172,7 +239,7 @@ export function createInstaller(options: InstallerOptions): InstallsService {
             dataDir: paths.dataDir(harnessId),
             installedAt: now().toISOString(),
             consentedPermissions: manifest.permissions,
-            source: 'local',
+            source,
           });
         },
       });
@@ -191,6 +258,79 @@ export function createInstaller(options: InstallerOptions): InstallsService {
     icons.delete(target);
     options.onChanged?.(harnessId);
     return ok({ harnessId, version: manifest.version });
+  };
+
+  /**
+   * Ends a Store install that did not succeed (or whose download is done with): forgets the job,
+   * deletes its transient row, if any, then its download. The row goes first, in the same step as
+   * the job, so a new install of the Harness can begin at once.
+   */
+  const discard = async (jobId: string, job: StoreJob) => {
+    if (jobs.get(jobId) === job) jobs.delete(jobId);
+    try {
+      store.deleteTransient(job.harnessId);
+    } catch (error) {
+      // The database closed (the app quits): the next start deletes the row.
+      logError(`Could not delete the install row of ${job.harnessId}`, error);
+    }
+    await rm(job.file, { force: true }).catch((error: unknown) => {
+      logError(`Could not delete the download ${job.file}`, error);
+    });
+  };
+
+  /** A Store answer that did not come: connectivity is checked again. */
+  const reported = <T>(result: IpcResult<T>): IpcResult<T> => {
+    if (!result.ok && result.error.code === 'store_unreachable') options.onStoreUnreachable?.();
+    return result;
+  };
+
+  /** The download and checks of a Store install, up to `awaiting_consent`. */
+  const download = async (
+    downloader: StoreDownloader,
+    machine: Platform,
+    jobId: string,
+    job: StoreJob,
+  ): Promise<IpcResult<ManifestSummary>> => {
+    const { harnessId, controller } = job;
+    const cancelled = () => controller.signal.aborted;
+    const ticket = reported(
+      await downloader.ticket({ harnessId, version: null, platform: machine }, controller.signal),
+    );
+    if (!ticket.ok) return ticket;
+    if (cancelled()) return fail('download_cancelled');
+    const { manifest, size } = ticket.data;
+    // A folder install of the Harness may have begun meanwhile.
+    if (installing.has(harnessId) || store.stateOf(harnessId) !== undefined) {
+      return fail(
+        store.stateOf(harnessId) === 'installed' ? 'invalid_input' : 'harness_installing',
+      );
+    }
+    store.begin({
+      harnessId,
+      version: manifest.version,
+      manifest,
+      installPath: paths.installPath(harnessId, manifest.version),
+      dataDir: paths.dataDir(harnessId),
+      installedAt: now().toISOString(),
+      consentedPermissions: manifest.permissions,
+      source: 'store',
+    });
+    await mkdir(paths.downloads, { recursive: true });
+    const fetched = reported(
+      await downloader.fetchPackage(ticket.data, job.file, {
+        signal: controller.signal,
+        onProgress: (received) => options.onProgress?.(jobId, { received, total: size }),
+      }),
+    );
+    if (!fetched.ok) return fetched;
+    store.setState(harnessId, 'verifying');
+    if (!(await holdsManifest(job.file, manifest))) return fail('integrity_error');
+    // Verifying is not interrupted: a Cancel meanwhile is honoured here.
+    if (cancelled()) return fail('download_cancelled');
+    store.setState(harnessId, 'awaiting_consent');
+    job.phase = 'awaiting_consent';
+    job.manifest = manifest;
+    return ok(summarize(manifest, platform));
   };
 
   return {
@@ -229,16 +369,98 @@ export function createInstaller(options: InstallerOptions): InstallsService {
           return fail('package_invalid');
         }
         const harnessId = manifest.id;
-        // No await between this check and marking the install in progress: a launch starting
-        // from then on is refused until it is done.
+        // No await between these checks and marking the install in progress: a launch, or a
+        // Store install, starting from then on is refused until it is done.
+        if (storeInstallUnderWay(harnessId)) return fail('harness_installing');
         if (options.isRunning?.(harnessId) === true) return fail('harness_running');
         installing.add(harnessId);
         try {
-          return await copyAndRecord(harnessId, source, manifest);
+          return await placeAndRecord(harnessId, manifest, 'local', async (staging) => {
+            try {
+              await copyListedFiles(source, staging);
+            } catch (error) {
+              if (error instanceof FileUnreadableError) {
+                return fail('file_unreadable', { path: error.file });
+              }
+              if (error instanceof FolderChangedError) return fail('package_invalid');
+              throw error;
+            }
+            return ok(null);
+          });
         } finally {
           installing.delete(harnessId);
         }
       }),
+
+    async install({ harnessId, jobId }) {
+      await recovered;
+      if (jobs.has(jobId)) return fail('invalid_input', { method: 'installs.install' });
+      const refusal = storeInstallRefusal(harnessId);
+      if (refusal !== null) return refusal;
+      const { downloader } = options;
+      if (downloader === undefined) {
+        return fail('not_implemented', { method: 'installs.install' });
+      }
+      // The Store makes a package for the platforms a Manifest can declare only.
+      if (platform === null) return fail('platform_not_supported');
+      const job: StoreJob = {
+        harnessId,
+        controller: new AbortController(),
+        file: join(paths.downloads, `${DOWNLOAD_PREFIX}${jobId}.zip`),
+        phase: 'downloading',
+        manifest: null,
+      };
+      jobs.set(jobId, job);
+      let result: IpcResult<ManifestSummary> | undefined;
+      try {
+        result = await download(downloader, platform, jobId, job);
+        return result;
+      } finally {
+        // A job cancelled while it was being verified waits for nothing.
+        if (result?.ok !== true || job.controller.signal.aborted) await discard(jobId, job);
+      }
+    },
+
+    async confirm(jobId) {
+      const job = jobs.get(jobId);
+      const manifest = job?.manifest ?? null;
+      if (job?.phase !== 'awaiting_consent' || manifest === null) {
+        return fail('invalid_input', { method: 'installs.confirm' });
+      }
+      const { harnessId } = job;
+      job.phase = 'unpacking';
+      store.setState(harnessId, 'unpacking');
+      try {
+        return await oneAtATime(async () => {
+          // No await between the check and marking the install in progress (see installFromFolder).
+          if (options.isRunning?.(harnessId) === true) return fail('harness_running');
+          installing.add(harnessId);
+          try {
+            return await placeAndRecord(harnessId, manifest, 'store', (staging) =>
+              unpackArchive(job.file, staging),
+            );
+          } finally {
+            installing.delete(harnessId);
+          }
+        });
+      } finally {
+        // Installed (the row is no longer transient, so it is kept) or failed: either way the
+        // download is done with.
+        await discard(jobId, job);
+      }
+    },
+
+    async cancel(jobId) {
+      const job = jobs.get(jobId);
+      if (job === undefined) return;
+      if (job.phase === 'downloading') {
+        // `install` sees it, answers `download_cancelled` and discards the job.
+        job.controller.abort();
+      } else if (job.phase === 'awaiting_consent') {
+        job.controller.abort();
+        await discard(jobId, job);
+      }
+    },
 
     async list() {
       await recovered;
@@ -271,6 +493,18 @@ export function createInstaller(options: InstallerOptions): InstallsService {
   };
 }
 
+/** A Store install under way. */
+interface StoreJob {
+  readonly harnessId: string;
+  /** Aborted by `cancel`. */
+  readonly controller: AbortController;
+  /** Its download, `downloads/download-<jobId>.zip`. */
+  readonly file: string;
+  phase: 'downloading' | 'awaiting_consent' | 'unpacking';
+  /** The Store's Manifest, verified against the package; set once it waits for consent. */
+  manifest: Manifest | null;
+}
+
 /**
  * Installs without a database, when the Runtime could not open it: the window shows only its
  * startup error screen, so nothing is installed and installing answers `not_implemented`.
@@ -282,6 +516,9 @@ export function createInstallsStub(): InstallsService {
       Promise.resolve(fail('not_implemented', { method: 'installs.inspectFolder' })),
     installFromFolder: () =>
       Promise.resolve(fail('not_implemented', { method: 'installs.installFromFolder' })),
+    install: () => Promise.resolve(fail('not_implemented', { method: 'installs.install' })),
+    confirm: () => Promise.resolve(fail('not_implemented', { method: 'installs.confirm' })),
+    cancel: () => Promise.resolve(),
     list: () => Promise.resolve([]),
     isInstalling: () => false,
   };
@@ -388,6 +625,45 @@ async function makeEntriesExecutable(manifest: Manifest, folder: string): Promis
 }
 
 /**
+ * Whether the downloaded Harness Package `file` validates (`validatePackage`, with the archive
+ * safety rules, and nothing that depends on who publishes) and its Manifest is `manifest`, the
+ * Store's, compared as JSON values: the Store keeps it as `jsonb`, so its key order and
+ * whitespace are not the file's. The package's SHA-256 is already checked, so the files unpacked
+ * later are the ones validated here.
+ */
+async function holdsManifest(file: string, manifest: Manifest): Promise<boolean> {
+  try {
+    const result = await validatePackage(await openArchiveFile(file));
+    return result.ok && isDeepStrictEqual(result.manifest, manifest);
+  } catch {
+    return false; // validatePackage throws only what reading the file throws.
+  }
+}
+
+/**
+ * Writes every file of the validated Harness Package `file` into `target`, each read whole (so its
+ * CRC-32 and size are checked) and created new: the archive lists only regular files with safe,
+ * distinct paths, which validation checked. An entry that cannot be read from the zip answers
+ * `integrity_error`; anything else (an I/O error) throws.
+ */
+async function unpackArchive(file: string, target: string): Promise<IpcResult<null>> {
+  const archive = await openArchiveFile(file);
+  for (const path of archive.listFiles()) {
+    let bytes: Uint8Array;
+    try {
+      bytes = await archive.readFile(path);
+    } catch (error) {
+      if (error instanceof PackageReadError) return fail('integrity_error');
+      throw error;
+    }
+    const destination = join(target, ...path.split('/'));
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, bytes, { flag: 'wx' });
+  }
+  return ok(null);
+}
+
+/**
  * Moves the copied files from `staging` to `target` and records the install with `record`. The
  * same version already in `target` is moved aside first, and moved back if anything fails. Returns
  * the folders the caller deletes once the row is written: the one moved aside, and the previous
@@ -451,14 +727,16 @@ async function sameFolder(a: string, b: string): Promise<boolean> {
 }
 
 /**
- * Cleans up after installs the app quit or crashed in, which leave their folders in `downloads/`:
+ * Cleans up after installs the app quit or crashed in, which leave their rows in a transient state
+ * and their files in `downloads/`:
  *
+ * 0. Every transient `installs` row is deleted: none of those installs is running any more.
  * 1. A folder moved aside (`replaced-*`) holds the files of an installed version while the same
  *    version is reinstalled. When its row's install folder is missing (the app stopped between
  *    moving the old folder aside and moving the new one in, or before moving it back), it is moved
  *    back, so the row names the files it was installed with.
- * 2. Every other `replaced-*` folder and every partial copy (`install-*`) is deleted. A folder that
- *    could not be moved back is kept for the next start.
+ * 2. Every other `replaced-*` folder, every partial copy (`install-*`) and every Store download
+ *    (`download-*`) is deleted. A folder that could not be moved back is kept for the next start.
  *
  * Nothing else in `downloads/` is touched. It never throws: a failure is logged, and an install
  * or listing goes ahead.
@@ -468,6 +746,11 @@ async function recoverInterruptedInstalls(
   store: InstallStore,
   logError: (message: string, error: unknown) => void,
 ): Promise<void> {
+  try {
+    store.deleteAllTransient();
+  } catch (error) {
+    logError('Could not delete the rows of interrupted installs', error);
+  }
   let names: string[];
   try {
     names = await readdir(paths.downloads);
@@ -492,7 +775,7 @@ async function recoverInterruptedInstalls(
         logError(`Could not restore the install folder moved aside to ${folder}`, error);
         continue;
       }
-    } else if (!name.startsWith(STAGING_PREFIX)) {
+    } else if (!name.startsWith(STAGING_PREFIX) && !name.startsWith(DOWNLOAD_PREFIX)) {
       continue;
     }
     await rm(folder, { recursive: true, force: true }).catch((error: unknown) => {

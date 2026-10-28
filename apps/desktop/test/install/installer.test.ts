@@ -67,16 +67,9 @@ function installer(
 /** The real store, except that writing a row throws, as a full or locked database would. */
 function storeThatCannotWrite(): InstallStore {
   return {
-    all: () => store.all(),
-    get: (harnessId) => store.get(harnessId),
+    ...store,
     put: () => {
       throw new Error('database is locked');
-    },
-    markLaunched: (harnessId, at) => {
-      store.markLaunched(harnessId, at);
-    },
-    setLastWorkspace: (harnessId, path) => {
-      store.setLastWorkspace(harnessId, path);
     },
   };
 }
@@ -109,17 +102,10 @@ describe('createInstaller', () => {
     let service: ReturnType<typeof installer> | undefined;
     const installing = () => service?.isInstalling('acme/fixture-web') ?? false;
     const watched = (inner: InstallStore): InstallStore => ({
-      all: () => inner.all(),
-      get: (harnessId) => inner.get(harnessId),
+      ...inner,
       put: (install) => {
         seen.push(`put while installing: ${String(installing())}`);
         inner.put(install);
-      },
-      markLaunched: (harnessId, at) => {
-        inner.markLaunched(harnessId, at);
-      },
-      setLastWorkspace: (harnessId, path) => {
-        inner.setLastWorkspace(harnessId, path);
       },
     });
     service = installer({

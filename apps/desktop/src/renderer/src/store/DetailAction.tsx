@@ -4,7 +4,7 @@ import { LaunchAction, useLaunch } from '../library/LaunchAction.js';
 import type { PrimaryActionState } from './primary-action.js';
 
 /** A download in progress (P0-10): how far it is, and how to cancel it. */
-export interface DownloadProgress {
+export interface DetailDownload {
   /** 0 to 100. */
   readonly percent: number;
   readonly onCancel: () => void;
@@ -18,29 +18,35 @@ export interface DetailActionProps {
   /** Its latest launch, for Starting…, Running… and Stopping…. */
   readonly launch: LaunchStatus | undefined;
   /** The download in progress, in the `downloading` state. */
-  readonly download?: DownloadProgress | null;
-  /** Install and Update: P0-10 wires them (flows F2 and F4); until then a click does nothing. */
+  readonly download?: DetailDownload | null;
+  /** Install (flows F2). */
   readonly onInstall?: () => void;
+  /** "Review and install": opens the consent dialog of the download again. */
+  readonly onReview?: () => void;
+  /** Update: P0-10.2 wires it (flows F4); until then a click does nothing. */
+  readonly onUpdate?: () => void;
   /** A launch the Runtime refused, to show under the button; null when one begins. */
   readonly onError: (error: IpcError | null) => void;
 }
 
-/** What Install and Update do until P0-10 wires them: nothing. */
-const noInstallYet = () => undefined;
+/** What a button not wired yet does: nothing. */
+const notYet = () => undefined;
 
 /**
- * The primary button of a Store detail page and its secondary action, for each of the six states
- * of {@link primaryActionState}. Launch is the Library's own button ({@link LaunchAction}), with
- * its Workspace sheet, "Set up a model first" and its Starting…, Running… and Stopping… states, so
+ * The primary button of a Store detail page and its secondary action, for each state of
+ * {@link primaryActionState}. Launch is the Library's own button ({@link LaunchAction}), with its
+ * Workspace sheet, "Set up a model first" and its Starting…, Running… and Stopping… states, so
  * launching from here and from the Library cannot differ; Uninstall, its secondary action, waits
- * for P0-10's uninstall and is disabled.
+ * for P0-10.3's uninstall and is disabled.
  */
 export function DetailAction({
   state,
   install,
   launch,
   download = null,
-  onInstall = noInstallYet,
+  onInstall = notYet,
+  onReview = notYet,
+  onUpdate = notYet,
   onError,
 }: DetailActionProps) {
   const { t } = useI18n();
@@ -69,6 +75,12 @@ export function DetailAction({
           {t('store.detail.install')}
         </button>
       );
+    case 'review':
+      return (
+        <button type="button" className="button-primary" onClick={onReview}>
+          {t('store.detail.review')}
+        </button>
+      );
     case 'unsupported':
       if (install !== null) break;
       return (
@@ -85,7 +97,7 @@ export function DetailAction({
       update={state === 'update'}
       install={install}
       launch={launch}
-      onInstall={onInstall}
+      onUpdate={onUpdate}
       onError={onError}
     />
   );
@@ -101,13 +113,13 @@ function InstalledAction({
   update,
   install,
   launch,
-  onInstall,
+  onUpdate,
   onError,
 }: {
   readonly update: boolean;
   readonly install: InstalledHarness;
   readonly launch: LaunchStatus | undefined;
-  readonly onInstall: () => void;
+  readonly onUpdate: () => void;
   readonly onError: (error: IpcError | null) => void;
 }) {
   const { t } = useI18n();
@@ -120,7 +132,7 @@ function InstalledAction({
         controls={controls}
         lead={
           update ? (
-            <button type="button" className="button-primary" onClick={onInstall}>
+            <button type="button" className="button-primary" onClick={onUpdate}>
               {t('store.detail.update')}
             </button>
           ) : undefined

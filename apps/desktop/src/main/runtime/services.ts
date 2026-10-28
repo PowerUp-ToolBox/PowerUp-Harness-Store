@@ -40,7 +40,7 @@ export interface Services {
   readonly bindings: BindingsService;
   /** The Publisher's sign-in to the Store. */
   readonly auth: Pick<StoreAuth, 'signIn' | 'signOut' | 'whoami'>;
-  /** The installed Harnesses, and installing one from a local folder. */
+  /** The installed Harnesses, and installing one from a local folder or from the Store. */
   readonly installs: InstallsService;
   /** Launching installed Harnesses (the Process Supervisor), and how their launches are going. */
   readonly launch: Pick<

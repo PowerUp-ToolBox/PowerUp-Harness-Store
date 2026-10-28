@@ -2988,3 +2988,26 @@ input[aria-invalid='true'] {
 .card-menu-list [role='menuitem']:focus-visible {
   background: var(--color-bg-subtle);
 }
+
+/* The main window's toast area, bottom-right, over everything but a modal dialog's backdrop. */
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 380px;
+  pointer-events: none;
+}
+
+.toast {
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: var(--color-text);
+  color: var(--color-bg);
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgb(20 21 24 / 30%);
+}

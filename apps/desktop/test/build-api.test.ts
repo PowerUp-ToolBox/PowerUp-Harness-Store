@@ -48,6 +48,9 @@ describe('buildApi (window.api)', () => {
       'chooseFolder',
       'inspectFolder',
       'installFromFolder',
+      'install',
+      'confirm',
+      'cancel',
       'list',
     ]);
     expect(Object.keys(api.launch)).toEqual([

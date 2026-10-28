@@ -44,6 +44,7 @@ import {
 } from './settings-store.js';
 import { createStoreAuth, type StoreAuth, type StoreFetch } from './store-auth.js';
 import { createStoreCatalogue } from './store-catalogue.js';
+import { createStoreDownloader } from './store-download.js';
 import {
   createSupervisor,
   createSupervisorStub,
@@ -333,6 +334,17 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           pickFolder: options.pickFolder ?? (() => Promise.resolve(null)),
           isRunning: (harnessId) => supervisor.isRunning(harnessId),
           onChanged: (harnessId) => options.emit?.('installs.changed', { harnessId }),
+          downloader: createStoreDownloader({
+            fetch: options.storeFetch ?? ((url, init) => globalThis.fetch(url, init)),
+            storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
+            anonKey: options.storeAnonKey ?? storeAnonKey(),
+            appVersion: options.version,
+          }),
+          onProgress: (jobId, progress) => options.emit?.(`progress:${jobId}`, progress),
+          // `connectivity` is created below; this runs only once a download is asked for.
+          onStoreUnreachable: () => {
+            connectivity.reportFailure();
+          },
           logError,
           ...(options.now === undefined ? {} : { now: options.now }),
         });

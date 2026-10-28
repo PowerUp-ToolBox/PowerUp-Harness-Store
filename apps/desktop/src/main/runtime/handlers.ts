@@ -8,6 +8,7 @@ import {
   type LaunchRequest,
   type PublishRequest,
   type StoreHomeRequest,
+  type StoreInstallRequest,
   type StoreSearchRequest,
   type UnpublishRequest,
 } from '../../shared/ipc.js';
@@ -201,6 +202,20 @@ export function createHandlers(services: Services): IpcHandlers {
       }
       return services.installs.installFromFolder(input);
     },
+    'installs.install': (input) => {
+      const request = parseStoreInstallRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'installs.install' });
+      return services.installs.install(request);
+    },
+    'installs.confirm': (input) => {
+      if (!isJobId(input)) return fail('invalid_input', { method: 'installs.confirm' });
+      return services.installs.confirm(input);
+    },
+    'installs.cancel': async (input) => {
+      if (!isJobId(input)) return fail('invalid_input', { method: 'installs.cancel' });
+      await services.installs.cancel(input);
+      return ok(null);
+    },
     'installs.list': async (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'installs.list' });
       return ok(await services.installs.list());
@@ -320,6 +335,16 @@ function parseUnpublishRequest(input: unknown): UnpublishRequest | null {
   if (!harnessId.includes('/')) return null;
   if (typeof version !== 'string' || version === '' || version.length > 256) return null;
   return { harnessId, version };
+}
+
+/** `{ harnessId, jobId }`, a `<publisher>/<slug>` ID and a job ID, nothing else. */
+function parseStoreInstallRequest(input: unknown): StoreInstallRequest | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { harnessId, jobId, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0 || !isHarnessIdInput(harnessId) || !isJobId(jobId)) {
+    return null;
+  }
+  return harnessId.includes('/') ? { harnessId, jobId } : null;
 }
 
 /** `{ archiveId, jobId }`, both IDs, nothing else. */

@@ -10,6 +10,7 @@ import type {
 } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
+import { downloadPercent, useInstallJobs } from '../install/InstallJobsProvider.js';
 import { useLaunchStatus } from '../library/LaunchAction.js';
 import { ListingDetail, type SlotUse } from '../listing/ListingDetail.js';
 import { connectionName } from '../models/names.js';
@@ -34,7 +35,9 @@ const UNANSWERED: IpcError = {
  * card or from a Library card's "View in Store": `store.detail`, read again each time the page
  * opens, shown with the shared {@link ListingDetail} (the Publish preview's too) and the primary
  * button of {@link primaryActionState}. Each Model Slot says what it would use on this machine,
- * from `bindings.resolveManifest`.
+ * from `bindings.resolveManifest`. Install runs the Store install of {@link useInstallJobs}
+ * (flows F2): its progress and Cancel on the button, "Review and install" while its consent
+ * dialog waits, and its error under the button when it failed.
  *
  * A Harness the Store no longer offers (taken down, Unpublished-only, unknown) is the "no longer
  * available" page when it is not installed; an installed one keeps its page, built from its
@@ -49,6 +52,8 @@ export function HarnessDetailPage() {
   const [error, setError] = useState<IpcError | null>(null);
   const install = useInstall(harnessId);
   const launch = useLaunchStatus(harnessId);
+  const installJobs = useInstallJobs();
+  const job = installJobs.jobs.get(harnessId);
   /** Numbers the reads, so only the latest one's answer is shown. */
   const reads = useRef(0);
 
@@ -119,15 +124,40 @@ export function HarnessDetailPage() {
     latestPlatforms: harness?.manifest.platforms ?? [],
     platform: loaded.platform,
     install,
-    downloading: false,
+    downloading: job?.kind === 'downloading',
+    awaitingConsent: job?.kind === 'awaiting_consent' || job?.kind === 'installing',
   });
+  // A launch the Runtime refused, else why the last Store install failed.
+  const shownError = error ?? (job?.kind === 'failed' ? job.error : null);
   const actions = (
     <>
-      <DetailAction state={actionState} install={install} launch={launch} onError={setError} />
+      <DetailAction
+        state={actionState}
+        install={install}
+        launch={launch}
+        download={
+          job?.kind === 'downloading'
+            ? {
+                percent: downloadPercent(job),
+                onCancel: () => {
+                  installJobs.cancel(harnessId);
+                },
+              }
+            : null
+        }
+        onInstall={() => {
+          setError(null);
+          installJobs.install(harnessId);
+        }}
+        onReview={() => {
+          installJobs.review(harnessId);
+        }}
+        onError={setError}
+      />
       {install !== null && harness === null ? (
         <p className="hint">{t('store.detail.notInStore')}</p>
       ) : null}
-      {error === null ? null : <ErrorMessage error={error} />}
+      {shownError === null ? null : <ErrorMessage error={shownError} />}
     </>
   );
 

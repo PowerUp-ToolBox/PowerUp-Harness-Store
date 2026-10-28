@@ -75,6 +75,21 @@ export type IpcErrorCode =
   /** The Publisher cancelled the upload (`publish.cancel`) before it was all sent. */
   | 'upload_cancelled'
   /**
+   * A downloaded Harness Package is not the one the Store described: another size or SHA-256
+   * than its `download` answer. Nothing of it was kept.
+   */
+  | 'checksum_mismatch'
+  /**
+   * A downloaded Harness Package matched the Store's checksum but cannot be installed safely: it
+   * does not validate (an unsafe archive entry included), cannot be unpacked, or its Manifest is
+   * not the one the Store answered with. Nothing of it was kept.
+   */
+  | 'integrity_error'
+  /** The User cancelled the download (`installs.cancel`). Nothing of it was kept. */
+  | 'download_cancelled'
+  /** The Store has no package of this Harness Version for this machine's platform. */
+  | 'platform_not_supported'
+  /**
    * A Harness folder is not (or no longer) a valid Harness Package: it cannot be read, fails
    * validation, or its Manifest changed since `installs.inspectFolder` showed it. The problems
    * themselves come from `installs.inspectFolder`, never in the error.
@@ -320,6 +335,31 @@ export interface IpcMethods {
    */
   'installs.installFromFolder': { input: string; output: InstalledVersion };
   /**
+   * Installs a Harness from the Store (docs/ux/flows.md F2), up to the consent dialog: calls the
+   * Store's `download` function for its latest version on this machine's platform, streams the
+   * Harness Package into the downloads folder (`progress:<jobId>` events report
+   * {@link DownloadProgress}; subscribe before calling), checks its size and SHA-256 against the
+   * Store's, validates it and checks its Manifest is the Store's. Answers what the consent dialog
+   * shows once the package waits for consent: `installs.confirm` installs it, `installs.cancel`
+   * discards it. `invalid_input` for a Harness already installed (also locally) or a job ID in
+   * use; `harness_installing` while it is being installed; `not_found`, `platform_not_supported`,
+   * `store_unreachable`, `store_error`; `checksum_mismatch`, `integrity_error`;
+   * `download_cancelled`. On any failure nothing of the download is left.
+   */
+  'installs.install': { input: StoreInstallRequest; output: ManifestSummary };
+  /**
+   * The User consented: unpacks the package that `installs.install` downloaded for this job into
+   * the install layout and records the install, which `installs.changed` reports. On a failure
+   * (`integrity_error`) nothing is left. `invalid_input` for a job not waiting for consent.
+   */
+  'installs.confirm': { input: string; output: InstalledVersion };
+  /**
+   * Cancels the Store install `jobId` while it downloads (its `installs.install` then answers
+   * `download_cancelled`) or waits for consent, deleting what it downloaded. Once it is
+   * unpacking it changes nothing, and neither does an unknown or finished job.
+   */
+  'installs.cancel': { input: string; output: null };
+  /**
    * Every installed Harness: the most recently launched first, then the never-launched ones, by
    * name.
    */
@@ -552,6 +592,22 @@ export interface AppNavigate {
 
 /** Where an installed Harness Package came from: the Store, or a local folder. */
 export type InstallSource = 'store' | 'local';
+
+/** Which Harness to install from the Store, and the job its progress events are named after. */
+export interface StoreInstallRequest {
+  readonly harnessId: string;
+  /** Chosen by the renderer (a UUID): the events are `progress:<jobId>`. */
+  readonly jobId: string;
+}
+
+/**
+ * The payload of `progress:<jobId>` for a download: bytes of the Harness Package received so far,
+ * of the size the Store reported.
+ */
+export interface DownloadProgress {
+  readonly received: number;
+  readonly total: number;
+}
 
 /** The facts of a valid Manifest that the install consent dialog shows. */
 export interface ManifestSummary {
@@ -1152,6 +1208,9 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'installs.chooseFolder': true,
   'installs.inspectFolder': true,
   'installs.installFromFolder': true,
+  'installs.install': true,
+  'installs.confirm': true,
+  'installs.cancel': true,
   'installs.list': true,
   'launch.start': true,
   'launch.chooseWorkspace': true,
@@ -1172,8 +1231,9 @@ export const IPC_METHODS = Object.freeze(Object.keys(METHOD_NAMES) as IpcMethodN
 
 /**
  * Events main pushes to the renderer: name → payload. `progress:<jobId>` is reserved for
- * long-running jobs (downloads, uploads, launch readiness); its payload is defined by its first
- * producer: `publish.publish`'s is {@link UploadProgress}.
+ * long-running jobs (downloads, uploads, launch readiness); its payload is defined by its
+ * producer: `publish.publish`'s is {@link UploadProgress}, `installs.install`'s
+ * {@link DownloadProgress}.
  */
 export interface IpcEvents {
   /** The Store's connectivity changed; sent on every change, never twice for the same state. */
