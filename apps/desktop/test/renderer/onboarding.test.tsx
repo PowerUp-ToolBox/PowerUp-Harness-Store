@@ -628,6 +628,26 @@ describe('Remote Provider without a model list', () => {
   });
 });
 
+describe('Remote Provider with a catalogue (Anthropic, Google)', () => {
+  it("tests with the catalogue's model unless the User names another", async () => {
+    const api = installFreshProfile();
+    api.connections.add.mockImplementation(connectionFor('anthropic', 'Anthropic', []));
+    await renderApp('');
+    await click('Continue');
+    await click('Skip');
+    const model = screen.getByLabelText<HTMLInputElement>('Model to test with (optional)');
+    expect(model.placeholder).toBe('claude-haiku-5-5');
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-ant-0123456789' } });
+    fireEvent.change(model, { target: { value: ' claude-sonnet-5-5 ' } });
+    await click('Test connection');
+    expect(api.connections.add).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'anthropic',
+      apiKey: 'sk-ant-0123456789',
+      testModel: 'claude-sonnet-5-5',
+    });
+  });
+});
+
 describe('the Default Model picker', () => {
   /** The wizard at its Default Model step, with `connection` added on the Remote Provider step. */
   async function openDefaultStep(connection: ConnectionSummary) {

@@ -124,6 +124,7 @@ describe('adding a Connection for a key-based Provider', () => {
       lastTestedAt: T0,
       lastTestOk: true,
       lastTestError: null,
+      lastTestFailure: null,
       // The app's catalogue, known without a network call.
       models: ANTHROPIC_MODELS,
     });
@@ -147,6 +148,7 @@ describe('adding a Connection for a key-based Provider', () => {
         last_tested_at: T0,
         last_test_ok: 1,
         last_test_error: null,
+        last_test_failure: null,
       },
     ]);
     // Nothing the renderer is given holds the key.
@@ -168,7 +170,11 @@ describe('adding a Connection for a key-based Provider', () => {
   });
 
   it('stores nothing when the test fails, and answers provider_error with the Provider text', async () => {
-    tester.mockResolvedValueOnce({ ok: false, detail: 'Incorrect API key provided.' });
+    tester.mockResolvedValueOnce({
+      ok: false,
+      reason: 'provider_error',
+      detail: 'Incorrect API key provided.',
+    });
     await expect(
       service.add({ providerId: 'anthropic', apiKey: ANTHROPIC_KEY }),
     ).resolves.toMatchObject({
@@ -388,7 +394,11 @@ describe('updating a Connection', () => {
   });
 
   it('keeps everything as it was when the test of a new key fails', async () => {
-    tester.mockResolvedValueOnce({ ok: false, detail: 'invalid x-api-key' });
+    tester.mockResolvedValueOnce({
+      ok: false,
+      reason: 'provider_error',
+      detail: 'invalid x-api-key',
+    });
     await expect(
       service.update({ id: 'anthropic', apiKey: 'sk-ant-bad-key-0000' }),
     ).resolves.toMatchObject({ ok: false, error: { code: 'provider_error' } });
@@ -573,7 +583,11 @@ describe('testing a saved Connection', () => {
   });
 
   it("stores a failed test with the Provider's own text; the call itself still succeeds", async () => {
-    tester.mockResolvedValueOnce({ ok: false, detail: 'Incorrect API key provided.' });
+    tester.mockResolvedValueOnce({
+      ok: false,
+      reason: 'provider_error',
+      detail: 'Incorrect API key provided.',
+    });
     const failed = await service.test({ id: 'openai' });
     expect(failed).toMatchObject({
       ok: true,
@@ -595,7 +609,7 @@ describe('testing a saved Connection', () => {
       // The User saves a new key (which passes its own test) before this test answers.
       tester.mockResolvedValueOnce({ ok: true });
       data(await service.update({ id: 'openai', apiKey: 'sk-proj-replaced-wxyz' }));
-      return { ok: false, detail: 'Incorrect API key provided.' };
+      return { ok: false, reason: 'provider_error', detail: 'Incorrect API key provided.' };
     });
     const result = data(await service.test({ id: 'openai' }));
     expect(result).toMatchObject({ keyHint: 'wxyz', lastTestOk: true, lastTestError: null });
@@ -629,6 +643,56 @@ describe('testing a saved Connection', () => {
     // Renaming or disabling runs no test, so needs none.
     expect(data(await service.update({ id: 'zhipu', enabled: false })).enabled).toBe(false);
   });
+
+  it("tests Anthropic and Google with the catalogue's model, or with one the User names", async () => {
+    data(await service.add({ providerId: 'google', apiKey: 'AIza-google-key-0123456789' }));
+    expect(tester).toHaveBeenLastCalledWith({
+      providerId: 'google',
+      apiKey: 'AIza-google-key-0123456789',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    });
+    // A key that cannot use the catalogue's test model is tested with another one.
+    data(await service.test({ id: 'google', model: 'gemini-3.6-flash' }));
+    expect(tester).toHaveBeenLastCalledWith(
+      expect.objectContaining({ providerId: 'google', model: 'gemini-3.6-flash' }),
+    );
+    data(
+      await service.update({
+        id: 'google',
+        apiKey: 'AIza-google-key-replaced-wxyz',
+        testModel: 'gemini-3.8-flash',
+      }),
+    );
+    expect(tester).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'gemini-3.8-flash' }));
+  });
+
+  it.each([
+    { reason: 'provider_timeout', label: 'did not answer in time' },
+    { reason: 'unexpected_response', label: 'answered with something its API does not return' },
+  ] as const)(
+    'stores a failed test whose Provider $label as a reason, with no app-written text',
+    async ({ reason }) => {
+      tester.mockResolvedValueOnce({ ok: false, reason });
+      const failed = data(await service.test({ id: 'openai' }));
+      expect(failed).toMatchObject({
+        lastTestOk: false,
+        lastTestError: null,
+        lastTestFailure: reason,
+      });
+      expect(connectionRows()[0]).toMatchObject({
+        last_test_ok: 0,
+        last_test_error: null,
+        last_test_failure: reason,
+      });
+
+      const passed = data(await service.test({ id: 'openai' }));
+      expect(passed).toMatchObject({
+        lastTestOk: true,
+        lastTestError: null,
+        lastTestFailure: null,
+      });
+    },
+  );
 
   it.each([
     { reason: 'an unknown id', request: { id: 'anthropic' } },
@@ -676,9 +740,22 @@ describe('model listing', () => {
     expect(lister).not.toHaveBeenCalled();
   });
 
+  it('answers a listing that timed out with provider_timeout', async () => {
+    data(await service.add({ providerId: 'groq', apiKey: 'gsk_0123456789abcdef' }));
+    lister.mockResolvedValueOnce({ ok: false, reason: 'provider_timeout' });
+    await expect(service.models('groq')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'provider_timeout', messageKey: 'error.provider_timeout' },
+    });
+  });
+
   it("does not keep a failed listing, and answers provider_error with the Provider's text", async () => {
     data(await service.add({ providerId: 'groq', apiKey: 'gsk_0123456789abcdef' }));
-    lister.mockResolvedValueOnce({ ok: false, detail: 'Invalid API Key' });
+    lister.mockResolvedValueOnce({
+      ok: false,
+      reason: 'provider_error',
+      detail: 'Invalid API Key',
+    });
     await expect(service.models('groq')).resolves.toMatchObject({
       ok: false,
       error: { code: 'provider_error', params: { detail: 'Invalid API Key' } },
@@ -692,7 +769,30 @@ describe('model listing', () => {
     });
   });
 
-  it('forgets the list when the key or base URL changes, or the Connection is removed', async () => {
+  it('forgets the list when the key changes', async () => {
+    data(await service.add({ providerId: 'groq', apiKey: 'gsk_0123456789abcdef' }));
+    lister.mockResolvedValueOnce({ ok: true, models: [{ id: 'llama-old-key' }] });
+    expect(data(await service.models('groq'))).toEqual([{ id: 'llama-old-key' }]);
+    expect(lister).toHaveBeenCalledTimes(1);
+
+    // The new key's test lists no models, so only a new listing can know them.
+    data(await service.update({ id: 'groq', apiKey: 'gsk_replaced_key_wxyz' }));
+    expect(service.list()[0]?.models).toEqual([]);
+    lister.mockResolvedValueOnce({ ok: true, models: [{ id: 'llama-new-key' }] });
+    expect(data(await service.models('groq'))).toEqual([{ id: 'llama-new-key' }]);
+    expect(lister).toHaveBeenCalledTimes(2);
+    expect(lister).toHaveBeenLastCalledWith(
+      expect.objectContaining({ apiKey: 'gsk_replaced_key_wxyz' }),
+    );
+
+    // Where the new key's test lists models, they replace the old list: no listing is needed.
+    tester.mockResolvedValueOnce({ ok: true, models: [{ id: 'llama-third-key' }] });
+    data(await service.update({ id: 'groq', apiKey: 'gsk_third_key_0000' }));
+    expect(data(await service.models('groq'))).toEqual([{ id: 'llama-third-key' }]);
+    expect(lister).toHaveBeenCalledTimes(2);
+  });
+
+  it('forgets the list when the base URL changes, or the Connection is removed', async () => {
     data(await service.add({ providerId: 'ollama' }));
     data(await service.models('ollama'));
     data(await service.update({ id: 'ollama', enabled: false }));
@@ -732,8 +832,43 @@ describe('testing a draft', () => {
     ).resolves.toEqual({ ok: true, data: { models: MODEL_CATALOGUE.anthropic } });
   });
 
+  it.each([
+    {
+      reason: 'provider_timeout',
+      message: 'The Provider did not answer in time.',
+    },
+    {
+      reason: 'unexpected_response',
+      message: 'The Provider answered with something its API does not return. Check the base URL.',
+    },
+  ] as const)(
+    'answers a test that failed as $reason with that code',
+    async ({ reason, message }) => {
+      tester.mockResolvedValueOnce({ ok: false, reason });
+      await expect(
+        service.testDraft({ providerId: 'openai-compatible', baseUrl: 'http://10.0.0.1' }),
+      ).resolves.toEqual({
+        ok: false,
+        error: { code: reason, messageKey: `error.${reason}`, message },
+      });
+      tester.mockResolvedValueOnce({ ok: false, reason });
+      await expect(
+        service.add({
+          providerId: 'openai-compatible',
+          displayName: 'Box',
+          baseUrl: 'http://10.0.0.1',
+        }),
+      ).resolves.toMatchObject({ ok: false, error: { code: reason } });
+      expect(connectionRows()).toEqual([]);
+    },
+  );
+
   it("answers a failed test with provider_error and the Provider's text", async () => {
-    tester.mockResolvedValueOnce({ ok: false, detail: 'invalid x-api-key' });
+    tester.mockResolvedValueOnce({
+      ok: false,
+      reason: 'provider_error',
+      detail: 'invalid x-api-key',
+    });
     await expect(
       service.testDraft({ providerId: 'anthropic', apiKey: ANTHROPIC_KEY }),
     ).resolves.toMatchObject({

@@ -12,6 +12,7 @@ const IPC_OWN_CODES = [
   'invalid_input',
   'not_implemented',
   'encryption_unavailable',
+  'unexpected_response',
 ] as const;
 
 describe('catalog parity (CI)', () => {

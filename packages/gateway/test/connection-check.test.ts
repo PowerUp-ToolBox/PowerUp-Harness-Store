@@ -61,7 +61,11 @@ describe('OpenAI-wire Providers that list their models', () => {
       apiKey: 'sk-wrong-key-0123456789',
       fetch: globalThis.fetch,
     });
-    expect(tested).toEqual({ ok: false, detail: 'Incorrect API key provided.' });
+    expect(tested).toEqual({
+      ok: false,
+      reason: 'provider_error',
+      detail: 'Incorrect API key provided.',
+    });
   });
 
   it('send no Authorization header without a key', async () => {
@@ -77,11 +81,12 @@ describe('OpenAI-wire Providers that list their models', () => {
     });
     expect(tested).toMatchObject({
       ok: false,
+      reason: 'provider_error',
       detail: expect.stringMatching(/^fetch failed: .*ECONNREFUSED/) as string,
     });
   });
 
-  it('report a Provider that does not answer in time', async () => {
+  it('report a Provider that does not answer in time as a timeout, with no app-written text', async () => {
     const hanging: typeof globalThis.fetch = (_input, init) =>
       new Promise((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => {
@@ -94,17 +99,38 @@ describe('OpenAI-wire Providers that list their models', () => {
       fetch: hanging,
       timeoutMs: 20,
     });
-    expect(tested).toEqual({ ok: false, detail: 'The Provider sent no response within 20 ms.' });
+    expect(tested).toEqual({ ok: false, reason: 'provider_timeout' });
   });
 
-  it('fail the listing when the answer is not a model list', async () => {
+  it('fail the listing as an unexpected response when the answer is not a model list', async () => {
     const notAList: typeof globalThis.fetch = () => Promise.resolve(Response.json({ models: [] }));
     await expect(
       listModels({ providerId: 'deepseek', apiKey: KEY, fetch: notAList }),
-    ).resolves.toMatchObject({
-      ok: false,
-      detail: expect.stringContaining('model list') as string,
-    });
+    ).resolves.toEqual({ ok: false, reason: 'unexpected_response' });
+  });
+
+  it('fail the test as an unexpected response when the answer is not JSON', async () => {
+    const webPage: typeof globalThis.fetch = () =>
+      Promise.resolve(new Response('<!doctype html><title>Router</title>', { status: 200 }));
+    await expect(
+      testConnection({
+        providerId: 'openai-compatible',
+        baseUrl: 'http://10.0.0.1',
+        fetch: webPage,
+      }),
+    ).resolves.toEqual({ ok: false, reason: 'unexpected_response' });
+  });
+
+  it('throw for a target the caller should have checked: an unknown Provider, no base URL', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    await expect(testConnection({ providerId: 'acme', fetch })).rejects.toThrow(
+      'Unknown Provider acme.',
+    );
+    await expect(listModels({ providerId: 'acme', fetch })).rejects.toThrow('Unknown Provider');
+    await expect(listModels({ providerId: 'openai-compatible', fetch })).rejects.toThrow(
+      /no base URL/,
+    );
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('redact the key from error text the Provider echoes', async () => {
@@ -114,7 +140,11 @@ describe('OpenAI-wire Providers that list their models', () => {
       );
     await expect(
       testConnection({ providerId: 'moonshot', apiKey: KEY, fetch: echoing }),
-    ).resolves.toEqual({ ok: false, detail: 'Key [redacted] is revoked.' });
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'provider_error',
+      detail: 'Key [redacted] is revoked.',
+    });
   });
 });
 
@@ -133,7 +163,7 @@ describe('Providers without a model list or catalogue (Zhipu, MiniMax, Doubao)',
     ]);
   });
 
-  it('fail the test with the Provider text for a bad key, and without a model name', async () => {
+  it('fail the test with the Provider text for a bad key, and throw without a model name', async () => {
     await expect(
       testConnection({
         providerId: 'doubao',
@@ -142,10 +172,14 @@ describe('Providers without a model list or catalogue (Zhipu, MiniMax, Doubao)',
         model: 'glm-4.5',
         fetch: globalThis.fetch,
       }),
-    ).resolves.toEqual({ ok: false, detail: 'Incorrect API key provided.' });
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'provider_error',
+      detail: 'Incorrect API key provided.',
+    });
     await expect(
       testConnection({ providerId: 'minimax', apiKey: KEY, fetch: globalThis.fetch }),
-    ).resolves.toEqual({ ok: false, detail: 'Name a model to test this Provider with.' });
+    ).rejects.toThrow('Testing the Provider minimax needs a model name.');
   });
 
   it('list nothing: the User types the model name', async () => {
@@ -231,6 +265,7 @@ describe('Anthropic and Google', () => {
     status = 401;
     await expect(testConnection({ providerId: 'anthropic', apiKey: KEY, fetch })).resolves.toEqual({
       ok: false,
+      reason: 'provider_error',
       detail: 'invalid x-api-key',
     });
   });
@@ -254,15 +289,32 @@ describe('Anthropic and Google', () => {
       testConnection({ providerId: 'google', apiKey: KEY, fetch }),
     ).resolves.toMatchObject({ ok: true, models: MODEL_CATALOGUE.google });
     expect(requests[0]?.url).toBe(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent',
     );
     expect(requests[0]?.body).toMatchObject({ generationConfig: { maxOutputTokens: 1 } });
 
     status = 400;
     await expect(testConnection({ providerId: 'google', apiKey: KEY, fetch })).resolves.toEqual({
       ok: false,
+      reason: 'provider_error',
       detail: 'API key not valid.',
     });
+  });
+
+  it('test with the model the User names instead of the catalogue one', async () => {
+    const { fetch, requests } = cannedFetch(() =>
+      Response.json({
+        candidates: [
+          { content: { role: 'model', parts: [{ text: 'Hi' }] }, finishReason: 'MAX_TOKENS' },
+        ],
+      }),
+    );
+    await expect(
+      testConnection({ providerId: 'google', apiKey: KEY, model: 'gemini-3.6-flash', fetch }),
+    ).resolves.toMatchObject({ ok: true, models: MODEL_CATALOGUE.google });
+    expect(requests[0]?.url).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent',
+    );
   });
 });
 
@@ -295,6 +347,7 @@ describe('OpenRouter', () => {
     await expect(testConnection({ providerId: 'openrouter', apiKey: KEY, fetch })).resolves.toEqual(
       {
         ok: false,
+        reason: 'provider_error',
         detail: 'User not found.',
       },
     );

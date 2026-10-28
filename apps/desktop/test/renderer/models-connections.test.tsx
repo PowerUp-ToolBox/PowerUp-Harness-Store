@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type {
   ConnectionDraft,
   ConnectionSummary,
+  ConnectionTestFailure,
+  ConnectionTestPassed,
   ConnectionTestRequest,
   ConnectionUpdate,
   GlobalBinding,
@@ -27,8 +29,11 @@ const VLLM = connectionSummary({
   baseUrl: 'http://10.0.0.2:8000/v1',
 });
 
-/** What connections.test finds next: a pass, or the Provider's error text. */
-let nextTest: { readonly ok: true } | { readonly ok: false; readonly detail: string } = {
+/** What connections.test finds next: a pass, the Provider's error text, or a reason without one. */
+let nextTest:
+  | { readonly ok: true }
+  | { readonly ok: false; readonly detail: string }
+  | { readonly ok: false; readonly failure: ConnectionTestFailure } = {
   ok: true,
 };
 
@@ -83,7 +88,8 @@ function installConnections(initial: readonly ConnectionSummary[], locale: 'en' 
       ...current,
       lastTestedAt: '2026-10-28T09:00:00.000Z',
       lastTestOk: nextTest.ok,
-      lastTestError: nextTest.ok ? null : nextTest.detail,
+      lastTestError: 'detail' in nextTest ? nextTest.detail : null,
+      lastTestFailure: 'failure' in nextTest ? nextTest.failure : null,
     };
     connections = connections.map((item) => (item.id === next.id ? next : item));
     return Promise.resolve({ ok: true, data: next });
@@ -233,6 +239,72 @@ describe('Test connection on a row', () => {
     nextTest = { ok: true };
     await click(screen.getByRole('button', { name: 'Test Anthropic' }));
     expect(within(rowFor('Anthropic')).queryByText('invalid x-api-key')).toBeNull();
+  });
+
+  it('says in the UI language that a test timed out, with no English Provider text', async () => {
+    installConnections([ANTHROPIC], 'zh-CN');
+    nextTest = { ok: false, failure: 'provider_timeout' };
+    await openModels();
+    await click(screen.getByRole('button', { name: '测试 Anthropic' }));
+    expect(rowFor('Anthropic').querySelector('.status-chip')?.textContent).toBe('连接失败');
+    expect(within(rowFor('Anthropic')).getByText('Provider 响应超时。')).toBeDefined();
+    expect(rowFor('Anthropic').querySelector('.connection-row-error')).toBeNull();
+  });
+
+  it('says that an endpoint answered with something other than its API', async () => {
+    installConnections([VLLM]);
+    nextTest = { ok: false, failure: 'unexpected_response' };
+    await openModels();
+    await click(screen.getByRole('button', { name: 'Test vLLM' }));
+    expect(
+      within(rowFor('vLLM')).getByText(
+        'The Provider answered with something its API does not return. Check the base URL.',
+      ),
+    ).toBeDefined();
+  });
+
+  it('keeps each row testing until its own test ends, while tests of other rows run', async () => {
+    const api = installConnections([ANTHROPIC, OLLAMA]);
+    const pending = new Map<string, () => void>();
+    const recorded = api.connections.test.getMockImplementation();
+    api.connections.test.mockImplementation(
+      (request: ConnectionTestRequest) =>
+        new Promise((resolve) => {
+          pending.set(request.id, () => {
+            if (recorded !== undefined) void recorded(request).then(resolve);
+          });
+        }),
+    );
+    await openModels();
+    const testButton = (name: string) => screen.getByRole('button', { name: `Test ${name}` });
+    await click(testButton('Anthropic'));
+    await click(testButton('Ollama'));
+    for (const name of ['Anthropic', 'Ollama']) {
+      expect(testButton(name).hasAttribute('disabled')).toBe(true);
+      expect(testButton(name).textContent).toBe('Testing…');
+    }
+
+    // Ollama answers first: Anthropic's test is still running, so its row keeps waiting.
+    await act(async () => {
+      pending.get('ollama')?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(testButton('Ollama').hasAttribute('disabled')).toBe(false);
+    expect(testButton('Anthropic').hasAttribute('disabled')).toBe(true);
+    expect(testButton('Anthropic').textContent).toBe('Testing…');
+    await click(testButton('Anthropic'));
+    expect(api.connections.test).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      pending.get('anthropic')?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(testButton('Anthropic').hasAttribute('disabled')).toBe(false);
+    expect(rowFor('Anthropic').querySelector('.status-chip')?.textContent).toBe('Connected');
   });
 
   it('asks for the model to test with where the Provider lists none', async () => {
@@ -482,6 +554,42 @@ describe('Add Connection', () => {
       providerId: 'zhipu',
       apiKey: 'zhipu-key-0123456789',
       testModel: 'glm-4.5',
+    });
+  });
+
+  it("lets the User replace a catalogued Provider's test model, which is optional", async () => {
+    const api = await openAdd();
+    api.connections.testDraft.mockResolvedValue({
+      ok: true,
+      data: { models: [] } satisfies ConnectionTestPassed,
+    });
+    await click(within(dialog()).getByRole('button', { name: 'Anthropic' }));
+    const model = within(dialog()).getByLabelText<HTMLInputElement>(
+      'Model to test with (optional)',
+    );
+    expect(model.placeholder).toBe('claude-haiku-5-5');
+    expect(
+      within(dialog()).getByText(
+        'Leave this empty to test with claude-haiku-5-5, or name another model your key can use.',
+      ),
+    ).toBeDefined();
+    fireEvent.change(within(dialog()).getByLabelText('API key'), { target: { value: KEY } });
+    fireEvent.change(model, { target: { value: 'claude 5' } });
+    await click(dialogButton('Test connection'));
+    expect(within(dialog()).getByText('A model name has no spaces.')).toBeDefined();
+    expect(api.connections.testDraft).not.toHaveBeenCalled();
+
+    fireEvent.change(model, { target: { value: ' claude-sonnet-5-5 ' } });
+    await testThenSave();
+    expect(api.connections.testDraft).toHaveBeenCalledWith({
+      providerId: 'anthropic',
+      apiKey: KEY,
+      testModel: 'claude-sonnet-5-5',
+    });
+    expect(api.connections.add).toHaveBeenCalledWith({
+      providerId: 'anthropic',
+      apiKey: KEY,
+      testModel: 'claude-sonnet-5-5',
     });
   });
 

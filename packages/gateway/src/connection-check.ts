@@ -4,13 +4,18 @@
  * the models a Connection offers. Both go through the same adapters, `fetch` wrapper and error
  * mapper as the Gateway's upstream calls, so a key never appears in what they report and a
  * passing test means the Gateway reaches the same place.
+ *
+ * A failure says why in `reason`, and only text that came from the Provider (or from the
+ * transport, such as "fetch failed: connect ECONNREFUSED …") is passed on as `detail`: the desktop
+ * app shows `detail` verbatim and translates every other reason itself.
  */
 import { APICallError, generateText } from 'ai';
 import { createLanguageModel } from './adapters.js';
 import { catalogueModels } from './catalogue.js';
 import type { ModelInfo } from './catalogue.js';
-import { isProviderFailure, providerError, providerTimeout } from './provider-errors.js';
+import { isProviderFailure, providerError } from './provider-errors.js';
 import { findProvider } from './providers.js';
+import type { ProviderInfo } from './providers.js';
 import { createUpstreamFetch } from './upstream-fetch.js';
 
 /** How long a test or a listing waits for the Provider, in milliseconds: 15 s. */
@@ -29,38 +34,48 @@ export interface CheckTarget {
   timeoutMs?: number;
 }
 
+/**
+ * Why a test or listing failed:
+ *
+ * - `provider_error`: the Provider answered with an error, or could not be reached; `detail` is
+ *   its own text (or the transport's), with the key redacted.
+ * - `provider_timeout`: the Provider sent nothing within the timeout.
+ * - `unexpected_response`: the Provider answered, but not with what its API returns (not JSON, or
+ *   not a model list), as a base URL pointing at some other web page does.
+ */
+export type CheckFailure =
+  | { ok: false; reason: 'provider_error'; detail: string }
+  | { ok: false; reason: 'provider_timeout' }
+  | { ok: false; reason: 'unexpected_response' };
+
 /** The models of a Connection, or why they could not be listed. */
-export type ModelListResult =
-  { ok: true; models: readonly ModelInfo[] } | { ok: false; detail: string };
+export type ModelListResult = { ok: true; models: readonly ModelInfo[] } | CheckFailure;
 
 /**
  * A test result: on success, the models the test found (absent when it listed none, an
- * OpenRouter key check whose listing failed say); on failure, the Provider's own error text.
+ * OpenRouter key check whose listing failed say); on failure, why.
  */
-export type ConnectionTestOutcome =
-  { ok: true; models?: readonly ModelInfo[] } | { ok: false; detail: string };
+export type ConnectionTestOutcome = { ok: true; models?: readonly ModelInfo[] } | CheckFailure;
 
 /**
  * The models a Connection offers: the catalogue for Anthropic and Google (no network call),
  * `GET {baseUrl}/models` for every Provider that lists its models (`data[].id`, with the key as a
  * Bearer token when there is one), and an empty list for the rest, where the User types a model
  * name.
+ *
+ * @throws for a Provider the Gateway does not serve, or one without a base URL of its own when
+ *   the target names none: the caller checks both first.
  */
 export async function listModels(target: CheckTarget): Promise<ModelListResult> {
   const catalogue = catalogueModels(target.providerId);
   if (catalogue !== undefined) return { ok: true, models: catalogue };
-  const provider = findProvider(target.providerId);
-  if (provider === undefined)
-    return { ok: false, detail: `Unknown Provider ${target.providerId}.` };
+  const provider = providerOf(target);
   if (!provider.supportsModelList) return { ok: true, models: [] };
   const response = await get(target, 'models');
   if (!response.ok) return response;
   const models = modelIds(response.body);
   return models === undefined
-    ? {
-        ok: false,
-        detail: 'The Provider answered GET /models with something other than a model list.',
-      }
+    ? { ok: false, reason: 'unexpected_response' }
     : { ok: true, models: models.map((id) => ({ id })) };
 }
 
@@ -72,13 +87,13 @@ export async function listModels(target: CheckTarget): Promise<ModelListResult> 
  * - Every other Provider that lists its models: `GET {baseUrl}/models`, whose list is returned.
  * - Anthropic and Google: a 1-token completion with the catalogue's test model (or `model`).
  * - The rest (Zhipu, MiniMax, Doubao): a 1-token completion with `model`, which the User names.
+ *
+ * @throws as {@link listModels} does, and for a Provider of the last kind without `model`.
  */
 export async function testConnection(
   target: CheckTarget & { model?: string },
 ): Promise<ConnectionTestOutcome> {
-  const provider = findProvider(target.providerId);
-  if (provider === undefined)
-    return { ok: false, detail: `Unknown Provider ${target.providerId}.` };
+  const provider = providerOf(target);
   if (provider.id === 'openrouter') {
     const key = await get(target, 'key');
     if (!key.ok) return key;
@@ -88,18 +103,29 @@ export async function testConnection(
   if (provider.supportsModelList) return listModels(target);
   const catalogue = catalogueModels(target.providerId);
   const model = target.model ?? catalogue?.find((entry) => entry.test)?.id;
-  if (model === undefined) return { ok: false, detail: 'Name a model to test this Provider with.' };
+  if (model === undefined) {
+    throw new TypeError(`Testing the Provider ${provider.id} needs a model name.`);
+  }
   const completed = await completeOneToken(target, model);
   if (!completed.ok) return completed;
   return catalogue === undefined ? { ok: true } : { ok: true, models: catalogue };
 }
 
-type GetResult = { ok: true; body: unknown } | { ok: false; detail: string };
+/** The Provider serving `target`; throws for one the Gateway does not serve. */
+function providerOf(target: CheckTarget): ProviderInfo {
+  const provider = findProvider(target.providerId);
+  if (provider === undefined) throw new TypeError(`Unknown Provider ${target.providerId}.`);
+  return provider;
+}
+
+type GetResult = { ok: true; body: unknown } | CheckFailure;
 
 /** `GET {baseUrl}/{path}` with the Gateway's timeouts, the key as a Bearer token when there is one. */
 async function get(target: CheckTarget, path: string): Promise<GetResult> {
   const baseUrl = target.baseUrl ?? findProvider(target.providerId)?.baseUrl;
-  if (baseUrl === undefined) return { ok: false, detail: 'The Connection has no base URL.' };
+  if (baseUrl === undefined) {
+    throw new TypeError(`The Connection to ${target.providerId} has no base URL.`);
+  }
   const timeoutMs = target.timeoutMs ?? CHECK_TIMEOUT_MS;
   const upstream = createUpstreamFetch({ firstByteMs: timeoutMs, idleMs: timeoutMs }, target.fetch);
   const url = `${baseUrl.replace(/\/+$/, '')}/${path}`;
@@ -124,22 +150,17 @@ async function get(target: CheckTarget, path: string): Promise<GetResult> {
       });
       return {
         ok: false,
+        reason: 'provider_error',
         detail: providerError(error, target.apiKey).fields.provider_message as string,
       };
     }
     try {
       return { ok: true, body: JSON.parse(text) as unknown };
     } catch {
-      return {
-        ok: false,
-        detail: `The Provider answered GET /${path} with something other than JSON.`,
-      };
+      return { ok: false, reason: 'unexpected_response' };
     }
   } catch (error) {
-    return {
-      ok: false,
-      detail: failureText(error, upstream.timedOut, upstream.status, timeoutMs, target.apiKey),
-    };
+    return failure(error, upstream.timedOut, target.apiKey);
   }
 }
 
@@ -147,7 +168,7 @@ async function get(target: CheckTarget, path: string): Promise<GetResult> {
 async function completeOneToken(
   target: CheckTarget,
   model: string,
-): Promise<{ ok: true } | { ok: false; detail: string }> {
+): Promise<{ ok: true } | CheckFailure> {
   const timeoutMs = target.timeoutMs ?? CHECK_TIMEOUT_MS;
   const upstream = createUpstreamFetch({ firstByteMs: timeoutMs, idleMs: timeoutMs }, target.fetch);
   try {
@@ -167,10 +188,7 @@ async function completeOneToken(
     });
     return { ok: true };
   } catch (error) {
-    return {
-      ok: false,
-      detail: failureText(error, upstream.timedOut, upstream.status, timeoutMs, target.apiKey),
-    };
+    return failure(error, upstream.timedOut, target.apiKey);
   }
 }
 
@@ -180,14 +198,8 @@ async function completeOneToken(
  * (a bare "fetch failed" becomes "fetch failed: connect ECONNREFUSED 127.0.0.1:11434"). The key
  * is redacted throughout.
  */
-function failureText(
-  error: unknown,
-  timedOut: boolean,
-  status: number | undefined,
-  timeoutMs: number,
-  apiKey: string | undefined,
-): string {
-  if (timedOut) return providerTimeout(timeoutMs, status === undefined).message;
+function failure(error: unknown, timedOut: boolean, apiKey: string | undefined): CheckFailure {
+  if (timedOut) return { ok: false, reason: 'provider_timeout' };
   let text = isProviderFailure(error)
     ? (providerError(error, apiKey).fields.provider_message as string)
     : error instanceof Error
@@ -198,7 +210,11 @@ function failureText(
     if (cause.message !== '' && !text.includes(cause.message)) text = `${text}: ${cause.message}`;
     cause = cause.cause;
   }
-  return redact(text === '' ? 'The Provider call failed.' : text, apiKey);
+  return {
+    ok: false,
+    reason: 'provider_error',
+    detail: redact(text === '' ? 'The Provider call failed.' : text, apiKey),
+  };
 }
 
 function redact(text: string, apiKey: string | undefined): string {

@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -160,6 +161,34 @@ describe('testing a Connection', () => {
       }),
     ).resolves.toEqual({ ok: true, data: { models: FAKE_MODELS } });
     await expect(call('connections.list')).resolves.toEqual({ ok: true, data: [] });
+  });
+
+  it("a base URL that serves a web page fails as unexpected_response, in the catalogs' words", async () => {
+    const page = createHttpServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<!doctype html><title>Router login</title>');
+    });
+    await new Promise<void>((resolve) => page.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = page.address();
+      if (typeof address !== 'object' || address === null) throw new Error('No port');
+      await expect(
+        call('connections.testDraft', {
+          providerId: 'openai-compatible',
+          baseUrl: `http://127.0.0.1:${String(address.port)}`,
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: {
+          code: 'unexpected_response',
+          messageKey: 'error.unexpected_response',
+          message:
+            'The Provider answered with something its API does not return. Check the base URL.',
+        },
+      });
+    } finally {
+      await new Promise((resolve) => page.close(resolve));
+    }
   });
 
   it('adding against a port nothing listens on fails, with the cause', async () => {

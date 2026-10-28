@@ -74,8 +74,9 @@ export interface ConnectionDialogProps {
  * Provider that allows one Connection and already has it opens that Connection to edit, since
  * adding it again would edit it anyway. The form shows a name for the custom endpoint, the key
  * field where the Provider takes one (optional for the custom endpoint), and the base URL with the
- * Provider's default as its placeholder, and "Model to test with" where the Provider lists no
- * models and is not in the app's catalogue. A saved key is never shown: the field stays empty,
+ * Provider's default as its placeholder, and "Model to test with": required where the Provider
+ * lists no models and is not in the app's catalogue, optional (in place of the catalogue's test
+ * model, the placeholder) for Anthropic and Google. A saved key is never shown: the field stays empty,
  * and a new key replaces it.
  *
  * Test connection checks the fields (the rules of shared/connection-input.ts, which the Runtime
@@ -249,6 +250,8 @@ function ConnectionForm({
   };
 
   const showKey = preset.requiresKey || preset.custom;
+  /** Required where the Provider lists no models; optional where the catalogue names one. */
+  const showTestModel = preset.needsTestModel || preset.testModel !== null;
   const hasStoredKey = editing !== undefined && editing.keyHint !== null;
   const key = parseApiKey(apiKey);
   /** A new Connection, or a new key or base URL: what Save would test, so Test must pass first. */
@@ -288,9 +291,9 @@ function ConnectionForm({
     const url = parseBaseUrl(baseUrl);
     if (url === null) found.baseUrl = 'base_url_invalid';
     else if (url === undefined && preset.custom) found.baseUrl = 'base_url_required';
-    if (preset.needsTestModel && testing) {
+    if (showTestModel && testing) {
       const model = testModel.trim();
-      if (model === '') found.testModel = 'test_model_required';
+      if (model === '' && preset.needsTestModel) found.testModel = 'test_model_required';
       else if (/\s/.test(model)) found.testModel = 'test_model_invalid';
     }
     return found;
@@ -306,7 +309,8 @@ function ConnectionForm({
   };
 
   const typedKey = key ?? undefined;
-  const typedTestModel = preset.needsTestModel ? { testModel: testModel.trim() } : {};
+  const typedTestModel =
+    showTestModel && testModel.trim() !== '' ? { testModel: testModel.trim() } : {};
 
   const runTest = async () => {
     setError(null);
@@ -486,15 +490,18 @@ function ConnectionForm({
           )}
           {urlField.message}
         </div>
-        {preset.needsTestModel ? (
+        {showTestModel ? (
           <div className="field">
-            <label htmlFor={`${ids}-test-model`}>{t('models.test_model')}</label>
+            <label htmlFor={`${ids}-test-model`}>
+              {preset.needsTestModel ? t('models.test_model') : t('models.test_model_optional')}
+            </label>
             <input
               id={`${ids}-test-model`}
               ref={fields.testModel}
               spellCheck={false}
               autoComplete="off"
               value={testModel}
+              placeholder={preset.testModel ?? undefined}
               onChange={(event) => {
                 editCredentials(() => {
                   setTestModel(event.target.value);
@@ -503,7 +510,9 @@ function ConnectionForm({
               {...testModelField.input}
             />
             <p id={`${ids}-test-model-hint`} className="field-hint">
-              {t('models.test_model_hint')}
+              {preset.testModel === null
+                ? t('models.test_model_hint')
+                : t('models.test_model_default_hint', { model: preset.testModel })}
             </p>
             {testModelField.message}
           </div>

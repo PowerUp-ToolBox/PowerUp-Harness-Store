@@ -48,6 +48,7 @@ export const FAKE_PRESETS: readonly ProviderPreset[] = [
     supportsModelList: false,
     keyPlaceholder: 'sk-ant-...',
     needsTestModel: false,
+    testModel: 'claude-haiku-5-5',
   },
   {
     id: 'openai',
@@ -60,6 +61,7 @@ export const FAKE_PRESETS: readonly ProviderPreset[] = [
     supportsModelList: true,
     keyPlaceholder: 'sk-...',
     needsTestModel: false,
+    testModel: null,
   },
   {
     id: 'ollama',
@@ -72,6 +74,7 @@ export const FAKE_PRESETS: readonly ProviderPreset[] = [
     supportsModelList: true,
     keyPlaceholder: '',
     needsTestModel: false,
+    testModel: null,
   },
   {
     id: 'openai-compatible',
@@ -84,6 +87,7 @@ export const FAKE_PRESETS: readonly ProviderPreset[] = [
     supportsModelList: true,
     keyPlaceholder: '',
     needsTestModel: false,
+    testModel: null,
   },
 ];
 
@@ -99,6 +103,7 @@ export const ZHIPU_PRESET: ProviderPreset = {
   supportsModelList: false,
   keyPlaceholder: '',
   needsTestModel: true,
+  testModel: null,
 };
 
 /** A saved Connection as `connections.list` answers it; `overrides` change any field. */
@@ -117,6 +122,7 @@ export function connectionSummary(
     lastTestedAt: null,
     lastTestOk: null,
     lastTestError: null,
+    lastTestFailure: null,
     models: [],
     ...overrides,
   };
@@ -131,8 +137,9 @@ export interface FakeApiOptions {
  * A fake `window.api` whose settings behave like the Runtime's: `osLocale` stands in for
  * `app.getLocale()` and an override set through `settings.set` wins over it. The Runtime started
  * fine, the Store is online, there are no Connections or Slot Bindings, detection finds nothing,
- * changing Connections answers `not_implemented`, every test passes finding no models and no
- * Connection lists any; a test changes `app.status`,
+ * `connections.add`, `update`, `remove` and `test` (of a saved Connection) answer
+ * `not_implemented`, `connections.testDraft` passes finding no models and `connections.models`
+ * lists none; a test changes `app.status`,
  * `diagnostics.get`, the `connectivity`, `connections` or `bindings` methods before rendering to
  * say otherwise, and pushes events with `emit`.
  */

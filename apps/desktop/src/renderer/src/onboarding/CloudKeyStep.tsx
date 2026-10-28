@@ -49,7 +49,9 @@ export interface CloudKeyStepProps {
 /**
  * The optional remote Provider: a preset from `providers.list` other than the local ones (the
  * custom OpenAI-compatible endpoint also asks for a name and a base URL, and a Provider that lists
- * no models for the model to test with), an API key, and Test connection, which adds the Connection when the test succeeds (`connections.add`). Before it
+ * no models for the model to test with, which Anthropic and Google take optionally in place of
+ * their catalogue's), an API key, and Test connection, which adds the Connection when the test
+ * succeeds (`connections.add`). Before it
  * calls the Runtime, the test checks the fields with the rules of shared/connection-input.ts, as
  * the Models page dialog does, and shows a problem under its field; a custom endpoint's name is
  * checked against the saved Connections (`connections.list`). A failed test shows the error inline
@@ -104,11 +106,14 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
   }, []);
 
   const preset = presets?.find((item) => item.id === providerId);
+  /** Required where the Provider lists no models; optional where the catalogue names one. */
+  const showTestModel =
+    preset !== undefined && (preset.needsTestModel || preset.testModel !== null);
   /** Only the fields the chosen preset shows count: hidden custom fields are not sent. */
   const formEmpty =
     apiKey.trim() === '' &&
     (preset?.custom !== true || (displayName.trim() === '' && baseUrl.trim() === '')) &&
-    (preset?.needsTestModel !== true || testModel.trim() === '');
+    (!showTestModel || testModel.trim() === '');
   const formComplete =
     preset !== undefined &&
     (!preset.requiresKey || apiKey.trim() !== '') &&
@@ -136,7 +141,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
   const check = async (preset: ProviderPreset): Promise<Problems> => {
     const found: { -readonly [K in keyof Problems]: Problems[K] } = {};
     if (parseApiKey(apiKey) === null) found.apiKey = 'key_invalid';
-    if (preset.needsTestModel && /\s/.test(testModel.trim())) {
+    if (showTestModel && /\s/.test(testModel.trim())) {
       found.testModel = 'test_model_invalid';
     }
     if (!preset.custom) return found;
@@ -176,7 +181,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
       providerId: preset.id,
       ...(key === undefined ? {} : { apiKey: key }),
       ...(preset.custom ? { displayName: displayName.trim(), baseUrl: baseUrl.trim() } : {}),
-      ...(preset.needsTestModel ? { testModel: testModel.trim() } : {}),
+      ...(showTestModel && testModel.trim() !== '' ? { testModel: testModel.trim() } : {}),
     };
     const result = await window.api.connections.add(draft);
     if (result.ok) onAdded(result.data);
@@ -309,15 +314,18 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
             />
             {keyField.message}
           </div>
-          {preset?.needsTestModel === true ? (
+          {showTestModel ? (
             <div className="field field-wide">
-              <label htmlFor="onboarding-test-model">{t('models.test_model')}</label>
+              <label htmlFor="onboarding-test-model">
+                {preset.needsTestModel ? t('models.test_model') : t('models.test_model_optional')}
+              </label>
               <input
                 id="onboarding-test-model"
                 ref={fields.testModel}
                 spellCheck={false}
                 autoComplete="off"
                 value={testModel}
+                placeholder={preset.testModel ?? undefined}
                 disabled={testing}
                 onChange={(event) => {
                   edit(() => {
@@ -333,7 +341,9 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
                   .join(' ')}
               />
               <p id="onboarding-test-model-hint" className="field-hint">
-                {t('models.test_model_hint')}
+                {preset.testModel === null
+                  ? t('models.test_model_hint')
+                  : t('models.test_model_default_hint', { model: preset.testModel })}
               </p>
               {testModelField.message}
             </div>

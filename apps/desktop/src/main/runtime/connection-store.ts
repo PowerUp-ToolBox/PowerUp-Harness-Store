@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { GlobalBinding } from '../../shared/ipc.js';
+import type { ConnectionTestFailure, GlobalBinding } from '../../shared/ipc.js';
 import { transaction } from './database.js';
 
 /** One row of the `connections` table, camel-cased. */
@@ -16,6 +16,7 @@ export interface ConnectionRow {
   readonly lastTestedAt: string | null;
   readonly lastTestOk: boolean | null;
   readonly lastTestError: string | null;
+  readonly lastTestFailure: ConnectionTestFailure | null;
 }
 
 /**
@@ -54,6 +55,7 @@ interface SqlConnectionRow {
   last_tested_at: string | null;
   last_test_ok: number | null;
   last_test_error: string | null;
+  last_test_failure: ConnectionTestFailure | null;
 }
 
 function fromSql(row: SqlConnectionRow): ConnectionRow {
@@ -68,6 +70,7 @@ function fromSql(row: SqlConnectionRow): ConnectionRow {
     lastTestedAt: row.last_tested_at,
     lastTestOk: row.last_test_ok === null ? null : row.last_test_ok === 1,
     lastTestError: row.last_test_error,
+    lastTestFailure: row.last_test_failure,
   };
 }
 
@@ -89,14 +92,14 @@ export function createConnectionStore(
   const upsertConnection = db.prepare(
     `INSERT INTO connections (
        id, provider_id, display_name, base_url, secret_ref, key_hint, enabled,
-       last_tested_at, last_test_ok, last_test_error
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       last_tested_at, last_test_ok, last_test_error, last_test_failure
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (id) DO UPDATE SET
        provider_id = excluded.provider_id, display_name = excluded.display_name,
        base_url = excluded.base_url, secret_ref = excluded.secret_ref,
        key_hint = excluded.key_hint, enabled = excluded.enabled,
        last_tested_at = excluded.last_tested_at, last_test_ok = excluded.last_test_ok,
-       last_test_error = excluded.last_test_error`,
+       last_test_error = excluded.last_test_error, last_test_failure = excluded.last_test_failure`,
   );
   const deleteBindings = db.prepare('DELETE FROM slot_bindings WHERE provider_id = ?');
   const deleteConnection = db.prepare('DELETE FROM connections WHERE id = ?');
@@ -130,6 +133,7 @@ export function createConnectionStore(
           row.lastTestedAt,
           row.lastTestOk === null ? null : row.lastTestOk ? 1 : 0,
           row.lastTestError,
+          row.lastTestFailure,
         );
       });
     },

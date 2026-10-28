@@ -863,6 +863,12 @@ input[type='password'] {
   word-break: break-all;
 }
 
+/* A failure the app describes itself (a timeout, a reply that is not the API's), in the UI language. */
+.connection-row-failure {
+  color: var(--color-error);
+  font-size: 12px;
+}
+
 .connection-row-actions {
   display: flex;
   flex-wrap: wrap;

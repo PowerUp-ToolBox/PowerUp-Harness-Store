@@ -147,8 +147,17 @@ describe('providers.list', () => {
       supportsModelList: false,
       keyPlaceholder: 'sk-ant-...',
       needsTestModel: false,
+      testModel: 'claude-haiku-5-5',
     });
     expect(presets.find((preset) => preset.custom)).toMatchObject({ baseUrl: null });
+    // The catalogue's test model, which the User may replace; none where there is no catalogue.
+    expect(presets.find((preset) => preset.id === 'google')).toMatchObject({
+      testModel: 'gemini-3.5-flash-lite',
+    });
+    expect(presets.filter((preset) => preset.testModel !== null).map(({ id }) => id)).toEqual([
+      'anthropic',
+      'google',
+    ]);
     expect(presets.filter((preset) => preset.needsTestModel).map((preset) => preset.id)).toEqual([
       'zhipu',
       'minimax',

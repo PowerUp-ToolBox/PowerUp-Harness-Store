@@ -3,7 +3,12 @@
  * app's model pickers and requirement checks rely on.
  */
 import { describe, expect, it } from 'vitest';
-import { MODEL_CATALOGUE, catalogueModels, needsTestModel } from '../src/catalogue.js';
+import {
+  MODEL_CATALOGUE,
+  catalogueModels,
+  catalogueTestModel,
+  needsTestModel,
+} from '../src/catalogue.js';
 import { PROVIDERS, isModelName } from '../src/providers.js';
 
 describe('MODEL_CATALOGUE', () => {
@@ -45,11 +50,18 @@ describe('MODEL_CATALOGUE', () => {
   );
 });
 
-describe('catalogueModels and needsTestModel', () => {
+describe('catalogueModels, catalogueTestModel and needsTestModel', () => {
   it('finds the catalogue by Provider id, and nothing for the others', () => {
     expect(catalogueModels('anthropic')).toBe(MODEL_CATALOGUE.anthropic);
     expect(catalogueModels('openai')).toBeUndefined();
     expect(catalogueModels('toString')).toBeUndefined();
+  });
+
+  it('names the test model of a catalogued Provider: its smallest current model', () => {
+    expect(catalogueTestModel('anthropic')).toBe('claude-haiku-5-5');
+    // Google serves the 2.5 models only to projects that used them before; new keys need 3.x.
+    expect(catalogueTestModel('google')).toBe('gemini-3.5-flash-lite');
+    expect(catalogueTestModel('openai')).toBeUndefined();
   });
 
   it('asks for a test model only where there is neither a model list nor a catalogue', () => {

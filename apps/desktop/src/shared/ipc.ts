@@ -10,7 +10,7 @@
 import type { Locale } from './i18n/locale.js';
 
 /**
- * Error codes the Runtime returns over IPC: its own four, then every Model Gateway code
+ * Error codes the Runtime returns over IPC: its own five, then every Model Gateway code
  * (`GATEWAY_ERROR_STATUS` in @harness-store/gateway; a test keeps the two lists in step). Each has
  * an `error.<code>` entry in both message catalogs.
  */
@@ -23,6 +23,11 @@ export type IpcErrorCode =
    * key cannot be stored. It is never stored in plaintext instead.
    */
   | 'encryption_unavailable'
+  /**
+   * A Connection test or model listing reached something that answered, but not with what the
+   * Provider's API returns (not JSON, or not a model list): usually a wrong base URL.
+   */
+  | 'unexpected_response'
   | 'invalid_request'
   | 'invalid_token'
   | 'invalid_host'
@@ -82,7 +87,8 @@ export interface IpcMethods {
   'connections.list': { input: undefined; output: readonly ConnectionSummary[] };
   /**
    * Checks the draft, tests the Connection and saves it, with the passed test, when the test
-   * passes; a failed test stores nothing and answers `provider_error`. Adding a Provider that allows one Connection and already
+   * passes; a failed test stores nothing and answers `provider_error`, `provider_timeout` or
+   * `unexpected_response`. Adding a Provider that allows one Connection and already
    * has it edits that Connection in place (and enables it). A key is stored only encrypted:
    * without OS encryption, a draft with a key answers `encryption_unavailable`.
    */
@@ -94,21 +100,22 @@ export interface IpcMethods {
   'connections.update': { input: ConnectionUpdate; output: ConnectionSummary };
   /**
    * Tests a saved Connection with one small real request and stores the result
-   * (`lastTestedAt`, `lastTestOk`, `lastTestError`). A failed test is not an IPC failure: the
-   * Connection comes back with `lastTestOk: false` and the Provider's text in `lastTestError`.
+   * (`lastTestedAt`, `lastTestOk`, `lastTestError`, `lastTestFailure`). A failed test is not an IPC
+   * failure: the Connection comes back with `lastTestOk: false` and the Provider's text in
+   * `lastTestError`, or the reason without one in `lastTestFailure`.
    * `model` names the model to test with, required where the Provider `needsTestModel`.
    */
   'connections.test': { input: ConnectionTestRequest; output: ConnectionSummary };
   /**
    * Tests what a Connection form holds, without saving anything: for a new Connection, or for the
    * saved one `id` with the fields left out taken from it (its stored key included). A failed test
-   * answers `provider_error` with the Provider's text.
+   * answers `provider_error` with the Provider's text, `provider_timeout` or `unexpected_response`.
    */
   'connections.testDraft': { input: ConnectionTestDraft; output: ConnectionTestPassed };
   /**
    * The models a Connection offers: the app's catalogue for Anthropic and Google, a live listing
    * where the Provider lists its models (reused for 10 minutes), else none. A failed listing
-   * answers `provider_error` with the Provider's text; the User can still type a model name.
+   * answers as a failed test does; the User can still type a model name.
    */
   'connections.models': { input: string; output: readonly ModelInfo[] };
   /**
@@ -191,6 +198,12 @@ export interface ProviderPreset {
    * models nor is in the app's catalogue (Zhipu, MiniMax, Doubao).
    */
   readonly needsTestModel: boolean;
+  /**
+   * The catalogue model a Connection test calls unless the User names another (Anthropic,
+   * Google); null where there is none. Naming another keeps a key that cannot use this one, or an
+   * app whose catalogue has aged, from blocking the Connection.
+   */
+  readonly testModel: string | null;
 }
 
 /** A local Provider found running on this machine, not yet added as a Connection. */
@@ -213,7 +226,10 @@ export interface ConnectionDraft {
   readonly displayName?: string;
   /** Required for the custom endpoint; absent or empty means the Provider's default. */
   readonly baseUrl?: string;
-  /** The model the test sends a 1-token completion to; required where `needsTestModel`. */
+  /**
+   * The model the test sends a 1-token completion to: required where `needsTestModel`, and
+   * replacing the preset's `testModel` where it has one; ignored by the other Providers.
+   */
   readonly testModel?: string;
 }
 
@@ -287,14 +303,23 @@ export interface ConnectionSummary {
   /** When the Connection was last tested, ISO-8601 UTC; null when never. */
   readonly lastTestedAt: string | null;
   readonly lastTestOk: boolean | null;
-  /** The Provider's own error text from the last failed test. */
+  /** The Provider's own error text from the last failed test, when it sent some. */
   readonly lastTestError: string | null;
+  /**
+   * Why the last test failed when there is no Provider text to show: the Provider did not answer
+   * in time, or answered with something its API does not return. The UI shows the
+   * `error.<lastTestFailure>` catalog entry. Null otherwise.
+   */
+  readonly lastTestFailure: ConnectionTestFailure | null;
   /**
    * The model names known without a network call: the catalogue's, or a live listing from the
    * last 10 minutes; empty otherwise. `connections.models` lists them with what is known of each.
    */
   readonly models: readonly string[];
 }
+
+/** A failed Connection test's reason, where the Provider sent no text of its own. */
+export type ConnectionTestFailure = 'provider_timeout' | 'unexpected_response';
 
 /** A global Slot Binding: the Default Model for one Slot name. */
 export interface GlobalBinding {

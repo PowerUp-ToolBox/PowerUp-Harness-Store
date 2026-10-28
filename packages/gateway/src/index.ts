@@ -19,9 +19,19 @@ export type { GatewayErrorBody, GatewayErrorCode, GatewayErrorType } from './err
 export { MAX_BODY_BYTES } from './body.js';
 export { PROVIDERS, PROVIDER_IDS, findProvider, isModelName, isProviderId } from './providers.js';
 export type { AdapterKind, ProviderId, ProviderInfo } from './providers.js';
-export { MODEL_CATALOGUE, catalogueModels, needsTestModel } from './catalogue.js';
+export {
+  MODEL_CATALOGUE,
+  catalogueModels,
+  catalogueTestModel,
+  needsTestModel,
+} from './catalogue.js';
 export type { CatalogueModel, CatalogueProviderId, ModelInfo } from './catalogue.js';
 export { CHECK_TIMEOUT_MS, listModels, testConnection } from './connection-check.js';
-export type { CheckTarget, ConnectionTestOutcome, ModelListResult } from './connection-check.js';
+export type {
+  CheckFailure,
+  CheckTarget,
+  ConnectionTestOutcome,
+  ModelListResult,
+} from './connection-check.js';
 export type { ChatCompletion } from './openai/translate.js';
 export type { ChatCompletionChunk } from './openai/stream.js';

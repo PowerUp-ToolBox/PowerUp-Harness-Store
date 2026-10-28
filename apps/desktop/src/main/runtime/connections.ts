@@ -1,11 +1,13 @@
 import {
   PROVIDERS,
   catalogueModels,
+  catalogueTestModel,
   findProvider,
   isModelName,
   listModels,
   needsTestModel,
   testConnection,
+  type CheckFailure,
   type ProviderInfo,
 } from '@harness-store/gateway';
 import {
@@ -54,6 +56,7 @@ export function providerPresets(
     supportsModelList: provider.supportsModelList,
     keyPlaceholder: provider.keyPlaceholder,
     needsTestModel: needsTestModel(provider.id),
+    testModel: catalogueTestModel(provider.id) ?? null,
   }));
 }
 
@@ -68,20 +71,19 @@ export interface ConnectionUnderTest {
 }
 
 /**
- * A passed test carries the models it found, when it listed them; a failed one the Provider's own
- * error text, with the key redacted.
+ * A passed test carries the models it found, when it listed them; a failed one why
+ * ({@link CheckFailure}): the Provider's own error text, with the key redacted, or a reason the UI
+ * translates.
  */
 export type ConnectionTestResult =
-  | { readonly ok: true; readonly models?: readonly ModelInfo[] }
-  | { readonly ok: false; readonly detail: string };
+  { readonly ok: true; readonly models?: readonly ModelInfo[] } | CheckFailure;
 
 /** Makes a small real request to check that a Connection works. */
 export type ConnectionTester = (connection: ConnectionUnderTest) => Promise<ConnectionTestResult>;
 
-/** The models a Connection offers, or the Provider's error text. */
+/** The models a Connection offers, or why they could not be listed. */
 export type ModelListing =
-  | { readonly ok: true; readonly models: readonly ModelInfo[] }
-  | { readonly ok: false; readonly detail: string };
+  { readonly ok: true; readonly models: readonly ModelInfo[] } | CheckFailure;
 
 /** Lists the models of a Connection. */
 export type ModelLister = (connection: ConnectionUnderTest) => Promise<ModelListing>;
@@ -149,7 +151,7 @@ export interface ConnectionsServiceOptions {
  * from the name it was added with.
  *
  * Every test that runs is recorded on the Connection (`lastTestedAt`, `lastTestOk`,
- * `lastTestError`): the one `add` and a credential change in `update` pass before saving, and
+ * `lastTestError`, `lastTestFailure`): the one `add` and a credential change in `update` pass before saving, and
  * each `test`. Live model listings are kept for 10 minutes per Connection; the models of a passed
  * test fill that cache too, and a new key or base URL, or removing the Connection, empties it.
  */
@@ -176,6 +178,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
     lastTestedAt: now().toISOString(),
     lastTestOk: true,
     lastTestError: null,
+    lastTestFailure: null,
   });
 
   const summarize = (row: ConnectionRow): ConnectionSummary => ({
@@ -189,6 +192,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
     lastTestedAt: row.lastTestedAt,
     lastTestOk: row.lastTestOk,
     lastTestError: row.lastTestError,
+    lastTestFailure: row.lastTestFailure,
     models: knownModels(row).map((model) => model.id),
   });
 
@@ -295,7 +299,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
       const keptKey = key.key === undefined && existing !== undefined ? existing : undefined;
       const apiKey = key.key ?? (keptKey === undefined ? undefined : await storedKey(keptKey));
       const tested = await runTest(provider, apiKey, baseUrl, testModel.model);
-      if (!tested.ok) return fail('provider_error', { detail: tested.detail });
+      if (!tested.ok) return failedCheck(tested);
       const ciphertext = key.key === undefined ? undefined : await cipher.encrypt(key.key);
 
       // From here on nothing awaits, so the checks and the write see the same rows. The name is
@@ -364,7 +368,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
           newBaseUrl ? (changes.baseUrl ?? null) : row.baseUrl,
           testModel?.model,
         );
-        if (!tested.ok) return fail('provider_error', { detail: tested.detail });
+        if (!tested.ok) return failedCheck(tested);
         listed = tested.models;
         Object.assign(changes, passed());
         if (key.key !== undefined) {
@@ -410,7 +414,8 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
             ...current,
             lastTestedAt: now().toISOString(),
             lastTestOk: false,
-            lastTestError: tested.detail,
+            lastTestError: tested.reason === 'provider_error' ? tested.detail : null,
+            lastTestFailure: tested.reason === 'provider_error' ? null : tested.reason,
           };
       store.save(next);
       if (tested.ok) remember(row.id, provider, tested.models);
@@ -438,7 +443,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
 
       const apiKey = key.key ?? (saved === undefined ? undefined : await storedKey(saved));
       const tested = await runTest(provider, apiKey, baseUrl, testModel.model);
-      if (!tested.ok) return fail('provider_error', { detail: tested.detail });
+      if (!tested.ok) return failedCheck(tested);
       return ok({ models: tested.models ?? catalogueModels(provider.id) ?? [] });
     },
 
@@ -458,7 +463,7 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
         ...(row.secretRef === null ? {} : { apiKey: await storedKey(row) }),
         baseUrl: effectiveBaseUrl(row.baseUrl, provider),
       });
-      if (!listed.ok) return fail('provider_error', { detail: listed.detail });
+      if (!listed.ok) return failedCheck(listed);
       // Kept only while the credentials it was listed with are still the Connection's.
       const current = store.get(row.id);
       if (current !== undefined && credentialsOf(current) === credentials) {
@@ -503,6 +508,16 @@ export async function decryptSecret(
   const ciphertext = store.secret(secretRef);
   if (ciphertext === undefined) throw new Error(`The secret ${secretRef} is missing.`);
   return cipher.decrypt(ciphertext);
+}
+
+/**
+ * A failed test or listing as an IPC failure: `provider_error` with the Provider's own text, else
+ * `provider_timeout` or `unexpected_response`, whose messages are the catalogs' own.
+ */
+function failedCheck(failure: CheckFailure) {
+  return failure.reason === 'provider_error'
+    ? fail('provider_error', { detail: failure.detail })
+    : fail(failure.reason);
 }
 
 /**

@@ -40,10 +40,10 @@ export const MODEL_CATALOGUE: Readonly<Record<CatalogueProviderId, readonly Cata
     { id: 'claude-haiku-5-5', contextWindow: 1_000_000, tools: true, vision: true, test: true },
   ],
   google: [
-    { id: 'gemini-2.5-pro', contextWindow: 1_048_576, tools: true, vision: true },
-    { id: 'gemini-2.5-flash', contextWindow: 1_048_576, tools: true, vision: true },
+    { id: 'gemini-4-argon', contextWindow: 1_048_576, tools: true, vision: true },
+    { id: 'gemini-3.8-flash', contextWindow: 1_048_576, tools: true, vision: true },
     {
-      id: 'gemini-2.5-flash-lite',
+      id: 'gemini-3.5-flash-lite',
       contextWindow: 1_048_576,
       tools: true,
       vision: true,
@@ -57,6 +57,14 @@ export function catalogueModels(providerId: string): readonly CatalogueModel[] |
   return Object.hasOwn(MODEL_CATALOGUE, providerId)
     ? MODEL_CATALOGUE[providerId as CatalogueProviderId]
     : undefined;
+}
+
+/**
+ * The catalogue model a Connection test calls for `providerId` unless the User names another;
+ * `undefined` for a Provider the catalogue does not cover.
+ */
+export function catalogueTestModel(providerId: string): string | undefined {
+  return catalogueModels(providerId)?.find((model) => model.test)?.id;
 }
 
 /**
