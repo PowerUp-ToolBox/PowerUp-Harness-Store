@@ -104,7 +104,7 @@ describe('reads of the seed catalogue', () => {
     const reply = await rest<{ harness_id: string; icon_path: string }[]>(
       'anon',
       'GET',
-      `harnesses?featured_rank=not.is.null&order=featured_rank&select=${LIST_COLUMNS}`,
+      `harnesses?featured_rank=not.is.null&order=featured_rank&limit=12&select=${LIST_COLUMNS}`,
     );
     expect(reply.status).toBe(200);
     expect(reply.body).toMatchObject([
@@ -122,7 +122,7 @@ describe('reads of the seed catalogue', () => {
       rest<{ github_login: string; harnesses: { harness_id: string }[] }[]>(
         'anon',
         'GET',
-        `profiles?github_login=eq.${login}&select=github_login,display_name,avatar_url,bio,created_at,harnesses(${LIST_COLUMNS})`,
+        `profiles?github_login=eq.${login}&select=github_login,display_name,avatar_url,bio,created_at,harnesses(${LIST_COLUMNS})&harnesses.order=download_count.desc,harness_id`,
       );
     const bob = await page('bob');
     expect(bob.status).toBe(200);

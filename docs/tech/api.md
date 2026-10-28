@@ -8,20 +8,32 @@ Row-level security decides what is visible (see [`data-model.md`](./data-model.m
 
 | Purpose | Call |
 |---|---|
-| Featured list | `harnesses?featured_rank=not.is.null&order=featured_rank&select=harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at` |
-| Search | RPC `search_harnesses(q text, tags text[], platform text, limit int, offset int)` → ranked rows with `harness_id, name, summary, icon_url, tags, download_count, latest_version, publisher_login` |
+| Featured (home) | `harnesses?featured_rank=not.is.null&order=featured_rank&limit=12&select=<list columns>` |
+| Most downloaded (home) | `harnesses?order=download_count.desc,harness_id&limit=12&select=<list columns>` |
+| New (home) | `harnesses?order=latest_published_at.desc,harness_id&limit=12&select=<list columns>` |
+| Search | RPC `search_harnesses(q text, tags text[], platform text, limit int, offset int)` (`POST rpc/search_harnesses` with a JSON body) → ranked rows `{ harness_id, publisher_login, name, summary, icon_path, tags, platforms, download_count, latest_version, latest_published_at }`, see below |
 | Harness detail | `harnesses?harness_id=eq.<id>&select=*,profiles(github_login,display_name,avatar_url),harness_versions(version,changelog,published_at,platforms,status,download_count)` (published versions only via RLS) |
 | Version manifest | `harness_versions?harness_id=eq.<uuid>&version=eq.<v>&select=manifest,readme,package_sha256,package_size,screenshot_paths` |
-| Publisher page | `profiles?github_login=eq.<login>&select=github_login,display_name,avatar_url,bio,created_at,harnesses(harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at)` |
+| Publisher page | `profiles?github_login=eq.<login>&select=github_login,display_name,avatar_url,bio,created_at,harnesses(<list columns>)&harnesses.order=download_count.desc,harness_id` |
 | Update check | RPC `latest_versions(harness_ids text[])` (`POST rpc/latest_versions` with `{ "harness_ids": [...] }`) → `[{ harness_id, store_status, latest_version, manifest }]`, see below |
+
+`<list columns>` is `harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at`. `icon_path` is relative to the `harness-assets` bucket: the client shows `<Store base URL>/storage/v1/object/public/harness-assets/<icon_path>`. The home rows (P0-07.5) and the Publisher page need no filter of their own: row-level security leaves only active Harnesses with a published version, in Featured, Most downloaded, New and in the Publisher's nested `harnesses` alike (a Publisher with none still has their profile row, with `harnesses: []`). `harness_id` breaks ties so the order is stable. The indexes behind them: the unique constraint on `featured_rank`, and `harnesses (download_count desc)` and `harnesses (latest_published_at desc)`.
+
+`search_harnesses` (P0-07.5) is Postgres full-text search over the `search` column (maintained by `refresh_harness`, not generated: the `simple` configuration, with the name weighted A, the tags B, the summary C and the first 50 K characters of the latest version's README D):
+- `q`: `websearch_to_tsquery('simple', q)` syntax (`"a phrase"`, `or`, `-word`); case does not matter, words are not stemmed. A null, blank or wordless `q` (only punctuation) means no text filter.
+- `tags`: the Harness has every one of them (`tags @> …`); null or `[]` means no filter. `platform`: the latest version's `platforms` contains it; null means any, an unknown one matches nothing (no error).
+- Order: `ts_rank` when there is a text query, then `download_count` desc, then `latest_published_at` desc, then `harness_id`. Without a text query that is most downloaded first.
+- `limit`: 24 when null, clamped to 1…60; `offset`: 0 when null, a negative one is 0. Out-of-range values are clamped, never refused (only a value of the wrong type is a PostgREST `400`). There is no total count: a page shorter than `limit` is the last one ("Load more" stops).
+- Call it with `POST` and a JSON body: in a `GET`, PostgREST would read `limit` and `offset` as its own paging parameters.
+- `publisher_login` is the publisher segment of `harness_id`; `platforms` are the latest version's (for the platform badges).
+- Chinese and other unsegmented scripts: the `simple` parser keeps a run of CJK characters as one token, so a whole name or word matches (`写作助手`) and a part of one does not (`写作`). Substring search in Chinese is not supported in P0. Manifest `tags` are a closed English list; the desktop app translates the tag chips.
+- It is `SECURITY INVOKER`: row-level security decides what it can return, exactly as for every other read, and it repeats no visibility filter. The desktop app calls it with the anon key.
 
 `latest_versions` (P0-07.4) answers one row per requested Harness ID, in the order given (duplicates included), at most 1000 IDs per call (more is `400`, SQLSTATE `22023`):
 - `store_status`: `available` (active, with a published version), `unpublished` (no published version left), `taken_down` (the Harness was taken down) or `not_found` (no such Harness).
 - `latest_version` and `manifest`: only when `available`, else `null`. `manifest` is the full stored Manifest of the latest published version, so it has everything `diffForReconsent(installed, latest)` compares (`permissions`, `runtime`, `entry`) and the `changelog`. Nothing of any other version, and nothing but the status of a Harness that is not available, is ever returned.
 - It reports the Harness's status only: no version-level Takedown is reported in P0, not even one of the latest version, and the takedown note is never public. Taking down the latest version (or Unpublishing it) moves the Harness's `latest_version` back to the previous published version, so the row then says `available` with that earlier version, possibly lower than the one the User has installed, or `unpublished` when no published version is left. A client must offer an update only when `latest_version` is greater than the installed version, never because it differs.
 - It is `SECURITY DEFINER` (row-level security would hide the taken-down and Unpublished-only Harnesses whose status it reports) and callable by anon and authenticated.
-
-Search is Postgres full-text (`websearch_to_tsquery`) over the `search` column (maintained by `refresh_harness`, not generated), ranked by `ts_rank` then `download_count`. `platform` filters `harness_versions.platforms @> ARRAY[platform]` on the latest version.
 
 ## Publisher sign-in (Supabase Auth)
 GitHub is the only sign-in, and only Publishers sign in (P0-07.2). The desktop app's Runtime runs the OAuth PKCE flow itself, against Supabase Auth's GitHub provider; the renderer never sees a token. Every call carries `apikey: <anon key>`.

@@ -62,4 +62,6 @@ An Edge Function only sees the files under `supabase/functions`, both when serve
 
 The update check is the `latest_versions(harness_ids text[])` RPC, which anon calls through PostgREST: for each ID its `store_status` (`available`, `unpublished`, `taken_down`, `not_found`) and, when available, the latest published version and its full Manifest.
 
+Search is the `search_harnesses(q, tags, platform, limit, offset)` RPC (P0-07.5), which anon calls with `POST rpc/search_harnesses`: full-text over the `simple` configuration (a whole Chinese word matches, part of one does not), tag and platform filters, ranked by relevance, then downloads, then date, 24 per page and never more than 60. It is `SECURITY INVOKER`, so row-level security alone hides what is not visible. The Store home rows (Featured, Most downloaded, New) and the Publisher page are plain PostgREST reads (api.md).
+
 CI runs all of this in the `store` job of [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).

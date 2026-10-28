@@ -12,7 +12,7 @@ const files = readdirSync(dir).sort();
 const sql = files.map((file) => readFileSync(join(dir, file), 'utf8')).join('\n');
 
 /** Functions anon may call as RPCs (added by later P0-07 tickets). */
-const PUBLIC_RPCS = new Set<string>(['latest_versions']);
+const PUBLIC_RPCS = new Set<string>(['latest_versions', 'search_harnesses']);
 
 function names(pattern: RegExp): string[] {
   return [...sql.matchAll(pattern)].map((match) => match[1] ?? '');
