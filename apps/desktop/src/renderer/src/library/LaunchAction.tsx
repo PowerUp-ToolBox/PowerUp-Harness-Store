@@ -164,6 +164,23 @@ export function LaunchAction({
   }
 }
 
+/** The launch states in which the Harness has a process, or is about to. */
+const ACTIVE_STATES: ReadonlySet<LaunchStatus['state']> = new Set([
+  'preparing',
+  'spawning',
+  'waiting-ready',
+  'ready',
+  'stopping',
+]);
+
+/**
+ * Whether the launch has a process, or is about to: its Harness runs, so it cannot be updated or
+ * uninstalled now.
+ */
+export function isLaunchActive(launch: LaunchStatus | undefined): boolean {
+  return launch !== undefined && ACTIVE_STATES.has(launch.state);
+}
+
 /**
  * The latest launch of one Harness since the app started, followed live through `launch.status`
  * and `launch.state`; undefined while it has none.

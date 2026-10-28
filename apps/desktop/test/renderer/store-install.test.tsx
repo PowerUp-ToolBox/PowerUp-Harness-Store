@@ -240,7 +240,7 @@ describe('Install on a Store detail page', () => {
     await settle();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(within(toasts()).getByText('Installed Writer')).toBeDefined();
-    expect(buttons()).toEqual(['Launch', 'Uninstall (disabled)']);
+    expect(buttons()).toEqual(['Launch', 'Uninstall']);
     expect(api.installs.cancel).not.toHaveBeenCalled();
 
     act(() => {

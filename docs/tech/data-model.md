@@ -141,11 +141,13 @@ Created by a migration. Paths are relative to their bucket (no bucket prefix in 
 
 Global Slot Bindings for `default` are the User's Default Model. Rows with scope `harness:<id>` are Model Overrides.
 
+Uninstalling a Harness deletes its install folder, then its Data Directory, then its `installs` row and its Model Overrides (`slot_bindings` of scope `harness:<id>`) in one transaction; its `launches` rows, Usage Records and launch logs are kept.
+
 Install layout on disk (app data root: Electron's `userData` folder, which `HARNESS_STORE_USER_DATA_DIR` overrides):
 ```
 harnesses/<publisher>/<slug>/<version>/   unpacked package (read-only intent)
 data/<publisher>/<slug>/                  Data Directory (survives updates, deleted on uninstall)
-logs/<publisher>/<slug>/<launchId>.log    launch logs, at most 10 MB each, the 20 newest per Harness (kept on uninstall)
+logs/<publisher>/<slug>/<launchId>.log    launch logs, at most 10 MB each, the 20 newest per Harness (kept on uninstall; at each start, those of a Harness no longer installed are deleted once 30 days old)
 downloads/                                temp: Store downloads (download-<jobId>.zip), install copies (install-*) before they are renamed into harnesses/, and a reinstalled version moved aside (replaced-*); what an interrupted install left is cleaned up at startup
 harness-store.sqlite
 ```

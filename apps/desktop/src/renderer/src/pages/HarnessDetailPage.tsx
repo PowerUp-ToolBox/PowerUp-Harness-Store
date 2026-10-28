@@ -11,7 +11,8 @@ import type {
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { downloadPercent, useInstallJobs } from '../install/InstallJobsProvider.js';
-import { useLaunchStatus } from '../library/LaunchAction.js';
+import { isLaunchActive, useLaunchStatus } from '../library/LaunchAction.js';
+import { UninstallDialog } from '../library/UninstallDialog.js';
 import { ListingDetail, type SlotUse } from '../listing/ListingDetail.js';
 import { connectionName } from '../models/names.js';
 import { BackButton } from '../store/BackButton.js';
@@ -40,7 +41,8 @@ const UNANSWERED: IpcError = {
  * dialog waits, and its error under the button when it failed. Update (or "Review update", when
  * the latest version needs the User's consent again) updates to the latest version the page shows
  * (flows F4), the same way; an update refused because the Harness runs says "Close the Harness to
- * update".
+ * update". Uninstall, beside Launch, opens the same uninstall confirmation as a Library card's
+ * menu (flows F9); once uninstalled, the page offers Install again.
  *
  * A Harness the Store no longer offers (taken down, Unpublished-only, unknown) is the "no longer
  * available" page when it is not installed; an installed one keeps its page, built from its
@@ -53,6 +55,7 @@ export function HarnessDetailPage() {
   const harnessId = useParams()['*'] ?? '';
   const [state, setState] = useState<DetailState>({ status: 'loading' });
   const [error, setError] = useState<IpcError | null>(null);
+  const [uninstalling, setUninstalling] = useState(false);
   const install = useInstall(harnessId);
   const launch = useLaunchStatus(harnessId);
   const installJobs = useInstallJobs();
@@ -164,12 +167,25 @@ export function HarnessDetailPage() {
           setError(null);
           installJobs.update(install, harness.manifest);
         }}
+        onUninstall={() => {
+          setError(null);
+          setUninstalling(true);
+        }}
         onError={setError}
       />
       {install !== null && harness === null ? (
         <p className="hint">{t('store.detail.notInStore')}</p>
       ) : null}
       {shownError === null ? null : <ActionError error={shownError} />}
+      {uninstalling && install !== null ? (
+        <UninstallDialog
+          install={install}
+          running={isLaunchActive(launch)}
+          onClose={() => {
+            setUninstalling(false);
+          }}
+        />
+      ) : null}
     </>
   );
 

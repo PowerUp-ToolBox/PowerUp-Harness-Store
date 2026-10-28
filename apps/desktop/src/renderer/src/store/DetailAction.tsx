@@ -26,6 +26,8 @@ export interface DetailActionProps {
   readonly onReview?: () => void;
   /** Update, and "Review update" (flows F4). */
   readonly onUpdate?: () => void;
+  /** Uninstall, the secondary action of an installed Harness (flows F9). */
+  readonly onUninstall?: () => void;
   /** A launch the Runtime refused, to show under the button; null when one begins. */
   readonly onError: (error: IpcError | null) => void;
 }
@@ -38,8 +40,8 @@ const nothing = () => undefined;
  * {@link primaryActionState}. Launch is the Library's own button ({@link LaunchAction}), with its
  * Workspace sheet, "Set up a model first" and its Starting…, Running… and Stopping… states, so
  * launching from here and from the Library cannot differ; Update and "Review update" lead it the
- * same way as on a Library card. Uninstall, its secondary action, waits for P0-10.3's uninstall
- * and is disabled.
+ * same way as on a Library card. Uninstall, the secondary action of Launch, opens the uninstall
+ * confirmation (`onUninstall`).
  */
 export function DetailAction({
   state,
@@ -49,6 +51,7 @@ export function DetailAction({
   onInstall = nothing,
   onReview = nothing,
   onUpdate = nothing,
+  onUninstall = nothing,
   onError,
 }: DetailActionProps) {
   const { t } = useI18n();
@@ -91,6 +94,7 @@ export function DetailAction({
       install={install}
       launch={launch}
       onUpdate={onUpdate}
+      onUninstall={onUninstall}
       onError={onError}
     />
   );
@@ -168,12 +172,14 @@ function InstalledAction({
   install,
   launch,
   onUpdate,
+  onUninstall,
   onError,
 }: {
   readonly update: 'update' | 'reviewUpdate' | null;
   readonly install: InstalledHarness;
   readonly launch: LaunchStatus | undefined;
   readonly onUpdate: () => void;
+  readonly onUninstall: () => void;
   readonly onError: (error: IpcError | null) => void;
 }) {
   const { t } = useI18n();
@@ -191,7 +197,7 @@ function InstalledAction({
         }
         secondary={
           update !== null ? undefined : (
-            <button type="button" className="button-link" disabled>
+            <button type="button" className="button-link" onClick={onUninstall}>
               {t('store.detail.uninstall')}
             </button>
           )

@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { DeclaredPermissions, Manifest } from '@harness-store/manifest';
 import type { InstallSource, InstallStoreStatus } from '../../shared/ipc.js';
+import { transaction } from './database.js';
 
 /** One row of the `installs` table, camel-cased, with its JSON columns parsed. */
 export interface InstallRow {
@@ -83,6 +84,12 @@ export interface InstallStore {
   /** Deletes every transient row (at startup, for installs the app stopped in); how many. */
   deleteAllTransient(): number;
   /**
+   * Deletes an uninstalled Harness's installed row and its Model Overrides (`slot_bindings` of
+   * scope `harness:<id>`) in one transaction; nothing for a Harness that is not installed. Its
+   * launches and Usage Records are kept. Whether it was installed.
+   */
+  remove(harnessId: string): boolean;
+  /**
    * Records an update check of the installed Store Harness at `version`; nothing when it is not
    * installed (any more), is a local install, or is now at another version (an update or install
    * came in between). Whether the row changed.
@@ -154,6 +161,10 @@ export function createInstallStore(db: DatabaseSync): InstallStore {
     "DELETE FROM installs WHERE harness_id = ? AND state <> 'installed'",
   );
   const deleteAll = db.prepare("DELETE FROM installs WHERE state <> 'installed'");
+  const deleteInstalled = db.prepare(
+    "DELETE FROM installs WHERE harness_id = ? AND state = 'installed'",
+  );
+  const deleteOverrides = db.prepare('DELETE FROM slot_bindings WHERE scope = ?');
   const upsert = db.prepare(
     `INSERT INTO installs (
        harness_id, version, manifest, install_path, data_dir, installed_at,
@@ -204,6 +215,13 @@ export function createInstallStore(db: DatabaseSync): InstallStore {
     },
     deleteAllTransient() {
       return Number(deleteAll.run().changes);
+    },
+    remove(harnessId) {
+      return transaction(db, () => {
+        if (Number(deleteInstalled.run(harnessId).changes) === 0) return false;
+        deleteOverrides.run(`harness:${harnessId}`);
+        return true;
+      });
     },
     recordUpdateCheck(harnessId, version, { storeStatus, available }) {
       const before = selectChecked.get(harnessId, version) as

@@ -59,12 +59,17 @@ describe('Library', () => {
     expect(window.location.hash).toBe('#/store');
   });
 
-  it('shows one card per install in the order installs.list gives, a local one marked Local', async () => {
+  it('shows one card per install, the last launched first, a local one marked Local', async () => {
     const api = installFakeApi();
     api.installs.list.mockResolvedValue({
       ok: true,
       data: [
-        installed({ harnessId: 'octo-cat/hello-web', name: 'Hello Web', source: 'local' }),
+        installed({
+          harnessId: 'octo-cat/hello-web',
+          name: 'Hello Web',
+          source: 'local',
+          lastLaunchedAt: '2026-10-20T09:00:00.000Z',
+        }),
         installed({ harnessId: 'alice/code-reviewer', name: 'Code Reviewer', version: '1.1.0' }),
       ],
     });
@@ -91,7 +96,12 @@ describe('Library', () => {
     api.installs.list.mockResolvedValue({
       ok: true,
       data: [
-        installed({ harnessId: 'octo-cat/hello-web', name: 'Hello Web', source: 'local' }),
+        installed({
+          harnessId: 'octo-cat/hello-web',
+          name: 'Hello Web',
+          source: 'local',
+          lastLaunchedAt: '2026-10-20T09:00:00.000Z',
+        }),
         installed({ harnessId: 'alice/code-reviewer', name: 'Code Reviewer', version: '1.1.0' }),
       ],
     });

@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { constants, createWriteStream } from 'node:fs';
+import { constants, createWriteStream, type Dirent } from 'node:fs';
 import {
   chmod,
+  lstat,
   mkdir,
   open,
   readdir,
   readFile,
   rename,
   rm,
+  rmdir,
   stat,
   type FileHandle,
 } from 'node:fs/promises';
@@ -48,6 +50,9 @@ const STAGING_PREFIX = 'install-';
 const ASIDE_PREFIX = 'replaced-';
 const DOWNLOAD_PREFIX = 'download-';
 
+/** How long the launch logs of an uninstalled Harness are kept: 30 days from when each was written. */
+export const UNINSTALLED_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
 /** The installer as the IPC handlers use it. */
 export interface InstallsService {
   /** The OS folder picker; the chosen folder, or null when cancelled. */
@@ -76,11 +81,19 @@ export interface InstallsService {
    * knows their job IDs, is gone or loads again, so nothing would ever confirm or cancel them.
    */
   cancelAll(): Promise<void>;
+  /**
+   * Uninstalls a Harness (docs/ux/flows.md F9): deletes its install folder, then its Data
+   * Directory, then its row with its Model Overrides. Its launch logs and Usage Records are kept.
+   */
+  uninstall(harnessId: string): Promise<IpcResult<null>>;
+  /** The size in bytes of the files in the Harness's Data Directory; 0 when it is missing. */
+  dataSize(harnessId: string): Promise<IpcResult<number>>;
   /** Every installed Harness, the most recently launched first, then by name. */
   list(): Promise<readonly InstalledHarness[]>;
   /**
-   * Whether an install of the Harness is copying or putting its files in place now: the Supervisor
-   * launches nothing from a folder that is about to be replaced.
+   * Whether an install of the Harness is copying or putting its files in place now, or an
+   * uninstall is deleting them: the Supervisor launches nothing from a folder that is about to be
+   * replaced or deleted.
    */
   isInstalling(harnessId: string): boolean;
 }
@@ -170,10 +183,18 @@ export interface InstallerOptions {
  * permission) is refused with `file_unreadable`, naming it: it is still there when inspected
  * again, so it is never reported as a folder that changed.
  *
+ * `uninstall` (flows F9) is refused while the Harness runs (`harness_running`) and while an install
+ * or update of it is under way (`harness_installing`); from that check until it is done the
+ * Harness counts as installing, so nothing launches it. It deletes the install folder, then the
+ * Data Directory (neither ever followed through a link), then the row and the Harness's Model
+ * Overrides in one transaction: a failure partway leaves the row, and uninstalling again finishes
+ * the job, as a folder already gone counts as deleted. The launch logs and Usage Records stay.
+ *
  * An install the app quit or crashed in leaves its row in a transient state and its files in
  * `downloads/`. Before the first install or listing, the installer deletes those rows, puts back
  * a folder moved aside whose install is missing, then deletes what the interrupted installs left
- * there (see {@link recoverInterruptedInstalls}).
+ * there (see {@link recoverInterruptedInstalls}). It then deletes the launch logs of uninstalled
+ * Harnesses older than 30 days ({@link pruneUninstalledLogs}).
  */
 export function createInstaller(options: InstallerOptions): InstallsService {
   const { store, platform } = options;
@@ -192,7 +213,9 @@ export function createInstaller(options: InstallerOptions): InstallsService {
   const installing = new Set<string>();
   /** The Store installs and updates under way, by job ID. */
   const jobs = new Map<string, StoreJob>();
-  const recovered = recoverInterruptedInstalls(paths, store, logError);
+  const recovered = recoverInterruptedInstalls(paths, store, logError).then(() =>
+    pruneUninstalledLogs(paths.logs, (harnessId) => store.get(harnessId) !== undefined, now()),
+  );
   let queue: Promise<unknown> = recovered;
   const oneAtATime = <T>(work: () => Promise<T>): Promise<T> => {
     const run = queue.then(work, work);
@@ -596,6 +619,43 @@ export function createInstaller(options: InstallerOptions): InstallsService {
       await Promise.all([...jobs.keys()].map((jobId) => cancel(jobId)));
     },
 
+    uninstall: (harnessId) =>
+      oneAtATime(async () => {
+        // No await between these checks and marking the Harness installing (see
+        // installFromFolder): a launch, an install or an update asked for from then on is refused.
+        const row = store.get(harnessId);
+        if (storeInstallUnderWay(harnessId) || installing.has(harnessId)) {
+          return fail('harness_installing');
+        }
+        if (row === undefined) return fail('not_installed');
+        if (options.isRunning?.(harnessId) === true) return fail('harness_running');
+        installing.add(harnessId);
+        try {
+          // Only folders of the install layout are ever deleted, whatever the row says.
+          if (isInside(paths.harnesses, row.installPath)) {
+            await rm(row.installPath, { recursive: true, force: true });
+            await removeEmptyFolders(dirname(row.installPath), paths.harnesses);
+          }
+          if (isInside(paths.data, row.dataDir)) {
+            await rm(row.dataDir, { recursive: true, force: true });
+            await removeEmptyFolders(dirname(row.dataDir), paths.data);
+          }
+          store.remove(harnessId);
+        } finally {
+          installing.delete(harnessId);
+        }
+        icons.delete(row.installPath);
+        options.onChanged?.(harnessId);
+        return ok(null);
+      }),
+
+    async dataSize(harnessId) {
+      await recovered;
+      const row = store.get(harnessId);
+      if (row === undefined) return fail('not_installed');
+      return ok(await directorySize(row.dataDir));
+    },
+
     async list() {
       await recovered;
       const rows = store.all().sort(byRecentUseThenName);
@@ -660,6 +720,8 @@ export function createInstallsStub(): InstallsService {
     update: () => Promise.resolve(fail('not_implemented', { method: 'installs.update' })),
     cancel: () => Promise.resolve(),
     cancelAll: () => Promise.resolve(),
+    uninstall: () => Promise.resolve(fail('not_implemented', { method: 'installs.uninstall' })),
+    dataSize: () => Promise.resolve(fail('not_implemented', { method: 'installs.dataSize' })),
     list: () => Promise.resolve([]),
     isInstalling: () => false,
   };
@@ -941,6 +1003,92 @@ async function rowOfAside(aside: string, store: InstallStore): Promise<InstallRo
   if (typeof id !== 'string') return undefined;
   const row = store.get(id);
   return row !== undefined && row.version === version ? row : undefined;
+}
+
+/**
+ * Deletes the launch logs (`*.log`) older than {@link UNINSTALLED_LOG_RETENTION_MS}, by when each
+ * was last written, in the logs folder of every Harness that `isInstalled` says is not installed
+ * (`logs/<publisher>/<slug>/`), then those folders, and the publishers' folders, left empty. The
+ * logs of installed Harnesses are never touched. Only folders and regular files are looked at,
+ * never through a link. It never throws: what cannot be read or deleted is left for the next start.
+ */
+export async function pruneUninstalledLogs(
+  logs: string,
+  isInstalled: (harnessId: string) => boolean,
+  now: Date,
+): Promise<void> {
+  const cutoff = now.getTime() - UNINSTALLED_LOG_RETENTION_MS;
+  for (const publisher of await entriesOf(logs)) {
+    if (!publisher.isDirectory()) continue;
+    const publisherFolder = join(logs, publisher.name);
+    for (const slug of await entriesOf(publisherFolder)) {
+      if (!slug.isDirectory() || isInstalled(`${publisher.name}/${slug.name}`)) continue;
+      const folder = join(publisherFolder, slug.name);
+      for (const log of await entriesOf(folder)) {
+        if (!log.isFile() || !log.name.endsWith('.log')) continue;
+        const path = join(folder, log.name);
+        try {
+          if ((await lstat(path)).mtimeMs < cutoff) await rm(path, { force: true });
+        } catch {
+          // Left for the next start.
+        }
+      }
+      await rmdir(folder).catch(() => undefined); // Only when it is empty.
+    }
+    await rmdir(publisherFolder).catch(() => undefined);
+  }
+}
+
+/** The entries of `folder`, typed without following links; none when it cannot be read. */
+async function entriesOf(folder: string): Promise<Dirent[]> {
+  try {
+    return await readdir(folder, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The size in bytes of the regular files under `folder`, walked without following a link (a
+ * link counts for nothing, as deleting it deletes no file it points to); 0 when it is missing or
+ * not a folder. A sub-folder that cannot be read counts for nothing.
+ */
+async function directorySize(folder: string): Promise<number> {
+  try {
+    if (!(await lstat(folder)).isDirectory()) return 0;
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  const pending = [folder];
+  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
+    for (const entry of await entriesOf(current)) {
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) pending.push(path);
+      else if (entry.isFile()) {
+        try {
+          total += (await lstat(path)).size;
+        } catch {
+          // Gone since it was listed.
+        }
+      }
+    }
+  }
+  return total;
+}
+
+/**
+ * Deletes `folder` and then each parent folder while it is empty, stopping at `base`, which is
+ * kept: `harnesses/<publisher>/<slug>/` after its last version is gone, then `<publisher>/`.
+ */
+async function removeEmptyFolders(folder: string, base: string): Promise<void> {
+  for (let current = folder; isInside(base, current); current = dirname(current)) {
+    try {
+      await rmdir(current);
+    } catch {
+      return; // Not empty, or already gone.
+    }
+  }
 }
 
 async function exists(path: string): Promise<boolean> {

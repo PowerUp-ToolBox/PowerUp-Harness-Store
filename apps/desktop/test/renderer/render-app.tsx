@@ -193,8 +193,8 @@ export interface FakeApiOptions {
  * `bindings.resolveAll` and `resolveManifest` answer `not_implemented`; nobody is signed in to the
  * Store, `auth.signIn` signs in as `octo-cat` and `auth.signOut` signs out; nothing is installed,
  * the folder picker is cancelled, inspecting or installing a folder and installing from the Store
- * answer `not_implemented`, cancelling a Store install does nothing and updating one answers
- * `not_implemented`;
+ * answer `not_implemented`, cancelling a Store install does nothing and updating one, uninstalling
+ * one and reading its Data Directory's size answer `not_implemented`;
  * nothing was launched, launching answers `not_implemented`, no Harness has a last Workspace and
  * the Workspace picker is cancelled; validating a folder to publish and publishing answer
  * `not_implemented`, cancelling an upload does nothing, the Publisher has no Harnesses and
@@ -375,6 +375,12 @@ export function installFakeApi(
       ),
       update: vi.fn((request: StoreUpdateRequest): Promise<IpcResult<InstalledVersion>> =>
         notImplemented('installs.update', request.harnessId),
+      ),
+      uninstall: vi.fn((harnessId: string): Promise<IpcResult<null>> =>
+        notImplemented('installs.uninstall', harnessId),
+      ),
+      dataSize: vi.fn((harnessId: string): Promise<IpcResult<number>> =>
+        notImplemented('installs.dataSize', harnessId),
       ),
       list: vi.fn((): Promise<IpcResult<readonly InstalledHarness[]>> =>
         Promise.resolve({ ok: true, data: [] }),

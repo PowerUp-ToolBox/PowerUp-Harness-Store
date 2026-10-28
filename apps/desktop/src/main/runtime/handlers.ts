@@ -222,6 +222,18 @@ export function createHandlers(services: Services): IpcHandlers {
       if (request === null) return fail('invalid_input', { method: 'installs.update' });
       return services.installs.update(request);
     },
+    'installs.uninstall': (input) => {
+      if (!isHarnessIdInput(input) || !input.includes('/')) {
+        return fail('invalid_input', { method: 'installs.uninstall' });
+      }
+      return services.installs.uninstall(input);
+    },
+    'installs.dataSize': (input) => {
+      if (!isHarnessIdInput(input) || !input.includes('/')) {
+        return fail('invalid_input', { method: 'installs.dataSize' });
+      }
+      return services.installs.dataSize(input);
+    },
     'installs.list': async (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'installs.list' });
       return ok(await services.installs.list());

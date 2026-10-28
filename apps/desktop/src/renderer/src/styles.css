@@ -2504,6 +2504,35 @@ input[aria-invalid='true'] {
   font-weight: 700;
 }
 
+/* The Library's controls above the cards (P0-10.3): name filter, views and sort. */
+.library {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.library-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.library-filter {
+  flex: 1 1 220px;
+  max-width: 320px;
+}
+
+.library-sort {
+  min-width: 0;
+}
+
+/* Cards the controls leave out stay mounted, hidden. */
+.library-grid[hidden],
+.library-grid > li[hidden] {
+  display: none;
+}
+
 .library-empty {
   align-items: center;
   gap: 14px;
@@ -2982,6 +3011,10 @@ input[aria-invalid='true'] {
   font-size: 13px;
   text-align: left;
   cursor: pointer;
+}
+
+.card-menu-list .card-menu-danger {
+  color: var(--color-error);
 }
 
 .card-menu-list [role='menuitem']:hover,

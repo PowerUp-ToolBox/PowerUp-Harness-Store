@@ -109,8 +109,8 @@ export type IpcErrorCode =
   /** The Harness is running, so it cannot be installed over (or uninstalled) now. */
   | 'harness_running'
   /**
-   * An install of the Harness is putting new files in place, so it cannot be launched until the
-   * install is done.
+   * An install of the Harness is putting new files in place (or an uninstall is deleting them),
+   * so it cannot be launched, installed again or uninstalled until that is done.
    */
   | 'harness_installing'
   /** No Harness with this ID is installed. */
@@ -381,6 +381,20 @@ export interface IpcMethods {
    * `installs.install`.
    */
   'installs.update': { input: StoreUpdateRequest; output: InstalledVersion };
+  /**
+   * Uninstalls this installed Harness (docs/ux/flows.md F9): deletes its install folder, then its
+   * Data Directory, then its `installs` row and its Model Overrides, and reports it with
+   * `installs.changed`. Its launch logs (deleted 30 days after they were written, at a later
+   * start) and Usage Records are kept. A failure partway leaves the row, and uninstalling again
+   * finishes the job. `not_installed`; `harness_running` while it runs and `harness_installing`
+   * while it is being installed or updated, deleting nothing.
+   */
+  'installs.uninstall': { input: string; output: null };
+  /**
+   * The size in bytes of the files in this installed Harness's Data Directory, walked without
+   * following links (the uninstall confirmation's size); 0 when it is missing. `not_installed`.
+   */
+  'installs.dataSize': { input: string; output: number };
   /**
    * Every installed Harness: the most recently launched first, then the never-launched ones, by
    * name.
@@ -1268,6 +1282,8 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'installs.confirm': true,
   'installs.cancel': true,
   'installs.update': true,
+  'installs.uninstall': true,
+  'installs.dataSize': true,
   'installs.list': true,
   'launch.start': true,
   'launch.chooseWorkspace': true,
@@ -1298,8 +1314,8 @@ export interface IpcEvents {
   /** The Store sign-in state changed; `session_expired` asks the screen in use to sign in again. */
   'auth.changed': AuthChanged;
   /**
-   * An installed Harness was installed, replaced or removed, or the update check changed what it
-   * says of it; lists read `installs.list` again.
+   * An installed Harness was installed, replaced or uninstalled, or the update check changed what
+   * it says of it; lists read `installs.list` again.
    */
   'installs.changed': InstallsChanged;
   /** A launch changed state; sent on every change, `launch.status` lists the latest ones. */

@@ -179,7 +179,7 @@ describe('the card menu', () => {
     return view.getByRole('menu', { name: 'More actions for Hello Term' });
   };
 
-  it('lists View in Store, Model Overrides, Show logs and Open data folder, the first one focused', async () => {
+  it('lists View in Store, Model Overrides, Show logs, Open data folder and Uninstall, the first one focused', async () => {
     setup();
     await renderApp('#/library');
     const menu = await openMenu();
@@ -189,13 +189,14 @@ describe('the card menu', () => {
       'Model Overrides',
       'Show logs',
       'Open data folder',
+      'Uninstall',
     ]);
     expect(document.activeElement).toBe(items[0]);
     fireEvent.keyDown(menu, { key: 'ArrowDown' });
     expect(document.activeElement).toBe(items[1]);
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
-    expect(document.activeElement).toBe(items[3]);
+    expect(document.activeElement).toBe(items[4]);
 
     fireEvent.keyDown(menu, { key: 'Escape' });
     expect((await card()).queryByRole('menu')).toBeNull();

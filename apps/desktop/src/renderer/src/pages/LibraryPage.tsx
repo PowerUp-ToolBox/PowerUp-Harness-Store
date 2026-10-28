@@ -1,5 +1,5 @@
 import { diffForReconsent } from '@harness-store/manifest';
-import { useEffect, useReducer, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type {
   InstalledHarness,
@@ -11,18 +11,32 @@ import type {
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { downloadPercent, useInstallJobs } from '../install/InstallJobsProvider.js';
-import { LaunchAction, useLaunch } from '../library/LaunchAction.js';
-import { LibraryIcon, MoreIcon } from '../shell/icons.js';
+import { isLaunchActive, LaunchAction, useLaunch } from '../library/LaunchAction.js';
+import { UninstallDialog } from '../library/UninstallDialog.js';
+import { LibraryIcon, MoreIcon, SearchIcon } from '../shell/icons.js';
 import { ActionError, DownloadAction, UpdateButton } from '../store/DetailAction.js';
 
+/** The Library's views (docs/ux/screens.md): every install, or those of one kind. */
+const FILTERS = ['all', 'updates', 'running', 'local'] as const;
+type LibraryFilter = (typeof FILTERS)[number];
+
+/** The Library's orders: last launched first (then by name), or by name. */
+type LibrarySort = 'recent' | 'name';
+
 /**
- * The Library (docs/ux/screens.md): one card per installed Harness, the most recently launched
- * first, then by name, as `installs.list` orders them. It reloads on `installs.changed`, and
- * follows each Harness's launch with `launch.status` and `launch.state`, so every card shows its
- * Harness's state live, without polling. P0-05 builds the basic card (icon, name, Publisher,
- * version, the Local badge, the primary button with its launch states, the error line of a failed
- * launch) and its overflow menu's Model Overrides, Show logs and Open data folder; P0-09.3 adds
- * View in Store; P0-10.2 the update states; P0-10 adds sort and filter and the menu's other items.
+ * The Library (docs/ux/screens.md): one card per installed Harness. It reloads on
+ * `installs.changed`, and follows each Harness's launch with `launch.status` and `launch.state`,
+ * so every card shows its Harness's state live, without polling. P0-05 builds the basic card
+ * (icon, name, Publisher, version, the Local badge, the primary button with its launch states,
+ * the error line of a failed launch) and its overflow menu's Model Overrides, Show logs and Open
+ * data folder; P0-09.3 adds View in Store; P0-10.2 the update states; P0-10.3 Uninstall, the last
+ * launched date and the controls above the cards.
+ *
+ * The controls narrow and order the list already loaded, in the renderer, with no call to main: a
+ * name filter that narrows as the User types (case-insensitive, anywhere in the name), the views
+ * All, Updates available, Running and Local installs, and the order Recently used (last launched
+ * first, the never-launched after them, then by name) or Name. A view with no card says "No
+ * Harnesses in this view", with Clear filters.
  */
 export function LibraryPage() {
   const { t } = useI18n();
@@ -61,6 +75,32 @@ export function LibraryPage() {
     };
   }, []);
 
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<LibraryFilter>('all');
+  const [sort, setSort] = useState<LibrarySort>('recent');
+  const sorted = useMemo(
+    () => (installs === null ? [] : [...installs].sort(sort === 'name' ? byName : byRecentUse)),
+    [installs, sort],
+  );
+  /** The Harness IDs the name filter and the view let through. */
+  const shown = useMemo(() => {
+    const words = query.trim().toLocaleLowerCase();
+    const passes = (install: InstalledHarness) => {
+      if (words !== '' && !install.name.toLocaleLowerCase().includes(words)) return false;
+      switch (filter) {
+        case 'all':
+          return true;
+        case 'updates':
+          return install.availableUpdate !== null;
+        case 'running':
+          return isLaunchActive(launches.get(install.harnessId));
+        case 'local':
+          return install.source === 'local';
+      }
+    };
+    return new Set(sorted.filter(passes).map((install) => install.harnessId));
+  }, [sorted, launches, query, filter]);
+
   if (installs === null) return null;
   if (installs.length === 0) {
     return (
@@ -74,14 +114,93 @@ export function LibraryPage() {
     );
   }
   return (
-    <ul className="library-grid">
-      {installs.map((install) => (
-        <li key={install.harnessId}>
-          <HarnessCard install={install} launch={launches.get(install.harnessId)} />
-        </li>
-      ))}
-    </ul>
+    <div className="library">
+      <div className="library-controls">
+        <div className="store-search library-filter">
+          <SearchIcon />
+          <input
+            type="search"
+            aria-label={t('library.filter')}
+            placeholder={t('library.filter')}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+            }}
+          />
+        </div>
+        <ul className="filter-chips" aria-label={t('library.views')}>
+          {FILTERS.map((each) => (
+            <li key={each}>
+              <button
+                type="button"
+                className="filter-chip"
+                aria-pressed={filter === each}
+                onClick={() => {
+                  setFilter(each);
+                }}
+              >
+                {t(`library.view.${each}`)}
+              </button>
+            </li>
+          ))}
+        </ul>
+        <select
+          className="library-sort"
+          aria-label={t('library.sort')}
+          value={sort}
+          onChange={(event) => {
+            setSort(event.target.value === 'name' ? 'name' : 'recent');
+          }}
+        >
+          <option value="recent">{t('library.sort.recent')}</option>
+          <option value="name">{t('library.sort.name')}</option>
+        </select>
+      </div>
+      {shown.size === 0 ? (
+        <div className="empty-panel library-empty">
+          <LibraryIcon />
+          <p className="empty-panel-title">{t('library.emptyView')}</p>
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={() => {
+              setQuery('');
+              setFilter('all');
+            }}
+          >
+            {t('library.clearFilters')}
+          </button>
+        </div>
+      ) : null}
+      {/* A card the controls leave out is hidden, not removed, so it keeps its state and showing
+          it again calls nothing in main. */}
+      <ul className="library-grid" hidden={shown.size === 0}>
+        {sorted.map((install) => (
+          <li key={install.harnessId} hidden={!shown.has(install.harnessId)}>
+            <HarnessCard install={install} launch={launches.get(install.harnessId)} />
+          </li>
+        ))}
+      </ul>
+    </div>
   );
+}
+
+/** By name as the User reads it, then by ID for a stable order. */
+function byName(a: InstalledHarness, b: InstalledHarness): number {
+  return (
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) ||
+    (a.harnessId < b.harnessId ? -1 : a.harnessId > b.harnessId ? 1 : 0)
+  );
+}
+
+/** Last launched first, the never-launched after them, then {@link byName}. */
+function byRecentUse(a: InstalledHarness, b: InstalledHarness): number {
+  if (a.lastLaunchedAt !== b.lastLaunchedAt) {
+    if (a.lastLaunchedAt === null) return 1;
+    if (b.lastLaunchedAt === null) return -1;
+    return a.lastLaunchedAt < b.lastLaunchedAt ? 1 : -1;
+  }
+  return byName(a, b);
 }
 
 /** The failures a card shows an error line for, by the `library.failed.*` copy of each. */
@@ -108,18 +227,11 @@ function shownFailure(launch: LaunchStatus | undefined): ShownFailure | null {
  */
 const dismissedFailures = new Set<string>();
 
-/** The launch states in which the Harness has a process, or is about to: it cannot be updated. */
-const ACTIVE_STATES: ReadonlySet<LaunchStatus['state']> = new Set([
-  'preparing',
-  'spawning',
-  'waiting-ready',
-  'ready',
-  'stopping',
-]);
-
 /**
- * One installed Harness: icon, name, Publisher, version, the Local badge, the primary button
- * ({@link LaunchAction}, shared with the Store detail page) and its overflow menu. A launch that
+ * One installed Harness: icon, name, Publisher, version, the Local badge, when it was last
+ * launched (nothing when it never was), the primary button ({@link LaunchAction}, shared with the
+ * Store detail page) and its overflow menu: View in Store, Model Overrides, Show logs, Open data
+ * folder and Uninstall, which opens the {@link UninstallDialog}. A launch that
  * failed shows why ("Exited with an error", "Did not start in time", "Could not start") with Show
  * logs and Dismiss, and Launch retries; the paths Show logs and Open data folder open are computed
  * in main. View in Store opens the Harness's Store detail page, which says so when the Store no
@@ -139,15 +251,16 @@ function HarnessCard({
   readonly install: InstalledHarness;
   readonly launch: LaunchStatus | undefined;
 }) {
-  const { t } = useI18n();
+  const { t, formatDate } = useI18n();
   const navigate = useNavigate();
   const [error, setError] = useState<IpcError | null>(null);
+  const [uninstalling, setUninstalling] = useState(false);
   const controls = useLaunch(install, setError);
   const [, dismissed] = useReducer((count: number) => count + 1, 0);
   const installJobs = useInstallJobs();
   const { harnessId, availableUpdate } = install;
   const job = installJobs.jobs.get(harnessId);
-  const running = launch !== undefined && ACTIVE_STATES.has(launch.state);
+  const running = isLaunchActive(launch);
   const noLongerInStore =
     install.storeStatus === 'unpublished' || install.storeStatus === 'taken_down';
   const failure =
@@ -193,6 +306,13 @@ function HarnessCard({
             <span aria-hidden="true"> · </span>
             {install.version}
           </p>
+          {install.lastLaunchedAt === null ? null : (
+            <p className="harness-card-subtitle">
+              {t('library.lastLaunched', {
+                date: formatDate(Date.parse(install.lastLaunchedAt)),
+              })}
+            </p>
+          )}
         </div>
         <CardMenu
           name={install.name}
@@ -209,6 +329,14 @@ function HarnessCard({
               label: t('library.menu.openDataFolder'),
               onSelect: () => {
                 reveal(window.api.launch.openDataFolder);
+              },
+            },
+            {
+              label: t('library.menu.uninstall'),
+              danger: true,
+              onSelect: () => {
+                setError(null);
+                setUninstalling(true);
               },
             },
           ]}
@@ -261,12 +389,23 @@ function HarnessCard({
       {job?.kind === 'failed' ? <ActionError error={job.error} /> : null}
       {error === null ? null : <ErrorMessage error={error} />}
       {controls.sheet}
+      {uninstalling ? (
+        <UninstallDialog
+          install={install}
+          running={running}
+          onClose={() => {
+            setUninstalling(false);
+          }}
+        />
+      ) : null}
     </article>
   );
 }
 
 interface CardMenuItem {
   readonly label: string;
+  /** Shown in the danger colour: Uninstall. */
+  readonly danger?: boolean;
   readonly onSelect: () => void;
 }
 
@@ -348,6 +487,7 @@ function CardMenu({
               type="button"
               role="menuitem"
               tabIndex={-1}
+              className={item.danger === true ? 'card-menu-danger' : undefined}
               onClick={() => {
                 close();
                 item.onSelect();
