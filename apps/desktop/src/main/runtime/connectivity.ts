@@ -58,6 +58,12 @@ export interface ConnectivityService {
    */
   reportFailure(): void;
   /**
+   * The Store URL setting changed (P0-11): drops what was known about the old Store and checks the
+   * new one now. A check in flight against the old URL is aborted, never settles the state, and
+   * those waiting on it get this check's result instead; the offline backoff starts over.
+   */
+  storeChanged(): Promise<Connectivity>;
+  /**
    * Cancels the scheduled re-check and aborts the check in flight; nothing is checked or reported
    * after this, and later calls to `check` resolve with the last state without a request.
    */
@@ -111,12 +117,17 @@ export function createConnectivityService(options: ConnectivityOptions): Connect
     if (inFlight === null) {
       const controller = new AbortController();
       abortInFlight = controller;
-      inFlight = isReachable(fetch, storeBaseUrl, controller).then((reachable) => {
-        inFlight = null;
-        abortInFlight = null;
-        settle(reachable ? 'online' : 'offline');
-        return { state };
-      });
+      const started: Promise<Connectivity> = isReachable(fetch, storeBaseUrl, controller).then(
+        (reachable) => {
+          // Superseded by `storeChanged`: the newer check, if still under way, answers instead.
+          if (inFlight !== started) return inFlight ?? { state };
+          inFlight = null;
+          abortInFlight = null;
+          settle(reachable ? 'online' : 'offline');
+          return { state };
+        },
+      );
+      inFlight = started;
     }
     return inFlight;
   };
@@ -126,6 +137,15 @@ export function createConnectivityService(options: ConnectivityOptions): Connect
     check,
     reportFailure() {
       if (state !== 'offline') void check();
+    },
+    storeChanged() {
+      if (stopped) return Promise.resolve({ state });
+      cancelRecheck();
+      offlineResults = 0;
+      abortInFlight?.abort();
+      inFlight = null;
+      abortInFlight = null;
+      return check();
     },
     stop() {
       stopped = true;

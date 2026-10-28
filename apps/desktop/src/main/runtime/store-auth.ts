@@ -175,12 +175,19 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
   /** The refresh in flight: refresh tokens rotate, so two callers must share one refresh. */
   let refreshing: Promise<Snapshot> | null = null;
 
+  /** The Store base URL as the setting holds it now, without a trailing slash. */
+  const storeBase = () => options.storeBaseUrl().replace(/\/+$/, '');
+
+  /**
+   * One request to the Store. `init.base` pins the Store it goes to; without it, the Store the
+   * setting names now.
+   */
   async function request(
     path: string,
-    init: { method?: string; token?: string; body?: unknown },
+    init: { method?: string; token?: string; body?: unknown; base?: string },
     timeoutMs = REQUEST_TIMEOUT_MS,
   ): Promise<{ status: number; body: unknown }> {
-    const base = options.storeBaseUrl().replace(/\/+$/, '');
+    const base = init.base ?? storeBase();
     try {
       const response = await options.fetch(`${base}${path}`, {
         method: init.method ?? 'GET',
@@ -209,10 +216,14 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
   const unavailable = (status: number) => status === 429 || status >= 500;
 
   /** The signed-in profile, or null when the Store refuses the token or has no profile for it. */
-  async function readProfile(accessToken: string, userId: string): Promise<Identity | null> {
+  async function readProfile(
+    accessToken: string,
+    userId: string,
+    base?: string,
+  ): Promise<Identity | null> {
     const reply = await request(
       `/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=github_login,display_name,avatar_url`,
-      { token: accessToken },
+      { token: accessToken, ...(base === undefined ? {} : { base }) },
     );
     if (reply.status === 401 || reply.status === 403) return null;
     if (reply.status !== 200) {
@@ -426,12 +437,15 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
         code_challenge: challenge,
         code_challenge_method: 's256',
       });
-      const base = options.storeBaseUrl().replace(/\/+$/, '');
+      // Every step of this sign-in talks to the Store it started with: a Store URL changed
+      // meanwhile (P0-11) must never receive this Store's code or tokens.
+      const base = storeBase();
       const code = await waitForCallback(`${base}/auth/v1/authorize?${authorize.toString()}`);
 
       const reply = await request('/auth/v1/token?grant_type=pkce', {
         method: 'POST',
         body: { auth_code: code, code_verifier: verifier },
+        base,
       });
       if (unavailable(reply.status)) {
         throw new StoreAuthError(
@@ -446,7 +460,12 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
           `The Store refused the sign-in code (${String(reply.status)}).`,
         );
       }
-      const identity = await readProfile(tokens.accessToken, tokens.userId);
+      // A sign-out (or a newer sign-in) during the exchange cancels this one before its token is
+      // used at all.
+      if (signIns !== attempt) {
+        throw new StoreAuthError('sign_in_cancelled', 'The sign-in was replaced.');
+      }
+      const identity = await readProfile(tokens.accessToken, tokens.userId, base);
       if (identity === null) {
         throw new StoreAuthError('sign_in_failed', 'The Store has no Publisher profile for it.');
       }

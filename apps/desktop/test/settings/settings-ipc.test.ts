@@ -345,6 +345,35 @@ describe('Store URL (acceptance: the next Store read uses the new URL)', () => {
     );
   });
 
+  it('checks the new Store even while a check of the old one hangs, and goes by its answer', async () => {
+    // The default Store is down: its first check refuses, and the Retry below never answers.
+    let oldStore: 'refused' | 'hang' = 'refused';
+    const runtime = await launch({
+      fetch: (url, init) => {
+        connectivityChecks.push(url);
+        if (url !== DEFAULT_STORE_BASE_URL) return Promise.resolve({ status: 200 });
+        if (oldStore === 'refused') return Promise.reject(new TypeError('fetch failed'));
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'AbortError'));
+          });
+        });
+      },
+    });
+    await call(runtime, 'connectivity.check');
+    expect(runtime.services.connectivity.get()).toEqual({ state: 'offline' });
+    oldStore = 'hang';
+    const retry = call(runtime, 'connectivity.check');
+    await vi.waitFor(() => {
+      expect(connectivityChecks.at(-1)).toBe(DEFAULT_STORE_BASE_URL);
+    });
+
+    await call(runtime, 'settings.set', { storeBaseUrl: STAGING_URL });
+    await expect(retry).resolves.toEqual({ ok: true, data: { state: 'online' } });
+    expect(connectivityChecks.at(-1)).toBe(STAGING_URL);
+    expect(runtime.services.connectivity.get()).toEqual({ state: 'online' });
+  });
+
   it('the default URL itself removes the setting; the same URL again signs nobody out', async () => {
     const runtime = await launch();
     await call(runtime, 'settings.set', { storeBaseUrl: STAGING_URL });
@@ -381,6 +410,8 @@ describe('Store URL (acceptance: the next Store read uses the new URL)', () => {
     'https://store.test/#top',
     ' https://store.test',
     `https://store.test/${'a'.repeat(2048)}`,
+    // 319 characters typed, but 2,719 once the path is percent-encoded as it would be stored.
+    `https://store.test/${'界'.repeat(300)}`,
     42,
   ])('refuses the Store URL %j as invalid_input, changing nothing', async (storeBaseUrl) => {
     const runtime = await launch();
@@ -482,7 +513,13 @@ describe('diagnostics (How to verify, step 4)', () => {
         `Store URL: ${FAKE_STORE_URL} (custom)`,
       ].join('\n'),
     ]);
-    expect(clipboard[0]).not.toMatch(/access-|refresh-|anon|key|token/i);
+    // Neither the anon key nor the session's tokens (the fake issues `refresh-N` with `access-N`).
+    const accessToken = String(await runtime.auth.accessToken());
+    const refreshToken = accessToken.replace(/^access-/, 'refresh-');
+    expect(auth.isRefreshTokenValid(refreshToken)).toBe(true);
+    for (const secret of [FAKE_ANON_KEY, accessToken, refreshToken]) {
+      expect(clipboard[0]).not.toContain(secret);
+    }
   });
 
   it('a Runtime whose Gateway did not start says it is not running', async () => {
@@ -499,6 +536,7 @@ describe('diagnostics (How to verify, step 4)', () => {
     });
     await call(runtime, 'diagnostics.copy');
     expect(clipboard[0]).toContain('Model Gateway: not running');
-    expect(clipboard[0]).toContain(`Store URL: ${DEFAULT_STORE_BASE_URL}\n`.trimEnd());
+    // The last line: the default Store is not marked custom.
+    expect(clipboard[0]?.split('\n').at(-1)).toBe(`Store URL: ${DEFAULT_STORE_BASE_URL}`);
   });
 });

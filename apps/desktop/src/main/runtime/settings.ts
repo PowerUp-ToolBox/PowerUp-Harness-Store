@@ -138,9 +138,10 @@ export function parseSettingsPatch(input: unknown): SettingsPatch | null {
 
 /**
  * A Store base URL as it is stored, or null when it is not one: an absolute `http:` or `https:`
- * URL of at most 2048 characters with no user name or password, query or fragment, and no
- * surrounding spaces. It is stored as the URL parser writes it (scheme and host in lower case),
- * without a trailing slash.
+ * URL with no user name or password, query or fragment, and no surrounding spaces. It is stored as
+ * the URL parser writes it (scheme and host in lower case, the path percent-encoded), without a
+ * trailing slash, and that stored form is at most 2048 characters: encoding can make it several
+ * times longer than the input.
  */
 export function normalizeStoreBaseUrl(input: unknown): string | null {
   if (typeof input !== 'string' || input.length > STORE_BASE_URL_MAX_LENGTH) return null;
@@ -153,7 +154,8 @@ export function normalizeStoreBaseUrl(input: unknown): string | null {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
   if (url.username !== '' || url.password !== '') return null;
-  return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
+  const normalized = `${url.origin}${url.pathname}`.replace(/\/+$/, '');
+  return normalized.length > STORE_BASE_URL_MAX_LENGTH ? null : normalized;
 }
 
 function isUpdateCheckInterval(value: unknown): value is UpdateCheckInterval {

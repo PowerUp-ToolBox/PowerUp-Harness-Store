@@ -279,6 +279,115 @@ describe('reportFailure', () => {
   });
 });
 
+describe('storeChanged (P0-11: the Store URL setting changed)', () => {
+  const NEW_STORE_URL = 'https://self-hosted.example.test';
+
+  /** A service whose Store URL can change; each URL answers as `answers` says. */
+  function serviceWithStores(answers: Record<string, Answer>) {
+    let url = STORE_URL;
+    const sentTo: string[] = [];
+    const fetch = vi.fn<FetchLike>((target, init) => {
+      sentTo.push(target);
+      const answer = answers[target] ?? 'refused';
+      if (answer === 'refused') return Promise.reject(new TypeError('fetch failed'));
+      if (answer === 'hang') {
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'AbortError'));
+          });
+        });
+      }
+      return Promise.resolve({ status: answer });
+    });
+    const changes: Connectivity[] = [];
+    const service = createConnectivityService({
+      fetch,
+      storeBaseUrl: () => url,
+      onChange: (connectivity) => changes.push(connectivity),
+    });
+    services.push(service);
+    return {
+      service,
+      sentTo,
+      changes,
+      setUrl: (next: string) => {
+        url = next;
+      },
+    };
+  }
+
+  it('checks the new Store even while a check of the old one is in flight', async () => {
+    // The old Store is down and its re-check hangs; the new one answers.
+    const { service, sentTo, changes, setUrl } = serviceWithStores({
+      [STORE_URL]: 'hang',
+      [NEW_STORE_URL]: 200,
+    });
+    const oldCheck = service.check();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sentTo).toEqual([STORE_URL]);
+
+    setUrl(NEW_STORE_URL);
+    await expect(service.storeChanged()).resolves.toEqual({ state: 'online' });
+    // Those waiting on the old check get the new Store's answer, not a timeout against the old.
+    await expect(oldCheck).resolves.toEqual({ state: 'online' });
+    expect(sentTo).toEqual([STORE_URL, NEW_STORE_URL]);
+    expect(changes).toEqual([{ state: 'online' }]);
+    await vi.advanceTimersByTimeAsync(10 * MINUTE);
+    expect(service.get()).toEqual({ state: 'online' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('never lets the old Store’s answer settle the state once the URL changed', async () => {
+    // The old Store is up but slow; the new URL refuses.
+    let answerOld: (status: number) => void = () => undefined;
+    const fetch = vi.fn<FetchLike>((target) =>
+      target === STORE_URL
+        ? new Promise((resolve) => {
+            answerOld = (status) => {
+              resolve({ status });
+            };
+          })
+        : Promise.reject(new TypeError('fetch failed')),
+    );
+    let url = STORE_URL;
+    const changes: Connectivity[] = [];
+    const service = createConnectivityService({
+      fetch,
+      storeBaseUrl: () => url,
+      onChange: (connectivity) => changes.push(connectivity),
+    });
+    services.push(service);
+    const oldCheck = service.check();
+    await vi.advanceTimersByTimeAsync(0);
+
+    url = NEW_STORE_URL;
+    const newCheck = service.storeChanged();
+    answerOld(200);
+    await expect(newCheck).resolves.toEqual({ state: 'offline' });
+    await expect(oldCheck).resolves.toEqual({ state: 'offline' });
+    expect(changes).toEqual([{ state: 'offline' }]);
+  });
+
+  it('starts the offline backoff over for the new Store', async () => {
+    const { service, sentTo, setUrl } = serviceWithStores({});
+    await service.check();
+    await vi.advanceTimersByTimeAsync(15_000 + 30_000 + 60_000);
+    expect(sentTo).toHaveLength(4); // the next re-check would be 5 minutes away
+
+    setUrl(NEW_STORE_URL);
+    await service.storeChanged();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(sentTo.slice(4)).toEqual([NEW_STORE_URL, NEW_STORE_URL]);
+  });
+
+  it('does nothing once stopped', async () => {
+    const { service, sentTo } = serviceWithStores({ [STORE_URL]: 200 });
+    service.stop();
+    await expect(service.storeChanged()).resolves.toEqual({ state: 'unknown' });
+    expect(sentTo).toEqual([]);
+  });
+});
+
 describe('stop', () => {
   it('cancels the scheduled re-check and reports nothing more', async () => {
     const { service, fetch, changes } = serviceAnswering('hang');

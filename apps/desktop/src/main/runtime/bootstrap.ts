@@ -316,7 +316,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     },
     afterStoreChange: () => {
       storeCatalogue.clearCache();
-      void connectivity.check();
+      void connectivity.storeChanged();
     },
     afterUpdateIntervalChange: () => {
       updates?.reschedule();
