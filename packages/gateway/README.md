@@ -60,7 +60,9 @@ Tool calls (parallel ones included) come back as `tool_calls`, in the order the 
 
 `stream: true` streams from the Provider and answers `text/event-stream` ([`src/openai/stream.ts`](src/openai/stream.ts)): a `delta.role` chunk, content and index-addressed tool-call fragments as OpenAI sends them, a `delta: {}` chunk with the `finish_reason`, a usage chunk (`choices: []`) when `stream_options.include_usage` is true and the Provider reported usage, then `data: [DONE]`. Every chunk carries the same `chatcmpl_<uuid>`.
 
-The 200 headers wait for the Provider's first output, so every failure before it is an ordinary HTTP error. A failure after it (the Provider breaking off, the idle timeout, a revoked token, `close()`) ends the stream with `data: {"error":{...}}` and `data: [DONE]`. A Harness that disconnects mid-stream aborts the upstream request; the request stays in flight (revocable) until its stream ends.
+The 200 headers wait for the Provider's first output, so every failure before it is an ordinary HTTP error. A failure after it (the Provider breaking off or sending an in-stream `{"error":{...}}`, the idle timeout, a revoked token) ends the stream with `data: {"error":{...}}` and `data: [DONE]`; `close()` drops open streams with no final event. A Harness that disconnects mid-stream aborts the upstream request; the request stays in flight (revocable) until its stream ends, and is logged then, with its whole duration and the code of the error event it ended with (`streamError`).
+
+Tool-call argument fragments are the Provider's text as streamed: concatenated, they equal the non-streaming `arguments` as JSON, not necessarily byte for byte. A call the Provider streamed no argument text for gets its parsed arguments (`{}`) in one fragment.
 
 Types the host implements or receives (all exported):
 

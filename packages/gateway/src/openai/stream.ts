@@ -60,6 +60,8 @@ export class ChunkTranslator {
   readonly #includeUsage: boolean;
   /** The `index` of each tool call by its id, in order of first appearance. */
   readonly #toolIndex = new Map<string, number>();
+  /** The tool calls some argument text was streamed for. */
+  readonly #argumentsStreamed = new Set<string>();
 
   /**
    * @param id The response id, `chatcmpl_<uuid>`.
@@ -87,18 +89,20 @@ export class ChunkTranslator {
       case 'tool-input-delta': {
         const index = this.#toolIndex.get(part.id);
         if (index === undefined || part.delta === '') return [];
+        this.#argumentsStreamed.add(part.id);
         return [this.#chunk({ tool_calls: [{ index, function: { arguments: part.delta } }] })];
       }
-      case 'tool-call':
-        // Already streamed as fragments, unless the adapter only reports whole tool calls.
-        if (this.#toolIndex.has(part.toolCallId)) return [];
-        return [
-          this.#toolCall(
-            part.toolCallId,
-            part.toolName,
-            typeof part.input === 'string' ? part.input : JSON.stringify(part.input),
-          ),
-        ];
+      case 'tool-call': {
+        const args = typeof part.input === 'string' ? part.input : JSON.stringify(part.input);
+        const index = this.#toolIndex.get(part.toolCallId);
+        // The adapter only reports whole tool calls: send it as a single fragment.
+        if (index === undefined) return [this.#toolCall(part.toolCallId, part.toolName, args)];
+        // Already streamed as fragments.
+        if (this.#argumentsStreamed.has(part.toolCallId)) return [];
+        // Opened but no argument text arrived (a call without arguments, sent as `""`): send
+        // the arguments the non-streaming response would hold (`{}`), so they always parse.
+        return [this.#chunk({ tool_calls: [{ index, function: { arguments: args } }] })];
+      }
       case 'finish': {
         const chunks = [this.#chunk({}, toFinishReason(part.finishReason))];
         const usage = this.#includeUsage ? toUsage(part.totalUsage) : undefined;

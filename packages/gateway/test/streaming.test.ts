@@ -10,6 +10,8 @@ import { startFakeProvider } from '../src/testing/fake-provider.js';
 import type { FakeProvider } from '../src/testing/fake-provider.js';
 import type { Gateway, GatewayOptions, Logger } from '../src/index.js';
 import { claims, startGateway } from './support/gateway.js';
+import { chunk, startScriptedUpstream } from './support/scripted-upstream.js';
+import type { ScriptedReply } from './support/scripted-upstream.js';
 import { deltas, readSse, readUntil, textOf } from './support/sse.js';
 import type { SseBody } from './support/sse.js';
 
@@ -29,11 +31,31 @@ afterAll(async () => {
 
 /** Gateways started by the current test, closed after it. */
 const started: Gateway[] = [];
+/** Scripted upstreams started by the current test, closed after its Gateways. */
+const upstreams: { close(): Promise<void> }[] = [];
 
 afterEach(async () => {
   await Promise.all(started.splice(0).map((gateway) => gateway.close()));
+  await Promise.all(upstreams.splice(0).map((upstream) => upstream.close()));
   fake.reset();
 });
+
+/** The Provider id a scripted upstream stands in for. */
+const SCRIPTED = 'openai-compatible:scripted';
+
+/** A Gateway whose `openai-compatible:scripted` Connection points at an upstream answering `reply`. */
+async function startScripted(
+  reply: (body: Record<string, unknown>) => ScriptedReply,
+  overrides: Partial<GatewayOptions> = {},
+) {
+  const upstream = await startScriptedUpstream(reply);
+  upstreams.push(upstream);
+  return start({
+    getConnection: (providerId) =>
+      Promise.resolve(providerId === SCRIPTED ? { baseUrl: upstream.url, apiKey: API_KEY } : null),
+    ...overrides,
+  });
+}
 
 async function start(overrides: Partial<GatewayOptions> = {}) {
   const test = await startGateway({
@@ -300,6 +322,97 @@ describe('tool calls', () => {
     expect(fake.requests[1]?.body).toMatchObject({ tools: [lookup], tool_choice: 'required' });
   });
 
+  it('streams the Provider’s argument text, equal as JSON to the non-streaming arguments', async () => {
+    const args = '{"input": "find cats"}';
+    const { url, token } = await startScripted((body) =>
+      body.stream === true
+        ? {
+            sse: [
+              chunk({
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: 'call_a',
+                    type: 'function',
+                    function: { name: 'lookup', arguments: '' },
+                  },
+                ],
+              }),
+              chunk({ tool_calls: [{ index: 0, function: { arguments: args.slice(0, 9) } }] }),
+              chunk({ tool_calls: [{ index: 0, function: { arguments: args.slice(9) } }] }),
+              chunk({}, 'tool_calls'),
+            ],
+          }
+        : {
+            json: {
+              ...chunk({}),
+              object: 'chat.completion',
+              choices: [
+                {
+                  index: 0,
+                  message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'call_a',
+                        type: 'function',
+                        function: { name: 'lookup', arguments: args },
+                      },
+                    ],
+                  },
+                  finish_reason: 'tool_calls',
+                },
+              ],
+            },
+          },
+    );
+    const request = { model: `${SCRIPTED}/m`, messages: hello, tools: [lookup] };
+    const whole = (await (await complete(url, token, request)).json()) as {
+      choices: { message: { tool_calls: ToolCall[] } }[];
+    };
+    const [call] = accumulateToolCalls(
+      await readSse(await complete(url, token, { ...request, stream: true })),
+    );
+    const [wholeCall] = whole.choices[0]?.message.tool_calls ?? [];
+    expect(call).toMatchObject({ id: 'call_a', function: { name: 'lookup', arguments: args } });
+    expect(call?.id).toBe(wholeCall?.id);
+    expect(JSON.parse(call?.function.arguments ?? '')).toEqual(
+      JSON.parse(wholeCall?.function.arguments ?? ''),
+    );
+  });
+
+  it('streams {} for a tool call the Provider sent without argument text', async () => {
+    const { url, token } = await startScripted(() => ({
+      sse: [
+        chunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_a',
+              type: 'function',
+              function: { name: 'lookup', arguments: '' },
+            },
+          ],
+        }),
+        chunk({}, 'tool_calls'),
+      ],
+    }));
+    const body = await readSse(
+      await complete(url, token, {
+        model: `${SCRIPTED}/m`,
+        messages: hello,
+        tools: [lookup],
+        stream: true,
+      }),
+    );
+    expect(body.done).toBe(true);
+    expect(accumulateToolCalls(body)).toEqual([
+      { id: 'call_a', type: 'function', function: { name: 'lookup', arguments: '{}' } },
+    ]);
+    expect(finishReasons(body)).toEqual(['tool_calls']);
+  });
+
   it('streams the text answer to a tool result', async () => {
     const { url, token } = await start();
     const response = await complete(url, token, {
@@ -397,6 +510,59 @@ describe('failures', () => {
     expect(last.error).not.toHaveProperty('provider_status');
   });
 
+  /** An error frame inside a 200 stream, as OpenRouter, vLLM and Ollama send them. */
+  const inStreamError = {
+    error: { message: `Model overloaded (key ${API_KEY})`, code: 'overloaded' },
+  };
+
+  it('answers 502 provider_error for an in-stream error before any output', async () => {
+    const { url, token } = await startScripted(() => ({ sse: [inStreamError], done: false }));
+    const response = await complete(url, token, {
+      model: `${SCRIPTED}/m`,
+      messages: hello,
+      stream: true,
+    });
+    expect(response.status).toBe(502);
+    expect(await errorOf(response)).toEqual({
+      code: 'provider_error',
+      message: 'The Provider returned an error: Model overloaded (key [redacted])',
+      type: 'provider',
+      provider_message: 'Model overloaded (key [redacted])',
+      provider_code: 'overloaded',
+    });
+  });
+
+  it('ends the stream with a provider_error event for an in-stream error after output', async () => {
+    const error = vi.fn<Logger['error']>();
+    const { url, token } = await startScripted(
+      () => ({
+        sse: [chunk({ role: 'assistant', content: 'hello ' }), inStreamError],
+        done: false,
+      }),
+      { logger: { debug: () => undefined, error } },
+    );
+    const response = await complete(url, token, {
+      model: `${SCRIPTED}/m`,
+      messages: hello,
+      stream: true,
+    });
+    expect(response.status).toBe(200);
+    const body = await readSse(response);
+    expect(body.done).toBe(true);
+    expect(textOf(body)).toBe('hello ');
+    expect(body.chunks.at(-1)).toEqual({
+      error: {
+        code: 'provider_error',
+        message: 'The Provider returned an error: Model overloaded (key [redacted])',
+        type: 'provider',
+        provider_message: 'Model overloaded (key [redacted])',
+        provider_code: 'overloaded',
+      },
+    });
+    // A Provider failure, not a Gateway bug.
+    expect(error).not.toHaveBeenCalled();
+  });
+
   it('answers 504 when the Provider sends no bytes within the timeout', async () => {
     const { url, token } = await start({ firstByteTimeoutMs: 100 });
     const response = await complete(url, token, {
@@ -491,7 +657,8 @@ describe('failures', () => {
   });
 
   it('stops open streams and their upstream calls when the Gateway closes', async () => {
-    const { gateway, url, token } = await start();
+    const debug = vi.fn<Logger['debug']>();
+    const { gateway, url, token } = await start({ logger: { debug, error: () => undefined } });
     const response = await complete(url, token, {
       model: `${FAKE}/fake/stall`,
       messages: hello,
@@ -500,7 +667,7 @@ describe('failures', () => {
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
     await readUntil(reader, '"content":"hello');
     await gateway.close();
-    // The stream ends one way or the other: an error event, or the connection dropping.
+    // close() drops open connections: the stream ends without a final event.
     await expect(
       (async () => {
         for (;;) if ((await reader.read()).done) return 'ended';
@@ -508,6 +675,13 @@ describe('failures', () => {
     ).resolves.toBe('ended');
     await vi.waitFor(() => {
       expect(fake.requests[0]?.aborted).toBe(true);
+    });
+    // The dropped stream still ends its request, which is logged.
+    await vi.waitFor(() => {
+      expect(debug).toHaveBeenCalledWith(
+        'request',
+        expect.objectContaining({ path: '/v1/chat/completions' }),
+      );
     });
   });
 
@@ -531,5 +705,35 @@ describe('failures', () => {
       }),
     );
     expect(JSON.stringify(debug.mock.calls)).not.toContain('private');
+  });
+
+  it('logs a stream when it ends, with its whole duration and the error it ended with', async () => {
+    const debug = vi.fn<Logger['debug']>();
+    const { url, token } = await start({
+      streamIdleTimeoutMs: 200,
+      logger: { debug, error: () => undefined },
+    });
+    const response = await complete(url, token, {
+      model: `${FAKE}/fake/stall`,
+      messages: hello,
+      stream: true,
+    });
+    // The headers are out, but the stream has not ended: nothing is logged yet.
+    expect(response.status).toBe(200);
+    expect(debug).not.toHaveBeenCalled();
+    expect((await readSse(response)).done).toBe(true);
+    await vi.waitFor(() => {
+      expect(debug).toHaveBeenCalledTimes(1);
+    });
+    expect(debug).toHaveBeenCalledWith(
+      'request',
+      expect.objectContaining({
+        path: '/v1/chat/completions',
+        status: 200,
+        streamError: 'provider_timeout',
+      }),
+    );
+    const [[, fields]] = debug.mock.calls as [[string, { durationMs: number }]];
+    expect(fields.durationMs).toBeGreaterThanOrEqual(200);
   });
 });

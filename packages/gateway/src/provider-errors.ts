@@ -7,6 +7,7 @@ import {
   EmptyResponseBodyError,
   InvalidResponseDataError,
   JSONParseError,
+  StreamProviderError,
   TypeValidationError,
 } from 'ai';
 import type { GatewayErrorCode } from './errors.js';
@@ -43,16 +44,19 @@ export function isProviderFailure(error: unknown): boolean {
     InvalidResponseDataError.isInstance(error) ||
     JSONParseError.isInstance(error) ||
     TypeValidationError.isInstance(error) ||
-    EmptyResponseBodyError.isInstance(error)
+    EmptyResponseBodyError.isInstance(error) ||
+    // An error the Provider sent inside a 200 stream (`data: {"error": {...}}`).
+    StreamProviderError.isInstance(error)
   );
 }
 
 /**
  * `provider_error` for a failed upstream call. `provider_status` is present when the Provider
- * answered with an error status (never for a failed connection or a broken success response);
- * `provider_message` is the upstream `error.message`, else the raw body (cut to 1000 characters),
- * else the error's own message; `provider_code` is the upstream `error.code` when it is a string.
- * Any occurrence of the Connection's API key is replaced with `[redacted]`.
+ * answered with an error status (never for a failed connection, a broken success response or an
+ * error sent inside a 200 stream); `provider_message` is the upstream `error.message`, else the
+ * raw body (cut to 1000 characters), else the error's own message; `provider_code` is the upstream
+ * `error.code` when it is a string. Any occurrence of the Connection's API key is replaced with
+ * `[redacted]`.
  */
 export function providerError(error: unknown, apiKey: string | undefined): MappedProviderError {
   const hide = (text: string) =>
@@ -70,6 +74,11 @@ export function providerError(error: unknown, apiKey: string | undefined): Mappe
       message = hide(error.responseBody).slice(0, MAX_RAW_MESSAGE);
     }
     if (typeof upstream?.code === 'string') fields.provider_code = hide(upstream.code);
+  }
+  // The AI SDK's error for an in-stream `{"error": {...}}` keeps its `message` and `code`. Its
+  // `statusCode` is declared or guessed from the payload, not an HTTP status, so it is not kept.
+  if (StreamProviderError.isInstance(error) && typeof error.code === 'string') {
+    fields.provider_code = hide(error.code);
   }
   if (message === '') message = 'The Provider call failed.';
   fields.provider_message = message;

@@ -2,12 +2,12 @@
  * The Gateway's small building blocks on their own: the JSON body reader, log redaction, the
  * in-memory token table, explicit model ids, Provider error mapping and usage translation.
  */
-import { APICallError } from 'ai';
+import { APICallError, StreamProviderError } from 'ai';
 import { describe, expect, it } from 'vitest';
 import { MAX_BODY_BYTES, readJsonObject } from '../src/body.js';
 import { redact } from '../src/logging.js';
 import { toFinishReason, toUsage } from '../src/openai/translate.js';
-import { providerError } from '../src/provider-errors.js';
+import { isProviderFailure, providerError } from '../src/provider-errors.js';
 import { PROVIDER_IDS, parseModelRef } from '../src/providers.js';
 import { createInMemoryTokenVerifier } from '../src/tokens.js';
 
@@ -232,6 +232,24 @@ describe('providerError', () => {
     expect(mapped.fields.provider_message).toBe(
       `${'x'.repeat(980)} key [redacted] is invalid`.slice(0, 1000),
     );
+  });
+
+  it('maps an error sent inside a 200 stream: its message and string code, no status', () => {
+    const key = 'my-plain-key-without-prefix';
+    const error = new StreamProviderError({
+      message: `Overloaded for ${key}.`,
+      code: `busy-${key}`,
+      statusCode: 503,
+    });
+    expect(isProviderFailure(error)).toBe(true);
+    expect(providerError(error, key).fields).toEqual({
+      provider_message: 'Overloaded for [redacted].',
+      provider_code: 'busy-[redacted]',
+    });
+    const numeric = new StreamProviderError({ message: 'Too many requests.', code: 429 });
+    expect(providerError(numeric, undefined).fields).toEqual({
+      provider_message: 'Too many requests.',
+    });
   });
 });
 

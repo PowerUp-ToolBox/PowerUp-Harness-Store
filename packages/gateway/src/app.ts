@@ -86,21 +86,27 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   const { options, timeouts, verifier, inFlight, logger } = deps;
   const app = new Hono<AppEnv>();
 
-  // Request metadata at debug level; never bodies or headers.
+  // Request metadata at debug level; never bodies or headers. A stream is logged once it ends.
   app.use(async (c, next) => {
     const started = performance.now();
     const trace: CompletionTrace = {};
     c.set('trace', trace);
     await next();
-    logger.debug('request', {
-      method: c.req.method,
-      path: c.req.path,
-      harnessId: (c.var.claims as GatewayTokenClaims | undefined)?.harnessId,
-      ...(trace.model !== undefined && { model: trace.model }),
-      status: c.res.status,
-      ...(trace.providerStatus !== undefined && { providerStatus: trace.providerStatus }),
-      durationMs: Math.round(performance.now() - started),
-    });
+    const status = c.res.status;
+    const write = () => {
+      logger.debug('request', {
+        method: c.req.method,
+        path: c.req.path,
+        harnessId: (c.var.claims as GatewayTokenClaims | undefined)?.harnessId,
+        ...(trace.model !== undefined && { model: trace.model }),
+        status,
+        ...(trace.providerStatus !== undefined && { providerStatus: trace.providerStatus }),
+        ...(trace.streamError !== undefined && { streamError: trace.streamError }),
+        durationMs: Math.round(performance.now() - started),
+      });
+    };
+    if (trace.streamEnded === undefined) write();
+    else void trace.streamEnded.then(write);
   });
 
   app.use(async (c, next) => {

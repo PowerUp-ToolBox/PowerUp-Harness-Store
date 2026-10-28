@@ -10,6 +10,7 @@ import type { LanguageModel, TextStreamPart, ToolSet } from 'ai';
 import { createLanguageModel } from './adapters.js';
 import { readJsonObject } from './body.js';
 import { errorBody, errorResponse } from './errors.js';
+import type { GatewayErrorCode } from './errors.js';
 import { unlessAborted } from './in-flight.js';
 import type { Logger } from './logging.js';
 import { parseChatCompletionRequest } from './openai/request.js';
@@ -46,6 +47,13 @@ export interface CompletionTrace {
   model?: string;
   /** The upstream HTTP status, once the Provider answered. */
   providerStatus?: number;
+  /**
+   * Set for a streamed response, whose body outlives the handler: settles once the stream has
+   * ended, so the request is logged with its whole duration.
+   */
+  streamEnded?: Promise<void>;
+  /** The code of the error event a started stream ended with, if any. */
+  streamError?: GatewayErrorCode;
 }
 
 export interface CompletionRequest {
@@ -220,8 +228,8 @@ const SSE_HEADERS = { 'content-type': 'text/event-stream', 'cache-control': 'no-
  * once the Provider's answer starts (the first stream part other than `start`/`start-step`), so
  * anything that fails before then is an ordinary HTTP error, exactly as without streaming. After
  * that a failure ends the stream with an error event and `[DONE]`: the mapped Provider error, or
- * `invalid_token` when the Gateway Token is revoked or the Gateway closes. When the Harness stops
- * reading, the upstream call is aborted.
+ * `invalid_token` when the Gateway Token is revoked (closing the Gateway drops the connection
+ * instead). When the Harness stops reading, the upstream call is aborted.
  */
 async function completeStream(
   resolved: ResolvedModel,
@@ -274,6 +282,10 @@ async function completeStream(
 
   // From here on the response outlives this handler: keep it in flight until the stream ends.
   const endInFlight = detach();
+  let streamEnded: () => void = () => undefined;
+  trace.streamEnded = new Promise((resolve) => {
+    streamEnded = resolve;
+  });
   const translator = new ChunkTranslator(newCompletionId(), model, includeUsage);
   const encoder = new TextEncoder();
   let ended = false;
@@ -282,18 +294,22 @@ async function completeStream(
     ended = true;
     if (failed) stop.abort();
     endInFlight();
+    streamEnded();
   };
   /** The events that end the stream after a failure; `undefined` when nobody reads them. */
   const failureEvents = (part: Extract<StreamPart, { type: 'error' | 'abort' }>) => {
     if (signal.aborted) {
+      trace.streamError = 'invalid_token';
       return sseError(errorBody('invalid_token', 'The Gateway Token was revoked.'));
     }
     if (request.signal.aborted || stop.signal.aborted) return undefined;
     const error = part.type === 'error' ? part.error : new Error('The stream was aborted.');
     const mapped = upstreamFailure(error, upstream, resolved, deps.timeouts);
     if (mapped !== undefined) {
+      trace.streamError = mapped.code;
       return sseError(errorBody(mapped.code, mapped.message, mapped.fields));
     }
+    trace.streamError = 'internal_error';
     deps.logger.error('internal error', {
       method: 'POST',
       path: '/v1/chat/completions',
