@@ -358,7 +358,7 @@ describe('Harnesses that are not visible', () => {
     await deleteUser(other);
   });
 
-  it('never appear, whatever the query, for anon or a signed-in Publisher', async () => {
+  it('never appear, whatever the query, for anon, another Publisher or their own Publisher', async () => {
     const hidden = ['bob/retired-tool', 'carol/bad-tool'];
     const queries: SearchArgs[] = [
       {},
@@ -373,7 +373,8 @@ describe('Harnesses that are not visible', () => {
       { limit: 60 },
       { limit: 60, offset: 3 },
     ];
-    for (const caller of ['anon', { token: other.token }] as const) {
+    // The owner matters most: an owner read policy must not leak their own rows into search.
+    for (const caller of ['anon', { token: other.token }, { token: publisher.token }] as const) {
       for (const args of queries) {
         const got = await ids(args, caller);
         for (const id of hidden) expect(got, JSON.stringify(args)).not.toContain(id);
