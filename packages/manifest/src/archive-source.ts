@@ -11,9 +11,10 @@ export type { RandomAccessReader } from './zip/central-directory.js';
 
 /**
  * A Harness Package in a zip archive. Opening it reads the central directory (the zip's list of
- * entries) and every entry's local header, never any content; {@link readFile} inflates one entry
- * into memory, up to the bytes asked for. Nothing is ever extracted or written to disk, so it is
- * safe on an untrusted upload.
+ * entries) and every entry's local header. The only content it reads is that of entries with a
+ * data descriptor, which it inflates or scans (500 MB at most for the whole archive) to confirm
+ * where each one ends. {@link readFile} inflates one entry into memory, up to the bytes asked for.
+ * Nothing is ever extracted or written to disk, so it is safe on an untrusted upload.
  *
  * The listing is what every unpacker would find: an entry whose local header disagrees with the
  * central directory, and bytes that belong to no entry (where a streaming unpacker could find

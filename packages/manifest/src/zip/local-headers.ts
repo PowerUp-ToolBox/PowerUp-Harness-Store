@@ -41,14 +41,51 @@ export const FLAG_DATA_DESCRIPTOR = 0x0008;
  */
 const WINDOW = 64 * 1024;
 
-/** A slice of compressed bytes fed to the inflater when confirming a Deflate stream's end. */
+/** Compressed bytes are read this many at a time when confirming a Deflate stream's end. */
 const VERIFY_SLICE = 64 * 1024;
 /**
- * Confirming a data-descriptor entry's Deflate stream inflates it, bounded by this many output
- * bytes (no Harness Package holds more, so a larger entry cannot be confirmed and is rejected):
- * a hostile "zip bomb" cannot make the check do unbounded work.
+ * Confirming the data-descriptor entries of one archive inflates their Deflate streams and scans
+ * their stored data: at most this many bytes in total (no Harness Package holds more than this,
+ * compressed), however many entries the archive has. Every byte inflated is charged, including
+ * the output of a push that throws, and an entry is only started when the most it can be charged
+ * fits in what is left. A hostile "zip bomb", many central directory records pointing at one
+ * stream, or bytes after the end of a stream cannot make the check do unbounded work.
  */
-const VERIFY_OUTPUT_CAP = PACKAGE_LIMITS.maxArchiveBytes;
+const VERIFY_BUDGET = PACKAGE_LIMITS.maxArchiveBytes;
+/** Deflate's largest ratio, rounded up: one compressed byte inflates to at most this many bytes. */
+const MAX_DEFLATE_RATIO = 1032;
+/**
+ * The smallest piece of compressed bytes given to the inflater at a time. Pieces shrink towards
+ * it as an entry nears its declared size, so a stream that inflates past it does at most about
+ * 4 MB of extra work.
+ */
+const MIN_PIECE = 4 * 1024;
+/**
+ * The most compressed bytes fflate's inflater holds back, not yet inflated, while a Deflate stream
+ * is still going: one incomplete stored block (its 65 535 bytes, its 4 length bytes and the 2
+ * bytes its 3-bit header can span), or less (a dynamic block's header, or part of one symbol).
+ * Once a stream has ended, the inflater holds every byte pushed after the end instead, and copies
+ * them all again on every push.
+ */
+const MAX_HELD = 65_535 + 4 + 2;
+/**
+ * The most confirming a Deflate data-descriptor entry is charged past its declared size, about
+ * 4.1 MB: one push, made while the output has not passed that size, inflates at most the bytes
+ * the inflater held before it (at most {@link MAX_HELD}: a stored block it completes) and its own
+ * bytes and one more (a symbol among the held ones) at Deflate's largest ratio, and a piece is at
+ * most {@link MIN_PIECE} bytes, or few enough to stay within 2 KB of the declared size. An entry
+ * is only confirmed when its declared size and this fit in what is left of {@link VERIFY_BUDGET},
+ * so the budget is never overspent.
+ */
+export const MAX_OVERRUN = MAX_HELD + (MIN_PIECE + 1) * MAX_DEFLATE_RATIO;
+
+/** What is left of {@link VERIFY_BUDGET} while one archive's entries are confirmed. */
+interface Budget {
+  left: number;
+}
+
+/** Why an entry that {@link VERIFY_BUDGET} does not reach is inconsistent. */
+const BUDGET_SPENT = `it has a data descriptor, and confirming where its data ends would take this check past the ${String(VERIFY_BUDGET / (1024 * 1024))} MB it inflates or scans per archive`;
 
 /** What an entry's local header says, next to its central directory record. */
 export interface LocalHeader {
@@ -93,6 +130,12 @@ export interface LocalLayout {
  * next entry, are in the same place for both kinds of reader), and rejects a stored entry with a
  * data descriptor, whose end a streaming unpacker cannot find without scanning.
  *
+ * Entries that share bytes are reported before anything is inflated, so each stream is inflated
+ * at most once, and all the confirming shares one budget ({@link VERIFY_BUDGET}): the entries it
+ * does not reach are reported as inconsistent. An archive that validatePackage() rejects for its
+ * listing alone (a truncated listing, more files than PACKAGE_LIMITS.maxFiles, or over
+ * PACKAGE_LIMITS.maxArchiveBytes) is not confirmed at all.
+ *
  * @throws only what the reader throws (an I/O error): a problem with the archive is reported in
  *   the result.
  */
@@ -112,24 +155,11 @@ export async function readLocalHeaders(
     walk.push({ ...item, ...(await readLocalHeader(window, item.entry, next, limit)) });
   }
 
-  // A data-descriptor entry (flag bit 3) is read by a streaming unpacker from the data itself, not
-  // from a declared size, so it can hide bytes that only such an unpacker reaches. Confirm each
-  // one is unambiguous. This inflates, so it uses the archive reader directly, not the window.
-  for (const { entry, header } of walk) {
-    if (
-      header.inconsistency !== undefined ||
-      header.dataStart === undefined ||
-      (entry.flags & FLAG_DATA_DESCRIPTOR) === 0 ||
-      (entry.flags & FLAG_ENCRYPTED) !== 0
-    ) {
-      continue;
-    }
-    const inconsistency = await streamedEntryInconsistency(reader, entry, header.dataStart);
-    if (inconsistency !== undefined) header.inconsistency = inconsistency;
-  }
-
-  // Each entry must start where the previous one ends. After an entry whose end is unknown (its
-  // local header is unreadable, already reported), the next gap is not reported.
+  // Each entry must start where the previous one ends: one that starts inside another, or at the
+  // same local header, shares its bytes. This runs before anything is inflated, so a stream that
+  // several central directory records point at is confirmed once, for the first of them. After an
+  // entry whose end is unknown (its local header is unreadable, already reported), the next gap is
+  // not reported.
   let covered = 0;
   let endKnown = true;
   let last: ZipEntry | undefined;
@@ -157,9 +187,46 @@ export async function readLocalHeaders(
   // Entries past the listing limit were never read, so their bytes would look unlisted.
   if (directory.truncated) unlisted = undefined;
 
+  // An archive with too many entries or too large is rejected from its listing alone: its entries
+  // are not confirmed. Folders do not count as files, as for validatePackage().
+  const files = entries.filter((entry) => entry.kind !== 'directory').length;
+  if (
+    !directory.truncated &&
+    files <= PACKAGE_LIMITS.maxFiles &&
+    reader.size <= PACKAGE_LIMITS.maxArchiveBytes
+  ) {
+    await confirmStreamedEntries(reader, walk);
+  }
+
   const headers: LocalHeader[] = [];
   for (const { index, header } of walk) headers[index] = header;
   return unlisted === undefined ? { headers } : { headers, unlisted };
+}
+
+/**
+ * A data-descriptor entry (flag bit 3) is read by a streaming unpacker from the data itself, not
+ * from a declared size, so it can hide bytes that only such an unpacker reaches. Confirms each one
+ * that is not already inconsistent is unambiguous, in the order of the local headers, within
+ * {@link VERIFY_BUDGET}: once an entry does not fit in what is left of it, that entry and every
+ * later one are reported instead. This inflates, so it uses the archive reader, not the window.
+ */
+async function confirmStreamedEntries(
+  reader: RandomAccessReader,
+  walk: readonly { entry: ZipEntry; header: LocalHeader }[],
+): Promise<void> {
+  const budget: Budget = { left: VERIFY_BUDGET };
+  for (const { entry, header } of walk) {
+    if (
+      header.inconsistency !== undefined ||
+      header.dataStart === undefined ||
+      (entry.flags & FLAG_DATA_DESCRIPTOR) === 0 ||
+      (entry.flags & FLAG_ENCRYPTED) !== 0
+    ) {
+      continue;
+    }
+    const inconsistency = await streamedEntryInconsistency(reader, entry, header.dataStart, budget);
+    if (inconsistency !== undefined) header.inconsistency = inconsistency;
+  }
 }
 
 async function readLocalHeader(
@@ -327,15 +394,30 @@ async function streamedEntryInconsistency(
   reader: RandomAccessReader,
   entry: ZipEntry,
   dataStart: number,
+  budget: Budget,
 ): Promise<string | undefined> {
+  if (entry.method !== METHOD_STORED && entry.method !== METHOD_DEFLATE) {
+    return undefined; // an unsupported method is reported already
+  }
+  // The work is known before it starts: a stored entry's data is scanned once (and charged its
+  // length), and a Deflate stream is charged at most its declared size and MAX_OVERRUN, as it is
+  // rejected as soon as it inflates past that size.
+  const work =
+    entry.method === METHOD_STORED ? entry.compressedSize : entry.uncompressedSize + MAX_OVERRUN;
+  if (work > budget.left) {
+    budget.left = -1; // no later entry is confirmed either
+    return BUDGET_SPENT;
+  }
   if (entry.method === METHOD_STORED) {
+    budget.left -= entry.compressedSize;
     if (await storedDescriptorBefore(reader, dataStart, entry.compressedSize)) {
       return 'it is stored with a data descriptor, and its data holds an earlier copy of that descriptor, so a streaming unpacker that scans for one would stop short and read the rest as more entries';
     }
     return undefined;
   }
-  if (entry.method !== METHOD_DEFLATE) return undefined; // an unsupported method is reported already
-  if (await deflateEndsEarly(reader, dataStart, entry.compressedSize, entry.uncompressedSize)) {
+  if (
+    await deflateEndsEarly(reader, dataStart, entry.compressedSize, entry.uncompressedSize, budget)
+  ) {
     return 'its Deflate stream ends before its declared compressed size, so a streaming unpacker would read the bytes after it as more entries';
   }
   return undefined;
@@ -400,40 +482,87 @@ function safeUint64(view: DataView, at: number): number {
  * Whether the Deflate stream at `dataStart` ends before `compressedSize` bytes. Inflating the
  * first `compressedSize - 1` bytes completes the stream exactly when it ends before the last
  * byte, so the bytes after it belong to no data a reader using the central directory sees. The
- * work is bounded: inflating stops at {@link VERIFY_OUTPUT_CAP} output bytes.
+ * work is bounded: inflating stops once the output passes `uncompressedSize`, or once the stream
+ * has ended (the inflater then holds more than {@link MAX_HELD} bytes), and every byte of output
+ * is taken from `budget`, at most `uncompressedSize` and {@link MAX_OVERRUN} in all.
+ *
+ * A push that throws has inflated before failing, but that output never reaches the callback
+ * that counts it: such a push is charged the most it could have inflated instead (the bytes the
+ * inflater held, as a stored block, and its own bytes and one more, for a symbol among the held
+ * ones, at Deflate's largest ratio). Every piece is pushed as more to come, which never throws
+ * for want of data, except the last byte of the trial, which is pushed alone as the final one: an
+ * honest stream that needs the entry's last byte throws there, and costs at most about 66 KB past
+ * what it inflated before.
  */
 async function deflateEndsEarly(
   reader: RandomAccessReader,
   dataStart: number,
   compressedSize: number,
   uncompressedSize: number,
+  budget: Budget,
 ): Promise<boolean> {
   const trial = compressedSize - 1;
   if (trial <= 0) return false;
-  const cap = Math.min(uncompressedSize, VERIFY_OUTPUT_CAP);
   let produced = 0;
+  let uncounted = 0;
   const inflater = new Inflate((chunk) => {
     produced += chunk.length;
   });
-  let consumed = 0;
-  while (consumed < trial) {
-    const length = Math.min(VERIFY_SLICE, trial - consumed);
-    const input = await reader.read(dataStart + consumed, length);
-    consumed += length;
-    try {
-      inflater.push(input, consumed >= trial);
-    } catch {
-      // The stream needs more than the first (compressedSize - 1) bytes: it ends no earlier than
-      // the central directory says, so a streaming unpacker reaches the same descriptor.
-      return false;
+  try {
+    let consumed = 0;
+    while (consumed < trial) {
+      const sliceStart = consumed;
+      const slice = await reader.read(
+        dataStart + sliceStart,
+        Math.min(VERIFY_SLICE, trial - sliceStart),
+      );
+      const sliceEnd = sliceStart + slice.length;
+      // In pieces that, even at Deflate's largest ratio, cannot inflate far past the declared size.
+      while (consumed < sliceEnd) {
+        const room = uncompressedSize - produced;
+        let end = Math.min(
+          sliceEnd,
+          consumed + Math.max(MIN_PIECE, Math.ceil(room / MAX_DEFLATE_RATIO)),
+        );
+        if (end === trial && end - consumed > 1) end = trial - 1; // the last byte goes alone
+        const piece = slice.subarray(consumed - sliceStart, end - sliceStart);
+        consumed = end;
+        const held = heldBytes(inflater);
+        try {
+          inflater.push(piece, end === trial);
+        } catch {
+          // The stream needs more than the first (compressedSize - 1) bytes (or its data is
+          // invalid, which reading the entry reports): it ends no earlier than the central
+          // directory says, so a streaming unpacker reaches the same descriptor.
+          // A fresh inflater holds nothing, even when heldBytes() cannot tell.
+          uncounted = Math.min(held, MAX_HELD) + (piece.length + 1) * MAX_DEFLATE_RATIO;
+          return false;
+        }
+        // More output than the entry declares: a streaming reader and a reader using the central
+        // directory cannot agree on it, so treat it as ending early.
+        if (produced > uncompressedSize) return true;
+        // The stream has ended (the inflater keeps the bytes after its end without inflating them,
+        // and would copy them all again on every later push): it ends early.
+        if (heldBytes(inflater) > MAX_HELD) return true;
+      }
     }
-    // More output than the entry declares (or than any package holds): a streaming reader and a
-    // reader using the central directory cannot agree on it, so treat it as ending early.
-    if (produced > cap) return true;
+    // The first (compressedSize - 1) bytes decoded whole: the Deflate stream ends before the last
+    // byte, hiding the bytes after it from readers that use the central directory.
+    return true;
+  } finally {
+    budget.left -= produced + uncounted;
   }
-  // The first (compressedSize - 1) bytes decoded whole: the Deflate stream ends before the last
-  // byte, hiding the bytes after it from readers that use the central directory.
-  return true;
+}
+
+/**
+ * How many compressed bytes `inflater` holds back, not yet inflated. fflate keeps them in its
+ * undocumented `p` field: should that ever change, this reports more than {@link MAX_HELD}, so
+ * every Deflate data-descriptor entry is reported as ending early (and the tests fail) rather than
+ * confirmed without the bound.
+ */
+function heldBytes(inflater: Inflate): number {
+  const held = (inflater as unknown as { p?: unknown }).p;
+  return held instanceof Uint8Array ? held.length : MAX_HELD + 1;
 }
 
 /**

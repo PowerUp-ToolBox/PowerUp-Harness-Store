@@ -6,9 +6,11 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { deflateRawSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ArchiveSource, PACKAGE_LIMITS, validatePackage } from '../src/index.js';
 import { DirectorySource } from '../src/node/index.js';
+import { crc32 } from '../src/zip/crc32.js';
 import { findings, problemsOf } from './helpers.js';
 import { buildZip } from './support/zip-writer.js';
 
@@ -60,6 +62,76 @@ describe('the listing limit', () => {
     const listing = (await ArchiveSource.open(zip)).listEntries();
     expect(listing.truncated).toBe(true);
     expect(listing.entries).toHaveLength(50);
+  });
+
+  it('does not confirm the data-descriptor entries of a zip past the limit', async () => {
+    // A Deflate stream that ends early, which confirming would report, among the listed entries.
+    const content = 'x'.repeat(1000);
+    const early = {
+      name: 'early.bin',
+      method: 8,
+      compressedData: Buffer.concat([deflateRawSync(content), Buffer.from('trailing bytes')]),
+      crc: crc32(new TextEncoder().encode(content)),
+      declaredSize: content.length,
+      dataDescriptor: true,
+    };
+    const zip = buildZip([
+      early,
+      ...Array.from({ length: 50 }, (_, i) => ({ name: `d${String(i)}/` })),
+    ]);
+    const source = await ArchiveSource.open(zip);
+    expect(source.listEntries().truncated).toBe(true);
+    expect(source.listEntries().entries[0]).not.toHaveProperty('unsupported');
+    const result = await validatePackage(source);
+    expect(findings(problemsOf(result))).toEqual(['archive_too_many_files@$']);
+    expect(problemsOf(result)[0]?.messageKey).toBe('archive_too_many_files.not_counted');
+  });
+
+  it('does not confirm the data-descriptor entries of a zip with too many files', async () => {
+    // Listed whole, but over maxFiles: validatePackage() rejects it from its listing alone.
+    const content = 'x'.repeat(1000);
+    const zip = buildZip([
+      {
+        name: 'early.bin',
+        method: 8,
+        compressedData: Buffer.concat([deflateRawSync(content), Buffer.from('trailing bytes')]),
+        crc: crc32(new TextEncoder().encode(content)),
+        declaredSize: content.length,
+        dataDescriptor: true,
+      },
+      ...Array.from({ length: 10 }, (_, i) => ({ name: `f${String(i)}.txt`, data: 'x' })),
+    ]);
+    const source = await ArchiveSource.open(zip);
+    expect(source.listEntries().truncated).toBe(false);
+    expect(source.listEntries().entries[0]).not.toHaveProperty('unsupported');
+    const result = await validatePackage(source);
+    expect(problemsOf(result)).toContainEqual(
+      expect.objectContaining({
+        code: 'archive_too_many_files',
+        params: { actual: 11, limit: 10 },
+      }),
+    );
+    expect(problemsOf(result).map((p) => p.messageKey)).not.toContain(
+      'archive_invalid.inconsistent',
+    );
+  });
+
+  it('confirms the data-descriptor entries of a zip with exactly maxFiles files', async () => {
+    const content = 'x'.repeat(1000);
+    const zip = buildZip([
+      {
+        name: 'early.bin',
+        method: 8,
+        compressedData: Buffer.concat([deflateRawSync(content), Buffer.from('trailing bytes')]),
+        crc: crc32(new TextEncoder().encode(content)),
+        declaredSize: content.length,
+        dataDescriptor: true,
+      },
+      ...Array.from({ length: 9 }, (_, i) => ({ name: `f${String(i)}.txt`, data: 'x' })),
+      ...Array.from({ length: 5 }, (_, i) => ({ name: `d${String(i)}/` })),
+    ]);
+    const [early] = (await ArchiveSource.open(zip)).listEntries().entries;
+    expect(early?.unsupported).toMatchObject({ reason: 'inconsistent' });
   });
 
   it('counts files, not directories, against maxFiles', async () => {
