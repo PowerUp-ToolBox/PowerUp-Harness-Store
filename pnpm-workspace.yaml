@@ -9,3 +9,9 @@ packages:
 
 # Refuse to install on a Node older than the engines.node floor instead of only warning.
 engineStrict: true
+
+# pnpm runs no dependency install scripts unless listed. Electron needs none: it downloads its
+# binary on first run. electron-winstaller (pulled in by electron-builder) only prepares 7-Zip for
+# Squirrel.Windows installers, which this repo does not build.
+allowBuilds:
+  electron-winstaller: false

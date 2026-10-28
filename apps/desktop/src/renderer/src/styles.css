@@ -1,0 +1,150 @@
+/*
+ * Design tokens, light and dark. The theme follows the OS (prefers-color-scheme); there is no
+ * manual toggle in P0. Colours match the maintainer's design demo; body text is at least 14 px with
+ * 4.5:1 contrast (docs/ux/design-principles.md §6).
+ */
+:root {
+  color-scheme: light dark;
+  --font-sans:
+    system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei',
+    sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --color-bg: #ffffff;
+  --color-bg-subtle: #fafaf8;
+  --color-sidebar: #f4f3ef;
+  --color-sidebar-active: #e2e0d9;
+  --color-border: #e2e1dc;
+  --color-text: #1c1d21;
+  --color-text-muted: #55585f;
+  --color-accent: #2b59c3;
+  --color-accent-hover: #1e3f8f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #1b1c1f;
+    --color-bg-subtle: #202125;
+    --color-sidebar: #232428;
+    --color-sidebar-active: #34363c;
+    --color-border: #34363c;
+    --color-text: #ececee;
+    --color-text-muted: #a5a8af;
+    --color-accent: #8aa9f0;
+    --color-accent-hover: #b0c6f6;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+a {
+  color: var(--color-accent);
+}
+
+a:hover {
+  color: var(--color-accent-hover);
+}
+
+code {
+  font-family: var(--font-mono);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.shell {
+  display: flex;
+  height: 100%;
+}
+
+.sidebar {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 10px;
+  background: var(--color-sidebar);
+  border-right: 1px solid var(--color-border);
+  overflow-y: auto;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  color: var(--color-text);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.sidebar-item:hover {
+  color: var(--color-text);
+  background: var(--color-sidebar-active);
+}
+
+.sidebar-item[aria-current='page'] {
+  background: var(--color-sidebar-active);
+  font-weight: 600;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.page-header {
+  padding: 20px 28px 0;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.page {
+  padding: 18px 28px 32px;
+}
+
+.placeholder {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.onboarding {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  height: 100%;
+  padding: 36px 16px;
+  background: var(--color-bg-subtle);
+}
+
+.onboarding h1 {
+  margin: 0;
+  font-size: 26px;
+}
