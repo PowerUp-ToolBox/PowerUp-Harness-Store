@@ -4,15 +4,15 @@ Two stores: the **Store** database (Supabase Postgres, shared) and the **local s
 
 ## 1. Store (Postgres)
 
-Conventions: `uuid` primary keys, `timestamptz` timestamps, snake_case, RLS on every table.
+Conventions: `uuid` primary keys, `timestamptz` timestamps, snake_case, RLS on every table. The schema lives in `apps/store/supabase/migrations`; migrations are the only way it changes.
 
 ### `profiles`
-One row per signed-in Publisher, created by a trigger on `auth.users` insert.
+One row per signed-in Publisher, created by a trigger on `auth.users` (after insert, and after Auth writes the app metadata) when `raw_app_meta_data->>'provider' = 'github'`, which users cannot set: `github_login` = lower(`user_name`), `display_name` from `full_name` (else `name`), `avatar_url` from `avatar_url`, all from `raw_user_meta_data`. An existing profile is never changed by the trigger (a GitHub rename keeps the original login in P0). Email signup is off, so nobody can claim a login through signup metadata.
 
 | column | type | notes |
 |---|---|---|
-| `id` | uuid PK | = `auth.users.id` |
-| `github_login` | text unique | lower-cased; forms the `publisher` segment of Harness IDs. Becomes nullable in P2-03 for non-Publisher accounts; publishing still requires it |
+| `id` | uuid PK | = `auth.users.id`; `on delete cascade` |
+| `github_login` | text unique not null | lower-cased; forms the `publisher` segment of Harness IDs. Becomes nullable in P2-03 for non-Publisher accounts; publishing still requires it |
 | `display_name` | text | |
 | `avatar_url` | text | |
 | `bio` | text | ≤ 500 chars, editable |
@@ -25,36 +25,40 @@ One row per Harness (the thing with an ID); versions live in `harness_versions`.
 | column | type | notes |
 |---|---|---|
 | `id` | uuid PK | |
-| `publisher_id` | uuid FK profiles | |
+| `publisher_id` | uuid FK profiles | `on delete restrict` |
 | `slug` | text | unique per publisher |
-| `harness_id` | text unique | generated `github_login || '/' || slug`, denormalised for lookups |
+| `harness_id` | text unique | `github_login || '/' || slug`, set by a trigger on every write (a generated column cannot read `profiles`), denormalised for lookups |
 | `name`, `summary` | text | copied from the latest published version |
 | `tags` | text[] | from the latest published version; GIN index |
-| `icon_path` | text | storage path in `harness-assets` |
-| `latest_version` | text null | highest published, non-unpublished version |
+| `icon_path` | text | path in `harness-assets` of the latest published version's icon, `<publisher>/<slug>/<version>/icon.png` |
+| `latest_version` | text null | highest published version by `semver_key` (ties: latest `published_at`); null when none is published |
+| `latest_published_at` | timestamptz null | `published_at` of `latest_version`; indexed, for the "New" home row and the search tiebreak (PostgREST cannot order by an embedded column) |
 | `status` | enum `active` \| `taken_down` | |
-| `featured_rank` | int null | non-null = Featured; ascending order |
+| `featured_rank` | int null | non-null = Featured; ascending order; unique among non-null values |
 | `download_count` | bigint | denormalised sum of versions |
-| `search` | tsvector generated | from name, summary, tags, README of latest version |
+| `search` | tsvector | set by a trigger (it reads `harness_versions`, which a generated column cannot): `simple` configuration, weights name A, tags B, summary C, the first 50 K characters of the README D; GIN index |
 | `created_at`, `updated_at` | timestamptz | |
 
+`refresh_harness(id)` recomputes `latest_version`, `latest_published_at`, `name`, `summary`, `tags`, `icon_path`, `search` and `download_count` from the versions. An `after insert` and an `after update of status` trigger on `harness_versions` call it, so the fields hold whoever writes. With no published version left, only `latest_version` and `latest_published_at` become null; the last listing fields stay (the Harness is hidden by RLS anyway).
+
 ### `harness_versions`
-Immutable once `status = published` (an UPDATE trigger allows only `status`, `download_count` and `unpublished_at` to change).
+Immutable: an UPDATE trigger allows only `status`, `download_count` and `unpublished_at` to change, whatever the row's status (rows are only ever inserted as published). `status` only moves forward: `published` → `unpublished`, any status → `taken_down`. A new row whose `semver_key` sorts below an existing version of the same Harness is refused (a backstop: the full semver check, pre-release included, is validatePackage's `publishedVersions` option in `publish`).
 
 | column | type | notes |
 |---|---|---|
 | `id` | uuid PK | |
 | `harness_id` | uuid FK harnesses | |
-| `version` | text | semver; unique per harness; `semver_key` (int[]) for ordering |
+| `version` | text | semver; unique per harness |
+| `semver_key` | bigint[] generated | `[major, minor, patch, release flag]`, flag 0 for a pre-release and 1 for a release, so 1.1.0-beta.1 < 1.1.0. Pre-releases of one MAJOR.MINOR.PATCH share a key; since every publish is greater than all earlier versions, publish order is semver order, so `order by semver_key, published_at` sorts versions |
 | `manifest` | jsonb | full validated Manifest |
-| `readme` | text | contents of README.md |
+| `readme` | text | README.md, at most 1 MiB kept (cut at a UTF-8 character boundary, NUL characters dropped); a long README is only a warning, never rejected |
 | `changelog` | text null | |
 | `platforms` | text[] | copied from manifest |
 | `permissions` | jsonb | copied from manifest, for diffing on update |
-| `package_path` | text | storage path in `harness-packages` |
+| `package_path` | text | path in `harness-packages`, `<publisher>/<slug>/<version>.zip` |
 | `package_sha256` | text | hex |
 | `package_size` | bigint | bytes |
-| `screenshot_paths` | text[] | |
+| `screenshot_paths` | text[] | paths in `harness-assets`, `<publisher>/<slug>/<version>/screenshots/<n>.<ext>` |
 | `status` | enum `published` \| `unpublished` \| `taken_down` | |
 | `download_count` | bigint | |
 | `published_at`, `unpublished_at` | timestamptz | |
@@ -94,15 +98,17 @@ No IP or user identity stored.
 `purchases`, `entitlements`, `payouts` (P1-01); `reviews` (P1-04); `telemetry_events` (P1-06); `channels` are a column on versions already; `organizations`, `org_members`, `harness_visibility` (P2-04); `subscriptions`, `credit_ledger` (P2-01/02).
 
 ### RLS summary
-- `profiles`: public read of `github_login`, `display_name`, `avatar_url`, `bio`; owner update.
-- `harnesses`: public read where `status = active`; insert/update by owner (via Edge Function only, service role) ; admins all.
-- `harness_versions`: public read where `status = published` and parent active; writes via Edge Functions only.
-- `reports`: insert by anyone (rate-limited in the function), read/update by admins.
-- `download_events`: insert via function only; read by admins.
+Every catalogue write uses the service role inside an Edge Function. anon and authenticated have no INSERT, UPDATE or DELETE privilege on any catalogue table and there is no write policy for them either, so an attempt fails with `42501 permission denied`. Internal SQL functions (`semver_key`, `refresh_harness`, the trigger functions) have EXECUTE revoked from `public`, `anon` and `authenticated`, so PostgREST does not expose them as RPCs.
+- `profiles`: anon and authenticated may SELECT only `id`, `github_login`, `display_name`, `avatar_url`, `bio`, `created_at` (column privileges; `is_admin` stays private, so a `select=*` is refused). The owner may UPDATE `display_name`, `bio` and `avatar_url` only (column privileges plus a row policy `auth.uid() = id`).
+- `harnesses`: public read where `status = active and latest_version is not null`. This one rule hides taken-down and Unpublished-only Harnesses from Featured, home, search, detail and Publisher pages, with no query repeating the filter.
+- `harness_versions`: public read where `status = published` and the parent is active.
+- `reports`: no access for anon or authenticated; the `report` function inserts with the service role, administrators read in Studio.
+- `download_events`: no access for anon or authenticated; the `download` function inserts with the service role.
 
 ### Storage buckets
-- `harness-packages` (private): `<harness_id>/<version>.zip`. Downloads only via signed URL from the `download` function (60 s expiry).
-- `harness-assets` (public, read-only): `<harness_id>/<version>/icon.png`, `.../screenshots/<n>.png`.
+Created by a migration. Paths are relative to their bucket (no bucket prefix in any stored path). No policy on `storage.objects` mentions either bucket, so anon and authenticated can neither list nor write.
+- `harness-packages` (private, 500 MiB per object, `application/zip`): `<publisher>/<slug>/<version>.zip`. Downloads only via signed URL from the `download` function (60 s expiry).
+- `harness-assets` (public, read-only, `image/png` and `image/jpeg`): `<publisher>/<slug>/<version>/icon.png`, `.../screenshots/<n>.<ext>`, where `n` is the 0-based index of the screenshots in package path order and `ext` the original extension, lower-cased.
 
 ## 2. Local store (SQLite, desktop)
 

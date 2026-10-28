@@ -26,6 +26,8 @@ const rootManifest = readPackageJson();
 const jobs = Object.entries(workflow.jobs ?? {});
 const steps = jobs.flatMap(([, job]) => job.steps ?? []);
 const runCommands = steps.flatMap((step) => (step.run ? [step.run.trim()] : []));
+const commandsOf = (job: string) =>
+  (workflow.jobs?.[job]?.steps ?? []).flatMap((step) => (step.run ? [step.run.trim()] : []));
 
 describe('CI workflow', () => {
   it('runs on every push and every pull request, without branch or path filters', () => {
@@ -41,10 +43,25 @@ describe('CI workflow', () => {
   });
 
   it('runs exactly the root install, build, lint, typecheck and test commands, in that order', () => {
-    expect(runCommands).toEqual([
+    expect(commandsOf('verify')).toEqual([
       'pnpm install --frozen-lockfile',
       ...ROOT_COMMANDS.map((command) => `pnpm ${command}`),
     ]);
+  });
+
+  it('runs the Store seam on a local Supabase stack in its own job, so `pnpm test` needs no Docker', () => {
+    expect(Object.keys(workflow.jobs ?? {})).toEqual(['verify', 'store']);
+    const commands = commandsOf('store');
+    const order = [
+      'pnpm install --frozen-lockfile',
+      'pnpm build',
+      'pnpm exec supabase start',
+      'pnpm run db:reset',
+      'pnpm exec supabase functions serve',
+      'pnpm run test:store',
+    ].map((prefix) => commands.findIndex((command) => command.includes(prefix)));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
   it('only invokes commands that exist as root scripts (no hand-rolled subset)', () => {

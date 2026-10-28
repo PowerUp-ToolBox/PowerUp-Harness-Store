@@ -12,6 +12,7 @@ engineStrict: true
 
 # pnpm runs no dependency install scripts unless listed. Electron needs none: it downloads its
 # binary on first run. electron-winstaller (pulled in by electron-builder) only prepares 7-Zip for
-# Squirrel.Windows installers, which this repo does not build.
+# Squirrel.Windows installers, which this repo does not build. The Supabase CLI (apps/store) needs
+# none either: its binary comes in a per-platform optional dependency (@supabase/cli-<platform>).
 allowBuilds:
   electron-winstaller: false

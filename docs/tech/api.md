@@ -4,13 +4,15 @@ The Store exposes data through Supabase PostgREST (reads) and Edge Functions (wr
 
 ## Reads (PostgREST, anon)
 
+Row-level security decides what is visible (see [`data-model.md`](./data-model.md) §1, RLS summary): a Harness is readable only when it is active and has a published version, and a Harness Version only when it is published and its Harness is active. Reads therefore never repeat those filters. `profiles` exposes only its public columns, so reads of it name their columns (a `select=*` is refused); reads of `harnesses` for lists name theirs too, so the `search` vector is not sent.
+
 | Purpose | Call |
 |---|---|
-| Featured list | `harnesses?status=eq.active&featured_rank=not.is.null&order=featured_rank` |
+| Featured list | `harnesses?featured_rank=not.is.null&order=featured_rank&select=harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at` |
 | Search | RPC `search_harnesses(q text, tags text[], platform text, limit int, offset int)` → ranked rows with `harness_id, name, summary, icon_url, tags, download_count, latest_version, publisher_login` |
 | Harness detail | `harnesses?harness_id=eq.<id>&select=*,profiles(github_login,display_name,avatar_url),harness_versions(version,changelog,published_at,platforms,status,download_count)` (published versions only via RLS) |
 | Version manifest | `harness_versions?harness_id=eq.<uuid>&version=eq.<v>&select=manifest,readme,package_sha256,package_size,screenshot_paths` |
-| Publisher page | `profiles?github_login=eq.<login>&select=*,harnesses(*)` |
+| Publisher page | `profiles?github_login=eq.<login>&select=github_login,display_name,avatar_url,bio,created_at,harnesses(harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at)` |
 | Update check | RPC `latest_versions(harness_ids text[])` → `[{ harness_id, latest_version, permissions, entry_kind }]` |
 
 Search is Postgres full-text (`websearch_to_tsquery`) over the generated `search` column, ranked by `ts_rank` then `download_count`. `platform` filters `harness_versions.platforms @> ARRAY[platform]` on the latest version.

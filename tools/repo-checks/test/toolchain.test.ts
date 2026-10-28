@@ -21,7 +21,7 @@ import {
 const rootManifest = readPackageJson();
 const workspaceGlobs = (parse(readText('pnpm-workspace.yaml')) as { packages: string[] }).packages;
 const workspacePackages = findWorkspacePackages(workspaceGlobs);
-/** A TypeScript package is one with its own tsconfig.json; apps/store (Deno) has none. */
+/** A TypeScript package is one with its own tsconfig.json. */
 const typeScriptPackages = workspacePackages.filter((pkg) =>
   existsSync(join(pkg.path, 'tsconfig.json')),
 );
@@ -140,7 +140,12 @@ describe('TypeScript configuration', () => {
     expect(references.map(({ path }) => path).filter((p) => p.startsWith('apps/store'))).toEqual(
       [],
     );
-    expect(existsSync(repoPath('apps', 'store', 'tsconfig.json'))).toBe(false);
+    // Its tsconfig covers the Node scripts, the tests and the plain modules in
+    // supabase/functions/_shared, never the Deno.serve entry files next to them.
+    const include = readTsConfig(repoPath('apps', 'store', 'tsconfig.json')).include ?? [];
+    for (const pattern of include.filter((p) => p.startsWith('supabase/functions'))) {
+      expect(pattern).toMatch(/^supabase\/functions\/_shared\//);
+    }
   });
 });
 
@@ -149,6 +154,7 @@ describe('scripts of TypeScript packages', () => {
     expect(typeScriptPackages.map((pkg) => pkg.dir)).toEqual(
       expect.arrayContaining([
         'apps/desktop',
+        'apps/store',
         'examples/hello-term',
         'examples/hello-web',
         'packages/gateway',

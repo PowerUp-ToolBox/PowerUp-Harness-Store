@@ -1,0 +1,11 @@
+// @ts-check
+import { defineConfig, globalIgnores } from 'eslint/config';
+import harnessStore from '../../eslint.config.js';
+
+// Extends the shared root config. The Deno.serve entry files of the Edge Functions
+// (supabase/functions/<name>/) are not in tsconfig.json, so typed linting cannot see them; the
+// plain modules in supabase/functions/_shared/ are linted like the rest.
+export default defineConfig(
+  harnessStore,
+  globalIgnores(['supabase/functions/*/', '!supabase/functions/_shared/', 'supabase/.temp/']),
+);

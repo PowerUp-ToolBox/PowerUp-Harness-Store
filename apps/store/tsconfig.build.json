@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "types": ["node"],
+    "declaration": false,
+    "declarationMap": false,
+    "tsBuildInfoFile": "dist/tsconfig.build.tsbuildinfo",
+    // Emits `./x.js` for a `./x.ts` import, so the same sources run under Deno and Node.
+    "rewriteRelativeImportExtensions": true
+  },
+  // The Node scripts (seed) and the plain TypeScript modules they share with the Edge Functions.
+  "include": ["scripts", "supabase/functions/_shared/**/*.ts"]
+}

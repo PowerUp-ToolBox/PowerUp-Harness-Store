@@ -4,8 +4,9 @@
   // Solution file: builds every emitting TypeScript package with `tsc --build`
   // and lets editors navigate across packages. apps/desktop's two projects (node
   // and web) only type-check here: electron-vite bundles them. apps/store is
-  // deliberately absent: its Edge Functions run on Deno, a different runtime
-  // with its own toolchain.
+  // deliberately absent: its Edge Functions run on Deno, and its own tsconfig
+  // covers only its Node scripts, tests and the plain modules the functions
+  // share (supabase/functions/_shared).
   "files": [],
   "references": [
     { "path": "packages/manifest/tsconfig.build.json" },
