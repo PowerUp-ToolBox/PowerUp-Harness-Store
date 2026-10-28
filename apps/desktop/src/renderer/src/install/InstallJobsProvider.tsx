@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -71,6 +72,11 @@ const UNANSWERED: IpcError = {
  * Store not answering) stays on the Harness's detail page until Install is pressed again, which
  * downloads it anew. One consent dialog shows at a time: a download finishing meanwhile waits
  * for it, its detail page offering "Review and install", and opens once the dialog closes.
+ *
+ * Only this provider knows its job IDs, so nothing of a job outlives it: a download that is done
+ * after the provider unmounted, or after Cancel was pressed (main finished verifying as the
+ * Cancel crossed it), is discarded with `installs.cancel` and never shows the dialog; the jobs
+ * still open when it unmounts are cancelled. Main discards them too when the page itself goes.
  */
 export function InstallJobsProvider({ children }: { readonly children: ReactNode }) {
   const { t } = useI18n();
@@ -88,6 +94,20 @@ export function InstallJobsProvider({ children }: { readonly children: ReactNode
   );
   /** The Harness whose consent dialog is shown; null when none is. */
   const [shown, setShown] = useState<string | null>(null);
+  /** The jobs whose download the User cancelled, until `installs.install` answers. */
+  const cancelled = useRef(new Set<string>());
+
+  // Unmounted (the app went to onboarding, say): nothing could confirm the jobs still open.
+  useEffect(
+    () => () => {
+      for (const job of jobsRef.current.values()) {
+        if (job.kind === 'downloading' || job.kind === 'awaiting_consent') {
+          void window.api.installs.cancel(job.jobId);
+        }
+      }
+    },
+    [],
+  );
 
   /** Changes the job of `harnessId` only while it is still job `jobId` (null: removes it). */
   const update = useCallback(
@@ -141,7 +161,19 @@ export function InstallJobsProvider({ children }: { readonly children: ReactNode
         )
         .then((result) => {
           off();
-          if (!mounted.current) return;
+          const cancelledMeanwhile = cancelled.current.delete(jobId);
+          if (!mounted.current) {
+            if (result.ok) void window.api.installs.cancel(jobId);
+            return;
+          }
+          if (result.ok && cancelledMeanwhile) {
+            // The download was done just before the Cancel reached main, which discards it now
+            // (a second cancel of a job already discarded changes nothing).
+            void window.api.installs.cancel(jobId);
+            update(harnessId, jobId, () => null);
+            toast(t('toast.downloadCancelled'));
+            return;
+          }
           if (result.ok) {
             const summary = result.data;
             update(harnessId, jobId, () => ({ kind: 'awaiting_consent', jobId, summary }));
@@ -165,7 +197,9 @@ export function InstallJobsProvider({ children }: { readonly children: ReactNode
       const job = jobsRef.current.get(harnessId);
       if (job === undefined) return;
       if (job.kind === 'downloading') {
-        // `installs.install` then answers `download_cancelled`, which ends the job.
+        // `installs.install` then answers `download_cancelled`, which ends the job; or it had
+        // answered already, and its answer, on the way, is taken as cancelled too.
+        cancelled.current.add(job.jobId);
         void window.api.installs.cancel(job.jobId);
       } else if (job.kind === 'awaiting_consent') {
         update(harnessId, job.jobId, () => null);

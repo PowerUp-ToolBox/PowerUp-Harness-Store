@@ -339,9 +339,10 @@ export interface IpcMethods {
    * Store's `download` function for its latest version on this machine's platform, streams the
    * Harness Package into the downloads folder (`progress:<jobId>` events report
    * {@link DownloadProgress}; subscribe before calling), checks its size and SHA-256 against the
-   * Store's, validates it and checks its Manifest is the Store's. Answers what the consent dialog
-   * shows once the package waits for consent: `installs.confirm` installs it, `installs.cancel`
-   * discards it. `invalid_input` for a Harness already installed (also locally) or a job ID in
+   * Store's, validates it and checks its Manifest is the Store's, which must be one of this
+   * Harness. Answers what the consent dialog shows once the package waits for consent:
+   * `installs.confirm` installs it, `installs.cancel` discards it; main discards it too when the
+   * main window's page closes, crashes or loads again, as only that page knows the job. `invalid_input` for a Harness already installed (also locally) or a job ID in
    * use; `harness_installing` while it is being installed; `not_found`, `platform_not_supported`,
    * `store_unreachable`, `store_error`; `checksum_mismatch`, `integrity_error`;
    * `download_cancelled`. On any failure nothing of the download is left.

@@ -4,8 +4,9 @@
  * `window.api`, in en and zh-CN. Install downloads with progress on the button and Cancel; the
  * shared consent dialog opens once the package is verified, its Install enabled after one second
  * (fake timers); Install installs it, the button becomes Launch and a toast says so; Cancel in the
- * dialog, or during the download, discards it; a checksum error shows under the button, and
- * Install retries. The dialog is the same component "Install this folder locally" uses.
+ * dialog, or during the download, discards it, also when the download was done as Cancel was
+ * pressed; leaving the app's screens cancels the jobs; a checksum error shows under the button,
+ * and Install retries. The dialog is the same component "Install this folder locally" uses.
  */
 import type { Manifest } from '@harness-store/manifest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -262,6 +263,40 @@ describe('Install on a Store detail page', () => {
     expect(within(toasts()).getByText('Download cancelled')).toBeDefined();
     expect(buttons()).toEqual(['Install']);
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('Cancel as the download finishes discards it rather than asking for consent', async () => {
+    const { api, install } = await openDetail();
+    fireEvent.click(within(actions()).getByRole('button', { name: 'Install' }));
+    const jobId = jobIdOf(api);
+    fireEvent.click(within(actions()).getByRole('button', { name: 'Cancel' }));
+    // Main had verified the package before the Cancel reached it, and answered.
+    await act(async () => {
+      install.resolve({ ok: true, data: SUMMARY });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(within(toasts()).getByText('Download cancelled')).toBeDefined();
+    expect(buttons()).toEqual(['Install']);
+    // Cancelled again, now that it waits for consent in main.
+    expect(api.installs.cancel.mock.calls).toEqual([[jobId], [jobId]]);
+    expect(api.installs.confirm).not.toHaveBeenCalled();
+  });
+
+  it('cancels its jobs when it goes away, and a download done after that', async () => {
+    const { api, install } = await openDetail();
+    fireEvent.click(within(actions()).getByRole('button', { name: 'Install' }));
+    const jobId = jobIdOf(api);
+    cleanup();
+    expect(api.installs.cancel).toHaveBeenCalledExactlyOnceWith(jobId);
+    await act(async () => {
+      install.resolve({ ok: true, data: SUMMARY });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(api.installs.cancel.mock.calls).toEqual([[jobId], [jobId]]);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('Cancel in the consent dialog discards the download', async () => {

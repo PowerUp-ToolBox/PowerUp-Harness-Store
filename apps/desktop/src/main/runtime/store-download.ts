@@ -45,7 +45,8 @@ export interface StoreDownloader {
    * published one) on `platform`; the Store counts the download. `not_found` (unknown, taken
    * down, Unpublished), `platform_not_supported` (the version does not declare `platform`),
    * `store_unreachable` (no answer within the timeout), `store_error` (any other answer, or one
-   * whose Manifest is not a valid one of this Harness and version), `download_cancelled` once
+   * that is not what api.md says `download` answers), `integrity_error` (a valid Manifest of
+   * another Harness, or of another version than the one asked for), `download_cancelled` once
    * `signal` aborted.
    */
   ticket(
@@ -107,11 +108,13 @@ export function createStoreDownloader(options: StoreDownloadOptions): StoreDownl
         return fail('store_error');
       }
       const ticket = ticketOf(body);
+      if (ticket === null) return fail('store_error');
+      // The package is later held to this Manifest: it must be the one of what was asked for.
       if (
-        ticket?.manifest.id !== harnessId ||
+        ticket.manifest.id !== harnessId ||
         (version !== null && ticket.manifest.version !== version)
       ) {
-        return fail('store_error');
+        return fail('integrity_error');
       }
       return ok(ticket);
     },
@@ -128,6 +131,9 @@ export function createStoreDownloader(options: StoreDownloadOptions): StoreDownl
       const stopped = () =>
         signal.aborted ? fail('download_cancelled') : fail('store_unreachable');
       let handle: FileHandle | undefined;
+      /** The reader of the package's transfer, and whether it was read to its end. */
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      let ended = false;
       restartIdleTimer();
       try {
         let response: Response;
@@ -143,9 +149,9 @@ export function createStoreDownloader(options: StoreDownloadOptions): StoreDownl
           await response.body?.cancel().catch(() => undefined);
           return fail('store_error');
         }
+        reader = (response.body as ReadableStream<Uint8Array>).getReader();
         handle = await open(file, 'wx');
         const hash = createHash('sha256');
-        const reader = (response.body as ReadableStream<Uint8Array>).getReader();
         let received = 0;
         for (;;) {
           const chunk = await reader.read().then(
@@ -153,13 +159,14 @@ export function createStoreDownloader(options: StoreDownloadOptions): StoreDownl
             () => null,
           );
           if (chunk === null) return stopped();
-          if (chunk.done) break;
+          if (chunk.done) {
+            ended = true;
+            break;
+          }
           restartIdleTimer();
           received += chunk.value.byteLength;
-          if (received > ticket.size) {
-            await reader.cancel().catch(() => undefined);
-            return fail('checksum_mismatch');
-          }
+          // Stopped there: `finally` cancels the rest of the transfer.
+          if (received > ticket.size) return fail('checksum_mismatch');
           hash.update(chunk.value);
           await handle.write(chunk.value);
           onProgress(received);
@@ -171,6 +178,9 @@ export function createStoreDownloader(options: StoreDownloadOptions): StoreDownl
         return ok(null);
       } finally {
         clearTimeout(timer);
+        // A transfer left before its end (too large, or the file could not be made or written,
+        // a full disk say) is cancelled, so its connection is not held open.
+        if (reader !== undefined && !ended) await reader.cancel().catch(() => undefined);
         await handle?.close();
       }
     },

@@ -281,6 +281,18 @@ function createMainWindow(started: Runtime, route?: string): BrowserWindow {
   window.on('closed', () => {
     mainWindow = null;
   });
+  // Only this page knows the job IDs of its Store installs: once it is gone (the window closed
+  // while a Harness window keeps the app running, or its renderer crashed) or loads again, nothing
+  // would confirm or cancel them, so their downloads and rows are discarded now. Hash routes are
+  // same-document navigations and keep them.
+  const dropStoreInstalls = () => {
+    void started.services.installs.cancelAll();
+  };
+  window.webContents.on('destroyed', dropStoreInstalls);
+  window.webContents.on('render-process-gone', dropStoreInstalls);
+  window.webContents.on('did-start-navigation', (details) => {
+    if (details.isMainFrame && !details.isSameDocument) dropStoreInstalls();
+  });
 
   // The renderer is a single page with hash routes: it never navigates away, and every new
   // window is refused. http(s) links (README, homepage, source) open in the User's browser instead.

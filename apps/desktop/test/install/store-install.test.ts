@@ -39,6 +39,7 @@ import { createInstallStore } from '../../src/main/runtime/install-store.js';
 import { summarize } from '../../src/main/runtime/installer.js';
 import { createSqliteSettingsStore } from '../../src/main/runtime/settings-store.js';
 import { createStoreDownloader } from '../../src/main/runtime/store-download.js';
+import type { HarnessWindows } from '../../src/main/runtime/supervisor.js';
 import type { DownloadProgress, IpcEventName, IpcEvents } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
 import { REFUSED_PORT } from '../support/refused-port.js';
@@ -49,6 +50,12 @@ const MAIN_WINDOW = {};
 const NOW = '2026-10-28T09:00:00.000Z';
 const WEB = 'acme/fixture-web';
 const BINARY = 'acme/fixture-binary-term';
+/** Harness windows no test here opens: nothing gets as far as launching. */
+const NO_WINDOWS = new Proxy({} as HarnessWindows, {
+  get: () => () => {
+    throw new Error('No Harness window opens in these tests');
+  },
+});
 
 /** A Harness Version the fake Store has, and how its `download` answer and URL behave. */
 interface Published {
@@ -69,6 +76,8 @@ let downloadCalls: { body: unknown; headers: IncomingMessage['headers'] }[];
 let packageGets: IncomingMessage['headers'][];
 /** When set, the signed URL sends the first 64 bytes, calls this, and sends nothing more. */
 let stallPackage: (() => void) | null;
+/** How many transfers of a package were closed, by the client or at their end. */
+let closedTransfers: number;
 let root: string;
 let started: Runtime[];
 let events: { event: IpcEventName; payload: unknown }[];
@@ -115,6 +124,9 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
   const signed = /^\/storage\/v1\/object\/sign\/harness-packages\/(.+)\.zip$/.exec(url.pathname);
   if (request.method === 'GET' && signed !== null) {
     packageGets.push(request.headers);
+    response.on('close', () => {
+      closedTransfers += 1;
+    });
     const harness = published.get(signed[1] ?? '');
     if (harness === undefined || url.searchParams.get('token') !== 'signed') {
       json(response, 400, { error: 'InvalidJWT', message: 'jwt expired' });
@@ -174,6 +186,7 @@ beforeEach(async () => {
   downloadCalls = [];
   packageGets = [];
   stallPackage = null;
+  closedTransfers = 0;
   events = [];
   started = [];
   server = createServer((request, response) => {
@@ -214,6 +227,7 @@ async function launch(userData = join(root, 'userData'), storeUrl = baseUrl) {
     platform: 'linux-x64',
     now: () => new Date(NOW),
     pickFolder: () => Promise.resolve(null),
+    harnessWindows: NO_WINDOWS,
     emit: <E extends IpcEventName>(event: E, payload: IpcEvents[E]) => {
       if (event === 'installs.changed' || event.startsWith('progress:')) {
         events.push({ event, payload });
@@ -303,6 +317,17 @@ describe('installs.install and installs.confirm', () => {
     expect(existsSync(harnessesFolder())).toBe(false);
     await expect(call('installs.list')).resolves.toEqual({ ok: true, data: [] });
     expect(events.filter((event) => event.event === 'installs.changed')).toEqual([]);
+    // Nothing else sees it either: the Supervisor does not launch what is not unpacked yet, and
+    // its Model slots are not resolved.
+    for (const [method, input] of [
+      ['launch.start', { harnessId: WEB }],
+      ['bindings.resolveAll', WEB],
+    ] as const) {
+      await expect(call(method, input)).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'not_installed' },
+      });
+    }
 
     await expect(call('installs.confirm', 'job-1')).resolves.toEqual({
       ok: true,
@@ -452,6 +477,37 @@ describe('installs.install and installs.confirm', () => {
     });
     await expect(call('installs.cancel', 'job-1')).resolves.toEqual({ ok: true, data: null });
     expect(existsSync(harnessesFolder())).toBe(false);
+  });
+
+  it('cancelAll discards every download and download waiting for consent', async () => {
+    publish('fixture-web');
+    publish('fixture-binary-term');
+    const { runtime, call } = await launch();
+    await expect(
+      call('installs.install', { harnessId: WEB, jobId: 'job-1' }),
+    ).resolves.toMatchObject({ ok: true });
+    stallPackage = () => undefined;
+    const downloading = call('installs.install', { harnessId: BINARY, jobId: 'job-2' });
+    await firstProgress('job-2');
+    expect(installRows()).toHaveLength(2);
+
+    // The main window's page is gone or loads again: nothing else would end these jobs.
+    await runtime.services.installs.cancelAll();
+    await expect(downloading).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'download_cancelled' },
+    });
+    expect(installRows()).toEqual([]);
+    expect(downloads()).toEqual([]);
+    await expect(call('installs.confirm', 'job-1')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input' },
+    });
+    // Both Harnesses can be installed again at once.
+    stallPackage = null;
+    await expect(
+      call('installs.install', { harnessId: WEB, jobId: 'job-3' }),
+    ).resolves.toMatchObject({ ok: true });
   });
 
   it('answers the Store refusals by their codes, leaving nothing', async () => {
@@ -671,7 +727,26 @@ describe('createStoreDownloader', () => {
     ).resolves.toMatchObject({ ok: false, error: { code: 'store_unreachable' } });
   });
 
-  it('answers store_error for an expired URL, and for a Manifest of another Harness', async () => {
+  it('cancels a transfer whose file cannot be written, so its connection is not held', async () => {
+    publish('fixture-web');
+    const ticket = await downloader().ticket(
+      { harnessId: WEB, version: null, platform: 'linux-x64' },
+      new AbortController().signal,
+    );
+    if (!ticket.ok) throw new Error('no ticket');
+    stallPackage = () => undefined;
+    const file = join(root, 'package.zip');
+    writeFileSync(file, 'already there');
+    await expect(
+      downloader().fetchPackage(ticket.data, file, {
+        signal: new AbortController().signal,
+        onProgress: () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: 'EEXIST' });
+    await expect.poll(() => closedTransfers).toBe(1);
+  });
+
+  it('answers store_error for an expired URL, integrity_error for a Manifest of another Harness', async () => {
     publish('fixture-web');
     const ticket = await downloader().ticket(
       { harnessId: WEB, version: null, platform: 'linux-x64' },
@@ -694,11 +769,19 @@ describe('createStoreDownloader', () => {
         { harnessId: 'acme/other', version: null, platform: 'linux-x64' },
         new AbortController().signal,
       ),
-    ).resolves.toMatchObject({ ok: false, error: { code: 'store_error' } });
+    ).resolves.toMatchObject({ ok: false, error: { code: 'integrity_error' } });
     // A version asked for must be the one answered.
     await expect(
       downloader().ticket(
         { harnessId: WEB, version: '2.0.0', platform: 'linux-x64' },
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ ok: false, error: { code: 'integrity_error' } });
+    // An answer that is not a ticket at all is still the Store's error.
+    published.set(WEB, { ...harness, manifest: { ...harness.manifest, id: 'not an id' } });
+    await expect(
+      downloader().ticket(
+        { harnessId: WEB, version: null, platform: 'linux-x64' },
         new AbortController().signal,
       ),
     ).resolves.toMatchObject({ ok: false, error: { code: 'store_error' } });

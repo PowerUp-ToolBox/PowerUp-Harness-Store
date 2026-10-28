@@ -62,6 +62,11 @@ export interface InstallsService {
   confirm(jobId: string): Promise<IpcResult<InstalledVersion>>;
   /** Cancels a job that downloads or waits for consent; nothing for any other. */
   cancel(jobId: string): Promise<void>;
+  /**
+   * Cancels every job that downloads or waits for consent: the main window's page, which alone
+   * knows their job IDs, is gone or loads again, so nothing would ever confirm or cancel them.
+   */
+  cancelAll(): Promise<void>;
   /** Every installed Harness, the most recently launched first, then by name. */
   list(): Promise<readonly InstalledHarness[]>;
   /**
@@ -333,6 +338,19 @@ export function createInstaller(options: InstallerOptions): InstallsService {
     return ok(summarize(manifest, platform));
   };
 
+  /** `cancel`: a job being unpacked is past consent and finishes on its own. */
+  const cancel = async (jobId: string) => {
+    const job = jobs.get(jobId);
+    if (job === undefined) return;
+    if (job.phase === 'downloading') {
+      // `install` sees it, answers `download_cancelled` and discards the job.
+      job.controller.abort();
+    } else if (job.phase === 'awaiting_consent') {
+      job.controller.abort();
+      await discard(jobId, job);
+    }
+  };
+
   return {
     chooseFolder: () => options.pickFolder(),
 
@@ -450,16 +468,10 @@ export function createInstaller(options: InstallerOptions): InstallsService {
       }
     },
 
-    async cancel(jobId) {
-      const job = jobs.get(jobId);
-      if (job === undefined) return;
-      if (job.phase === 'downloading') {
-        // `install` sees it, answers `download_cancelled` and discards the job.
-        job.controller.abort();
-      } else if (job.phase === 'awaiting_consent') {
-        job.controller.abort();
-        await discard(jobId, job);
-      }
+    cancel,
+
+    async cancelAll() {
+      await Promise.all([...jobs.keys()].map((jobId) => cancel(jobId)));
     },
 
     async list() {
@@ -519,6 +531,7 @@ export function createInstallsStub(): InstallsService {
     install: () => Promise.resolve(fail('not_implemented', { method: 'installs.install' })),
     confirm: () => Promise.resolve(fail('not_implemented', { method: 'installs.confirm' })),
     cancel: () => Promise.resolve(),
+    cancelAll: () => Promise.resolve(),
     list: () => Promise.resolve([]),
     isInstalling: () => false,
   };

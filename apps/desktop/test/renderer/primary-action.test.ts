@@ -2,7 +2,8 @@
  * Ticket P0-09.3: the Store detail page's primary button state machine as a table, one row per
  * scenario of the ticket plus the decisions around them: an installed Harness the Store no longer
  * offers stays Launch, a local install is never updated, and an installed version equal to or
- * newer than the Store's is Launch.
+ * newer than the Store's is Launch. P0-10.1 adds "Review and install" for a download waiting for
+ * consent, which only a download in progress comes before.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -70,6 +71,28 @@ describe('primaryActionState', () => {
       'unsupported',
     ],
     ['an update downloading', { install: installed('1.0.0'), downloading: true }, 'downloading'],
+    // P0-10.1: a download waiting for consent; a download in progress still comes first.
+    ['waiting for consent', { awaitingConsent: true }, 'review'],
+    [
+      'downloading and waiting for consent',
+      { downloading: true, awaitingConsent: true },
+      'downloading',
+    ],
+    [
+      'waiting for consent, taken down meanwhile',
+      { awaitingConsent: true, storeStatus: 'taken_down', latestVersion: null },
+      'review',
+    ],
+    [
+      'waiting for consent, no longer for this OS',
+      { awaitingConsent: true, platform: 'win32-x64' },
+      'review',
+    ],
+    [
+      'waiting for consent, installed meanwhile',
+      { awaitingConsent: true, install: installed('1.2.0') },
+      'review',
+    ],
   ])('%s → %s', (_scenario, input, expected) => {
     expect(primaryActionState({ ...AVAILABLE, ...input })).toBe(expected);
   });
