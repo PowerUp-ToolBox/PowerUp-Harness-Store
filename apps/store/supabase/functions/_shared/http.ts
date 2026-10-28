@@ -45,9 +45,17 @@ export function invalidRequest(message: string): ApiError {
   return { status: 400, code: 'invalid_request', message };
 }
 
-/** Whether `value` is a non-empty string of at most `maxLength` characters. */
+/**
+ * Whether `value` is a string Postgres can store as text: no NUL character (U+0000), which `text`
+ * and `jsonb` refuse, so a body carrying one is a bad request rather than a failed database call.
+ */
+export function isStorable(value: unknown): value is string {
+  return typeof value === 'string' && !value.includes('\u0000');
+}
+
+/** Whether `value` is a non-empty storable string of at most `maxLength` characters. */
 export function isText(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value !== '' && value.length <= maxLength;
+  return isStorable(value) && value !== '' && value.length <= maxLength;
 }
 
 /** The JSON body of a request, or undefined when it is not JSON. */

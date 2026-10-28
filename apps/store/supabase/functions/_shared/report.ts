@@ -3,7 +3,7 @@
  * caller's IP address and the per-IP counter, and the errors the submit_report SQL function
  * raises. Plain TypeScript with relative imports only (see storage-paths.ts).
  */
-import { invalidRequest, isText } from './http.ts';
+import { invalidRequest, isStorable, isText } from './http.ts';
 import type { ApiError } from './http.ts';
 import { MAX_LOOKUP_LENGTH, NOT_FOUND } from './unpublish.ts';
 
@@ -63,8 +63,8 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * null or a non-empty string; `reason` one of {@link REPORT_REASONS}; `details` absent, null or a
  * string of at most {@link MAX_DETAILS_LENGTH} characters; `client_info` absent, null or an object
  * whose `install_id`, `app_version` and `platform`, each optional, are non-empty strings of at
- * most {@link MAX_CLIENT_INFO_LENGTH} characters (its other fields are dropped). Other fields are
- * ignored.
+ * most {@link MAX_CLIENT_INFO_LENGTH} characters (its other fields are dropped). No string may
+ * hold a NUL character (see isStorable). Other fields are ignored.
  */
 export function reportRequest(body: unknown): ReportRequest | ApiError {
   if (!isObject(body)) return invalidRequest('The body must be a JSON object.');
@@ -81,10 +81,10 @@ export function reportRequest(body: unknown): ReportRequest | ApiError {
   if (
     details !== undefined &&
     details !== null &&
-    (typeof details !== 'string' || details.length > MAX_DETAILS_LENGTH)
+    (!isStorable(details) || details.length > MAX_DETAILS_LENGTH)
   ) {
     return invalidRequest(
-      `"details" must be a string of at most ${String(MAX_DETAILS_LENGTH)} characters.`,
+      `"details" must be a string of at most ${String(MAX_DETAILS_LENGTH)} characters, with no NUL character.`,
     );
   }
   if (client_info !== undefined && client_info !== null && !isObject(client_info)) {

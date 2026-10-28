@@ -133,6 +133,9 @@ describe('unpublishRequest', () => {
       { harness_id: 'alice/a', version: 1 },
       { version: '1.0.0' },
       { harness_id: 'a'.repeat(257), version: '1.0.0' },
+      // Postgres text cannot hold a NUL: a 400, not a failed database call.
+      { harness_id: 'alice/a\u0000', version: '1.0.0' },
+      { harness_id: 'alice/a', version: '1.0.0\u0000' },
     ]) {
       expect(unpublishRequest(body), JSON.stringify(body)).toMatchObject(INVALID);
     }
@@ -200,6 +203,12 @@ describe('reportRequest', () => {
       { client_info: { install_id: '' } },
       { client_info: { platform: 1 } },
       { client_info: { app_version: 'v'.repeat(65) } },
+      // Postgres text and jsonb cannot hold a NUL: a 400, not a failed database call.
+      { harness_id: 'alice/a\u0000' },
+      { version: '1.0.0\u0000' },
+      { details: 'x\u0000y' },
+      { client_info: { install_id: 'i\u0000' } },
+      { client_info: { platform: '\u0000' } },
     ]) {
       expect(reportRequest({ ...VALID, ...fields }), JSON.stringify(fields)).toMatchObject(INVALID);
     }
@@ -283,6 +292,9 @@ describe('admin/takedown', () => {
       { harness_id: 'alice/a', note: 'n'.repeat(MAX_NOTE_LENGTH + 1) },
       { harness_id: 'alice/a', version: '', note: 'n' },
       { note: 'n' },
+      { harness_id: 'alice/a\u0000', note: 'n' },
+      { harness_id: 'alice/a', version: '1.0.0\u0000', note: 'n' },
+      { harness_id: 'alice/a', note: 'Malware.\u0000' },
     ]) {
       expect(takedownRequest(body), JSON.stringify(body).slice(0, 60)).toMatchObject(INVALID);
     }

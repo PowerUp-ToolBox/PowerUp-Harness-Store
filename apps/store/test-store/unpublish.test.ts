@@ -204,6 +204,7 @@ describe('unpublish', () => {
       {},
       { harness_id: harnessId },
       { harness_id: harnessId, version: 1 },
+      { harness_id: harnessId, version: '1.0.0\u0000' },
       'x',
     ]) {
       const reply = await unpublish(body);

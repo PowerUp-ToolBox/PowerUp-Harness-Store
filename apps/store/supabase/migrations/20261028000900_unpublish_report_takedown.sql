@@ -239,6 +239,12 @@ $$;
 -- Either way every open Report on the Harness is resolved with the note, and one admin_actions row
 -- is written, also when nothing was left to take down.
 --
+-- It first takes publish_version's per-Publisher lock, so a publish of this Harness either commits
+-- before the versions are read (its version is taken down too) or waits and then finds the Harness
+-- taken down (harness_taken_down). Without it, a version a publish inserted but had not committed
+-- would stay published under the taken-down Harness. Lock order: Publisher lock, versions,
+-- Harness; publish takes Publisher lock then Harness, unpublish version then Harness, so no cycle.
+--
 -- Answers `{ harness_id, version, status: 'taken_down', resolved_reports }`.
 create function public.take_down(admin_id uuid, harness text, target_version text, note text)
 returns jsonb
@@ -260,6 +266,8 @@ begin
   if not found then
     raise exception using errcode = 'PT404', message = 'not_found';
   end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('publish:' || target.publisher_id::text, 0));
 
   if take_down.target_version is null then
     update public.harness_versions v

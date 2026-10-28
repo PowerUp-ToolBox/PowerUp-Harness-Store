@@ -6,7 +6,7 @@
  * The rate limit is tested through the per-install check (`client_info.install_id` against the
  * stored Reports), which is exact. The per-IP counter lives in each function worker's memory, so
  * whether a request meets the same counter is up to the edge runtime: its rules are unit tests
- * (test/report.test.ts), and each request here sends an IP address of its own unless the test is
+ * (test/moderation.test.ts), and each request here sends an IP address of its own unless the test is
  * about one IP, so that no counter of an earlier request gets in the way.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -141,6 +141,8 @@ describe('report', () => {
 
   it('keeps only install_id, app_version and platform of client_info, and never an IP address', async () => {
     const install = randomUUID();
+    // The forwarded address is a fresh one (see the header); the one the client names is fixed.
+    const forwardedFor = ip();
     const reply = await report(
       valid({
         client_info: {
@@ -151,7 +153,7 @@ describe('report', () => {
           ip: '198.51.100.7',
         },
       }),
-      '198.51.100.7',
+      forwardedFor,
     );
     expect(reply.status).toBe(201);
     const row = await storedReport(reply.body.id);
@@ -161,6 +163,7 @@ describe('report', () => {
       platform: 'win32-x64',
     });
     expect(JSON.stringify(row)).not.toContain('198.51.100.7');
+    expect(JSON.stringify(row)).not.toContain('2001:db8:');
   });
 
   it('records the version when one is named, and refuses an unknown Harness or version (404)', async () => {
@@ -183,7 +186,7 @@ describe('report', () => {
     expect(reply.status).toBe(201);
   });
 
-  it('refuses details over 2000 characters, or client_info fields that are not short strings (400)', async () => {
+  it('refuses details over 2000 characters, client_info fields that are not short strings, or a NUL anywhere (400)', async () => {
     expect((await report(valid({ details: 'x'.repeat(2000) }))).status).toBe(201);
     expect((await report(valid({ details: undefined }))).status).toBe(201);
     for (const fields of [
@@ -193,6 +196,11 @@ describe('report', () => {
       { client_info: { install_id: 7 } },
       { client_info: { app_version: 'v'.repeat(65) } },
       { version: '' },
+      // Postgres cannot store a NUL character: refused before the database is asked.
+      { details: 'x\u0000y' },
+      { harness_id: `${harness.harness_id}\u0000` },
+      { version: '1.0.0\u0000' },
+      { client_info: { install_id: 'i\u0000' } },
     ]) {
       const reply = await report(valid(fields));
       expect(reply.status, JSON.stringify(fields).slice(0, 80)).toBe(400);

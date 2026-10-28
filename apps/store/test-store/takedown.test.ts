@@ -17,6 +17,8 @@ import {
   mintJwt,
   rest,
   serviceRest,
+  sql,
+  versionRow,
 } from './support.ts';
 import type { HarnessRow, TestUser } from './support.ts';
 
@@ -307,13 +309,77 @@ describe('admin/takedown by an administrator', () => {
       expect(reply.status, JSON.stringify(body)).toBe(404);
       expect(reply.body.error?.code).toBe('not_found');
     }
-    for (const note of [undefined, '', '   ', 'n'.repeat(2001), 5]) {
+    for (const note of [undefined, '', '   ', 'n'.repeat(2001), 5, 'x\u0000y']) {
       const reply = await takedown({ harness_id: harness.harness_id, note }, admin.token);
       expect(reply.status, String(note).slice(0, 20)).toBe(400);
       expect(reply.body.error?.code).toBe('invalid_request');
     }
     expect(await actionsOn(harness)).toEqual([]);
     expect((await harnessState(harness))?.status).toBe('active');
+  });
+});
+
+describe('a whole-Harness Takedown while a publish of that Harness is in flight', () => {
+  it('also takes down the version the publish commits first', async () => {
+    const harness = await harnessWith('takedown-race', [['1.0.0']]);
+    const { manifest, platforms, permissions } = versionRow(harness, '2.0.0');
+    const literal = (value: unknown) => `'${JSON.stringify(value)}'::jsonb`;
+
+    // The first session publishes 2.0.0 and stays open until the Takedown, in a second session,
+    // waits on a lock: a Takedown that read the versions before the publish committed would miss
+    // 2.0.0 and leave it published under a taken-down Harness.
+    const first = sql(`
+      begin;
+      select public.publish_version(
+        '${owner.id}',
+        ${literal({ ...manifest, platforms, permissions })},
+        '# Readme',
+        '${harness.harness_id}/2.0.0.zip',
+        '${'0'.repeat(64)}',
+        1,
+        '{}',
+        1
+      );
+      do $$ /* takedown-race-first */
+      declare deadline timestamptz := clock_timestamp() + interval '10 seconds';
+      begin
+        while not exists (
+          select 1 from pg_stat_activity
+          where pid <> pg_backend_pid() and wait_event_type = 'Lock'
+            and query like '%takedown-race-second%'
+        ) loop
+          if clock_timestamp() > deadline then
+            raise exception 'the Takedown never waited on a lock';
+          end if;
+          perform pg_sleep(0.05);
+          -- pg_stat_activity is otherwise read once per transaction.
+          perform pg_stat_clear_snapshot();
+        end loop;
+      end $$;
+      commit;
+    `);
+    // The Takedown starts only once the publish has inserted its version.
+    for (let tries = 0; ; tries += 1) {
+      const started = await sql(
+        `select count(*) from pg_stat_activity
+         where pid <> pg_backend_pid() and query like '%takedown-race-first%'`,
+      );
+      if (started === '1') break;
+      if (tries > 200) throw new Error('the publish never started');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const note = 'Taken down during a publish.';
+    await sql(
+      `/* takedown-race-second */
+       select public.take_down('${admin.id}', '${harness.harness_id}', null, '${note}');`,
+    );
+    await first;
+
+    expect(await versionsOf(harness)).toEqual([
+      expect.objectContaining({ version: '1.0.0', status: 'taken_down', takedown_note: note }),
+      expect.objectContaining({ version: '2.0.0', status: 'taken_down', takedown_note: note }),
+    ]);
+    expect(await harnessState(harness)).toEqual({ status: 'taken_down', latest_version: null });
   });
 });
 

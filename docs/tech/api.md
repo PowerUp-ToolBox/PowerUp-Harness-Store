@@ -55,7 +55,7 @@ Every function answers an error with `{ "error": { "code", "message", ... } }`; 
 
 | Status | `code` | When |
 |---|---|---|
-| 400 | `invalid_request` | A body field is missing or malformed |
+| 400 | `invalid_request` | A body field is missing or malformed (a string holding a NUL character, U+0000, which Postgres cannot store, is malformed) |
 | 401 | `unauthenticated` | No JWT, an invalid or expired one, or a user with no `profiles` row (no GitHub login) |
 | 403 | `forbidden` | Not the owner (`unpublish`), or not an administrator (`admin/takedown`) |
 | 404 | `not_found` | Unknown Harness or version, or one that is not visible |
@@ -139,7 +139,7 @@ Body `{ harness_id, version?, note }` (JSON). A Store administrator takes down a
 Steps:
 1. Authenticate (`401 unauthenticated`), then `profiles.is_admin` of the caller, looked up by the function and never read from a JWT claim (`403 forbidden`). Administrators are set by hand in the database.
 2. The body: `harness_id` a string; `version` absent, `null` or a string; `note` a string of 1 to 2000 characters, not only whitespace. Anything else is `400 invalid_request`.
-3. `take_down()` (SQL, service role only), in one transaction: an unknown Harness or version is `404 not_found`. Without `version`, every version not yet taken down becomes `taken_down` and the Harness too; with `version`, only that version (the Harness's `latest_version` moves back to the previous published version). The `note` is copied to `harness_versions.takedown_note` on every version it changes. Every `open` Report on the Harness becomes `resolved`, with `resolution_note = note` and `resolved_at`. One `admin_actions` row is written per call (`takedown_harness` or `takedown_version`), also when everything was already taken down.
+3. `take_down()` (SQL, service role only), in one transaction: an unknown Harness or version is `404 not_found`. It first takes `publish_version()`'s per-Publisher lock, so a publish of the Harness in flight either commits before the versions are read (and its version is taken down too) or then finds the Harness taken down (`409 harness_taken_down`). Without `version`, every version not yet taken down becomes `taken_down` and the Harness too; with `version`, only that version (the Harness's `latest_version` moves back to the previous published version). The `note` is copied to `harness_versions.takedown_note` on every version it changes. Every `open` Report on the Harness becomes `resolved`, with `resolution_note = note` and `resolved_at`. One `admin_actions` row is written per call (`takedown_harness` or `takedown_version`), also when everything was already taken down.
 
 `200` → `{ harness_id, version, status: "taken_down", resolved_reports }` (`version` is `null` for a whole Harness; `resolved_reports` counts the Reports this call resolved). Other errors: `405`, `500`.
 
