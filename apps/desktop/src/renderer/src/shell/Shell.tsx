@@ -11,13 +11,13 @@ import { OfflineIcon } from './icons.js';
 import { SECTIONS, sectionFor } from './sections.js';
 
 /**
- * The main window frame: sidebar navigation, the offline banner while the Store is unreachable,
- * the custom Store banner while the Store URL is not the default one (it cannot be dismissed, and
- * links to Settings), the page title header, the current screen and the toast area. The Publish flow's state, the
- * Store search's and the Store installs' live here, above the screens, so they outlast a visit to
- * another screen; a Store install's consent dialog and the update prompt open over whichever
- * screen is shown. The Library item carries a badge with the number of installed Harnesses that
- * have an update (docs/ux/screens.md, main window shell).
+ * The main window frame: sidebar navigation, the offline banner while the Store is unreachable, the
+ * custom Store banner while the Store URL is not the default one (it cannot be dismissed, and links
+ * to Settings), the page title header, the current screen and the toast area. The Publish flow's
+ * state, the Store search's and the Store installs' live here, above the screens, so they outlast a
+ * visit to another screen; a Store install's consent dialog and the update prompt open over
+ * whichever screen is shown. The Library item carries a badge with the number of installed
+ * Harnesses that have an update (docs/ux/screens.md, main window shell).
  */
 export function Shell() {
   const { t } = useI18n();

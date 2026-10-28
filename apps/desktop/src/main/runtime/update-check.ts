@@ -68,11 +68,11 @@ export interface UpdateChecker {
 
 /**
  * The background update check (P0-10.2; docs/ux/flows.md F4 step 1): 10 seconds after start and
- * then every interval (6 hours unless the User chose 1 hour, 24 hours or Never), it asks the Store's `latest_versions` (api.md) about every installed Store
- * Harness (never a local install), in calls of at most 1000 IDs with the anon key, and stores per
- * install its Store status and, when there is one, the update it can take
- * ({@link resolveUpdateCheck}). Each install whose row changed is reported, so the Library and
- * its nav badge read the list again.
+ * then every interval (6 hours unless the User chose 1 hour, 24 hours or Never), it asks the
+ * Store's `latest_versions` (api.md) about every installed Store Harness (never a local install),
+ * in calls of at most 1000 IDs with the anon key, and stores per install its Store status and, when
+ * there is one, the update it can take ({@link resolveUpdateCheck}). Each install whose row changed
+ * is reported, so the Library and its nav badge read the list again.
  *
  * While the Store is known to be offline the check is skipped; a check that gets no answer has
  * connectivity checked again and is dropped silently. Nothing is retried: the next scheduled check

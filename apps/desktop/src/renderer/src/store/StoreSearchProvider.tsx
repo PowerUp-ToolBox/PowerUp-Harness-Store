@@ -15,6 +15,7 @@ import {
   type StoreListing,
   type StoreSearchPage,
 } from '../../../shared/ipc.js';
+import { useSettings } from '../i18n/I18nProvider.js';
 
 /** How long typing must pause before the text is searched. */
 export const SEARCH_DEBOUNCE_MS = 300;
@@ -124,7 +125,8 @@ function merged(
  * keystroke (text an input method is still composing waits until it is committed), Enter, a tag
  * and the toggle search at once. Results come from `store.search` a page of
  * 24 at a time in the Store's order; "Load more" appends the next page. Searches are numbered and
- * only the newest one's answers are kept, "Load more" included.
+ * only the newest one's answers are kept, "Load more" included. A change of the Store URL (P0-11)
+ * starts over: the old Store's results, and any answer still on its way, are dropped.
  */
 export function StoreSearchProvider({ children }: { readonly children: ReactNode }) {
   const [state, setState] = useState<StoreSearchState>(INITIAL);
@@ -133,6 +135,10 @@ export function StoreSearchProvider({ children }: { readonly children: ReactNode
   /** Numbers the searches; an answer for an older one is dropped. */
   const searchNumber = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { settings } = useSettings();
+  const storeBaseUrl = settings.storeBaseUrl ?? settings.defaultStoreBaseUrl;
+  /** The Store the state was searched at. */
+  const searchedStore = useRef(storeBaseUrl);
 
   const commit = useCallback((change: (state: StoreSearchState) => StoreSearchState) => {
     current.current = change(current.current);
@@ -266,6 +272,14 @@ export function StoreSearchProvider({ children }: { readonly children: ReactNode
   }, [commit]);
 
   useEffect(() => cancelTimer, [cancelTimer]);
+
+  useEffect(() => {
+    if (searchedStore.current === storeBaseUrl) return;
+    searchedStore.current = storeBaseUrl;
+    cancelTimer();
+    searchNumber.current += 1;
+    commit(() => INITIAL);
+  }, [storeBaseUrl, cancelTimer, commit]);
 
   const value = useMemo<StoreSearchContextValue>(
     () => ({

@@ -219,12 +219,12 @@ export interface FakeApiOptions {
  * nothing was launched, launching answers `not_implemented`, no Harness has a last Workspace and
  * the Workspace picker is cancelled; validating a folder to publish and publishing answer
  * `not_implemented`, cancelling an upload does nothing, the Publisher has no Harnesses and
- * Unpublishing answers `not_implemented`; there are no Usage Records (a total of zeros, no
- * groups), the export's save dialog is cancelled and clearing succeeds; the update interval is
- * 6 hours and the Store the default one until `settings.set` changes them, Check now, opening a
- * folder and copying the diagnostics succeed; and a dropped file's path is `/dropped/<name>`; a test changes `app.status`, `diagnostics.get`, the `connectivity`,
- * `connections`, `bindings`, `installs` or `usage` methods before rendering to say otherwise, and
- * pushes events with `emit`.
+ * Unpublishing answers `not_implemented`; there are no Usage Records (a total of zeros, no groups),
+ * the export's save dialog is cancelled and clearing succeeds; the update interval is 6 hours and
+ * the Store the default one until `settings.set` changes them, Check now, opening a folder and
+ * copying the diagnostics succeed; and a dropped file's path is `/dropped/<name>`; a test changes
+ * `app.status`, `diagnostics.get`, the `connectivity`, `connections`, `bindings`, `installs` or
+ * `usage` methods before rendering to say otherwise, and pushes events with `emit`.
  */
 export function installFakeApi(
   osLocale: Locale = 'en',

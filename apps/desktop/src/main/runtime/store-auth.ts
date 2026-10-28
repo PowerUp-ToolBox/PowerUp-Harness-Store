@@ -461,8 +461,10 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
         );
       }
       // A sign-out (or a newer sign-in) during the exchange cancels this one before its token is
-      // used at all.
-      if (signIns !== attempt) {
+      // used at all, and so does a Store URL changed meanwhile: a sign-in that started while
+      // Settings was still signing out of the old Store must not keep that Store's session, which
+      // every later call would send to the new URL.
+      if (signIns !== attempt || storeBase() !== base) {
         throw new StoreAuthError('sign_in_cancelled', 'The sign-in was replaced.');
       }
       const identity = await readProfile(tokens.accessToken, tokens.userId, base);
@@ -470,7 +472,7 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
         throw new StoreAuthError('sign_in_failed', 'The Store has no Publisher profile for it.');
       }
       const ciphertext = await encrypt({ ...tokens, identity });
-      if (signIns !== attempt) {
+      if (signIns !== attempt || storeBase() !== base) {
         throw new StoreAuthError('sign_in_cancelled', 'The sign-in was replaced.');
       }
       // Only now is the session replaced: refreshes and whoami calls of the old one under way
