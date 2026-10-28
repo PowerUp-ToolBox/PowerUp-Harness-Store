@@ -238,17 +238,43 @@ export interface IpcMethods {
    * has begun; how it goes arrives as `launch.state` events. One instance per Harness: while it
    * runs, the answer is `focused` and its window comes to the front instead (a launch that is
    * stopping is left to stop). `not_installed`; `slot_unbound` when no model can fill its
-   * `default` Model Slot, and nothing starts; `not_implemented` for a binary runtime kind
-   * (P0-05.5).
+   * `default` Model Slot, and nothing starts; `invalid_input` when `workspace` is not an existing
+   * folder (any more); `not_implemented` for a binary runtime kind (P0-05.5).
    */
   'launch.start': { input: LaunchRequest; output: LaunchStarted };
+  /**
+   * Opens the OS folder picker over the main window to choose a Workspace for this installed
+   * Harness, at its last Workspace while that folder exists; the chosen folder's absolute path, or
+   * null when the User cancelled. `not_installed`.
+   */
+  'launch.chooseWorkspace': { input: string; output: string | null };
+  /**
+   * The Workspace this installed Harness was last launched with, for the Workspace sheet; null
+   * when it never had one. `not_installed`.
+   */
+  'launch.lastWorkspace': { input: string; output: LastWorkspace | null };
   /** The latest launch of every Harness launched since the app started. */
   'launch.status': { input: undefined; output: readonly LaunchStatus[] };
 }
 
-/** Which installed Harness to launch. */
+/** Which installed Harness to launch, and with which Workspace. */
 export interface LaunchRequest {
   readonly harnessId: string;
+  /**
+   * The absolute path of the Workspace the User chose (`launch.chooseWorkspace`); null or absent
+   * when they chose none: a Harness whose Manifest requires one then fails
+   * `workspace_cancelled`, an optional one launches without. Ignored for a Harness whose Manifest
+   * declares no Workspace.
+   */
+  readonly workspace?: string | null;
+}
+
+/** A Harness's last Workspace (`installs.last_workspace`), which may be gone since. */
+export interface LastWorkspace {
+  /** Absolute. */
+  readonly path: string;
+  /** Whether it is still a folder. */
+  readonly exists: boolean;
 }
 
 /** A launch that began (`started`), or the running one whose window was focused instead. */
@@ -714,6 +740,8 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'installs.installFromFolder': true,
   'installs.list': true,
   'launch.start': true,
+  'launch.chooseWorkspace': true,
+  'launch.lastWorkspace': true,
   'launch.status': true,
 };
 

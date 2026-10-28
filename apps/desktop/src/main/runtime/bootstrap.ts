@@ -97,10 +97,11 @@ export interface RuntimeOptions {
    */
   readonly secretCipher: SecretCipher;
   /**
-   * Opens the OS folder picker (Electron's `dialog`) and resolves the chosen folder, or null when
-   * the User cancels. Default: always cancelled.
+   * Opens the OS folder picker (Electron's `dialog`), at `defaultPath` when given, and resolves
+   * the chosen folder, or null when the User cancels: a Harness folder to install, or a Workspace.
+   * Default: always cancelled.
    */
-  readonly pickFolder?: () => Promise<string | null>;
+  readonly pickFolder?: (defaultPath?: string | null) => Promise<string | null>;
   /**
    * This machine's platform as `<process.platform>-<process.arch>`, which decides whether an
    * installed Harness can run here. Default: this process's.
@@ -308,6 +309,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
             : { environment: options.harnessEnvironment }),
           emit: (status) => options.emit?.('launch.state', status),
           ...(options.openPath === undefined ? {} : { openPath: options.openPath }),
+          ...(options.pickFolder === undefined ? {} : { pickFolder: options.pickFolder }),
           ...(options.now === undefined ? {} : { now: options.now }),
           logError,
         });

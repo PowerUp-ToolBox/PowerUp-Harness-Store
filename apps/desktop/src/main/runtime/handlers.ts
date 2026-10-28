@@ -174,7 +174,18 @@ export function createHandlers(services: Services): IpcHandlers {
     'launch.start': (input) => {
       const request = parseLaunchRequest(input);
       if (request === null) return fail('invalid_input', { method: 'launch.start' });
-      return services.launch.start(request.harnessId);
+      return services.launch.start(request.harnessId, request.workspace ?? null);
+    },
+    'launch.chooseWorkspace': (input) => {
+      if (!isHarnessIdInput(input)) {
+        return fail('invalid_input', { method: 'launch.chooseWorkspace' });
+      }
+      return services.launch.chooseWorkspace(input);
+    },
+    'launch.lastWorkspace': (input) => {
+      if (!isHarnessIdInput(input))
+        return fail('invalid_input', { method: 'launch.lastWorkspace' });
+      return services.launch.lastWorkspace(input);
     },
     'launch.status': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'launch.status' });
@@ -183,12 +194,14 @@ export function createHandlers(services: Services): IpcHandlers {
   };
 }
 
-/** `{ harnessId }`, nothing else. */
+/** `{ harnessId, workspace? }`, the Workspace an absolute path or null, nothing else. */
 function parseLaunchRequest(input: unknown): LaunchRequest | null {
   if (typeof input !== 'object' || input === null) return null;
-  const { harnessId, ...rest } = input as Record<string, unknown>;
+  const { harnessId, workspace, ...rest } = input as Record<string, unknown>;
   if (Object.keys(rest).length > 0 || !isHarnessIdInput(harnessId)) return null;
-  return { harnessId };
+  if (workspace === undefined) return { harnessId };
+  if (workspace !== null && !isAbsolutePath(workspace)) return null;
+  return { harnessId, workspace };
 }
 
 /** An absolute path of this OS, as the folder picker returns it. */

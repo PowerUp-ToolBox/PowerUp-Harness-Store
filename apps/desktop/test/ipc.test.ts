@@ -57,7 +57,10 @@ const fakeServices: Services = {
   },
   installs: { ...createInstallsStub(), chooseFolder: () => Promise.resolve('/Users/me/hello') },
   launch: {
-    start: (harnessId) => ok({ outcome: 'started', launchId: `launch-of-${harnessId}` }),
+    start: (harnessId, workspace) =>
+      ok({ outcome: 'started', launchId: `launch-of-${harnessId}-in-${String(workspace)}` }),
+    chooseWorkspace: (harnessId) => Promise.resolve(ok(`/Users/me/${harnessId}`)),
+    lastWorkspace: () => Promise.resolve(ok({ path: '/Users/me/project', exists: false })),
     status: () => [
       {
         harnessId: 'acme/hello',
@@ -245,7 +248,12 @@ describe('IPC handlers against a fake service container', () => {
     ['launch.start', undefined],
     ['launch.start', 'acme/hello'],
     ['launch.start', { harnessId: '' }],
-    ['launch.start', { harnessId: 'acme/hello', workspace: '/Users/me' }],
+    ['launch.start', { harnessId: 'acme/hello', workspace: 'relative/folder' }],
+    ['launch.start', { harnessId: 'acme/hello', workspace: 42 }],
+    ['launch.start', { harnessId: 'acme/hello', workspace: '/Users/me', extra: true }],
+    ['launch.chooseWorkspace', undefined],
+    ['launch.chooseWorkspace', { harnessId: 'acme/hello' }],
+    ['launch.lastWorkspace', ''],
   ])('%s rejects %j as invalid_input', async (method, input) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
@@ -260,8 +268,33 @@ describe('IPC handlers against a fake service container', () => {
       dispatch(MAIN_WINDOW, { method: 'launch.start', input: { harnessId: 'acme/hello' } }),
     ).resolves.toEqual({
       ok: true,
-      data: { outcome: 'started', launchId: 'launch-of-acme/hello' },
+      data: { outcome: 'started', launchId: 'launch-of-acme/hello-in-null' },
     });
+  });
+
+  it('launch.start passes the Workspace on, an absolute path or null', async () => {
+    const { dispatch } = dispatcherFor();
+    for (const workspace of ['/Users/me/project', null]) {
+      await expect(
+        dispatch(MAIN_WINDOW, {
+          method: 'launch.start',
+          input: { harnessId: 'acme/hello', workspace },
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        data: { launchId: `launch-of-acme/hello-in-${String(workspace)}` },
+      });
+    }
+  });
+
+  it('launch.chooseWorkspace and launch.lastWorkspace answer for the Harness named', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'launch.chooseWorkspace', input: 'acme/hello' }),
+    ).resolves.toEqual({ ok: true, data: '/Users/me/acme/hello' });
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'launch.lastWorkspace', input: 'acme/hello' }),
+    ).resolves.toEqual({ ok: true, data: { path: '/Users/me/project', exists: false } });
   });
 
   it('launch.status lists the latest launches', async () => {

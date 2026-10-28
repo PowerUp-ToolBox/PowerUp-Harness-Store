@@ -186,9 +186,13 @@ async function start(): Promise<void> {
     providerFetch: (input, init) => globalThis.fetch(input, init),
     // safeStorage is usable from `ready` on, which start() runs after.
     secretCipher: createSafeStorageCipher(safeStorage, process.platform),
-    // "Install this folder locally": the native folder picker, as a sheet of the main window.
-    pickFolder: async () => {
-      const options: OpenDialogOptions = { properties: ['openDirectory'] };
+    // "Install this folder locally" and the Workspace sheet: the native folder picker, as a sheet
+    // of the main window, at the last Workspace when there is one.
+    pickFolder: async (defaultPath) => {
+      const options: OpenDialogOptions = {
+        properties: ['openDirectory', 'createDirectory'],
+        ...(defaultPath === undefined || defaultPath === null ? {} : { defaultPath }),
+      };
       const result =
         mainWindow === null
           ? await dialog.showOpenDialog(options)

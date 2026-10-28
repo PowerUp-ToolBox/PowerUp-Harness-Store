@@ -41,7 +41,11 @@ function setup() {
   const opened: string[] = [];
   let installing = true;
   const supervisor = createSupervisor({
-    installs: { get: () => install, markLaunched: () => undefined },
+    installs: {
+      get: () => install,
+      markLaunched: () => undefined,
+      setLastWorkspace: () => undefined,
+    },
     launches: { begin: () => undefined, end: () => undefined, closeOpen: () => 0 },
     paths: { logsDir: (harnessId) => join(root, 'logs', harnessId) },
     platform: 'linux-x64',

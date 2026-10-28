@@ -21,6 +21,7 @@ import type {
   IpcEventName,
   IpcEvents,
   IpcResult,
+  LastWorkspace,
   LaunchRequest,
   LaunchStarted,
   LaunchStatus,
@@ -166,7 +167,8 @@ export interface FakeApiOptions {
  * `not_implemented`; nobody is signed in to the Store, `auth.signIn` signs
  * in as `octo-cat` and `auth.signOut` signs out; nothing is installed, the folder picker is
  * cancelled, and inspecting or installing a folder answers `not_implemented`; nothing was
- * launched, and launching answers `not_implemented`; a test changes
+ * launched, launching answers `not_implemented`, no Harness has a last Workspace and the
+ * Workspace picker is cancelled; a test changes
  * `app.status`, `diagnostics.get`, the `connectivity`, `connections`, `bindings` or `installs`
  * methods before rendering to say otherwise, and pushes events with `emit`.
  */
@@ -315,6 +317,12 @@ export function installFakeApi(
     launch: {
       start: vi.fn((request: LaunchRequest): Promise<IpcResult<LaunchStarted>> =>
         notImplemented('launch.start', request.harnessId),
+      ),
+      chooseWorkspace: vi.fn<(harnessId: string) => Promise<IpcResult<string | null>>>(() =>
+        Promise.resolve({ ok: true, data: null }),
+      ),
+      lastWorkspace: vi.fn<(harnessId: string) => Promise<IpcResult<LastWorkspace | null>>>(() =>
+        Promise.resolve({ ok: true, data: null }),
       ),
       status: vi.fn((): Promise<IpcResult<readonly LaunchStatus[]>> =>
         Promise.resolve({ ok: true, data: [] }),

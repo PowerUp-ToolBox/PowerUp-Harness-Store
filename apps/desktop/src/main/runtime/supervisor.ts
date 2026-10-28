@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { statSync } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import type { Gateway } from '@harness-store/gateway';
 import type { Platform } from '@harness-store/manifest';
 import type {
@@ -13,6 +14,7 @@ import type {
 import type { Locale } from '../../shared/i18n/locale.js';
 import type {
   IpcResult,
+  LastWorkspace,
   LaunchFailure,
   LaunchStarted,
   LaunchState,
@@ -108,7 +110,7 @@ export interface NodeCommand {
 }
 
 export interface SupervisorOptions {
-  readonly installs: Pick<InstallStore, 'get' | 'markLaunched'>;
+  readonly installs: Pick<InstallStore, 'get' | 'markLaunched' | 'setLastWorkspace'>;
   readonly launches: LaunchStore;
   readonly paths: Pick<HarnessPaths, 'logsDir'>;
   /** This machine's platform as the Manifest names it; null when no Manifest can declare it. */
@@ -142,14 +144,34 @@ export interface SupervisorOptions {
   readonly emit: (status: LaunchStatus) => void;
   /** Opens a file or folder with the OS (Electron's `shell.openPath`). Default: does nothing. */
   readonly openPath?: (path: string) => Promise<void>;
+  /**
+   * Opens the OS folder picker (Electron's `dialog`) at `defaultPath` when given, and resolves the
+   * chosen folder's absolute path, or null when the User cancelled. Default: always cancelled.
+   */
+  readonly pickFolder?: (defaultPath: string | null) => Promise<string | null>;
   readonly now?: () => Date;
   readonly logError?: (message: string, error: unknown) => void;
 }
 
 /** The Process Supervisor as the Runtime uses it. */
 export interface Supervisor {
-  /** `launch.start`. */
-  start(harnessId: string): IpcResult<LaunchStarted>;
+  /**
+   * `launch.start`, with the Workspace the User chose in the main window's sheet: null or absent
+   * when they chose none, which fails a Harness that requires one (`workspace_cancelled`). A
+   * folder that is not an existing absolute directory answers `invalid_input`; a Harness that
+   * declares no Workspace never gets one.
+   */
+  start(harnessId: string, workspace?: string | null): IpcResult<LaunchStarted>;
+  /**
+   * `launch.chooseWorkspace`: the OS folder picker, opened at the Harness's last Workspace while
+   * that folder exists; the chosen folder, or null when the User cancelled.
+   */
+  chooseWorkspace(harnessId: string): Promise<IpcResult<string | null>>;
+  /**
+   * `launch.lastWorkspace`: the Harness's last Workspace and whether that folder still exists;
+   * null when it never had one.
+   */
+  lastWorkspace(harnessId: string): Promise<IpcResult<LastWorkspace | null>>;
   /** `launch.status`: the latest launch of every Harness launched since the app started. */
   status(): readonly LaunchStatus[];
   /** Whether the Harness has a launch that has not ended (it is never installed over then). */
@@ -169,7 +191,10 @@ export interface LaunchWindow {
   info(): Promise<HarnessWindowInfo>;
   /** Opens this launch's log file, or the Harness's logs folder (created) before it has one. */
   openLogs(): Promise<void>;
-  /** Launches the Harness again once this launch has ended; while it runs, focuses it. */
+  /**
+   * Launches the Harness again once this launch has ended, with this launch's Workspace (the User
+   * is not asked again); while it runs, focuses it.
+   */
   relaunch(): IpcResult<LaunchStarted>;
   /** Closes the window, which stops the Harness while it runs. */
   close(): void;
@@ -199,6 +224,8 @@ type LaunchEnd =
 interface Launch {
   readonly launchId: string;
   readonly install: InstallRow;
+  /** The Workspace's absolute path; null when the launch has none. */
+  readonly workspace: string | null;
   readonly startedAt: string;
   state: LaunchState;
   reason?: LaunchFailure;
@@ -239,21 +266,25 @@ interface Launch {
 /**
  * The Process Supervisor (P0-05): launches installed Harnesses following the launch contract of
  * docs/tech/architecture.md §4, one instance per Harness, and stops them with the shutdown
- * sequence. Both UI Kinds with the Node runtime kind for now; the Workspace (P0-05.4) and binary
- * Harnesses (P0-05.5) come next.
+ * sequence. Both UI Kinds with the Node runtime kind for now; binary Harnesses (P0-05.5) come
+ * next.
  *
  * A launch goes `preparing` → `spawning` → `ready` → (`stopping` →) `stopped`, or `failed` with a
  * reason, and every change is pushed with `emit` and to the launch's window. Preparing runs the
  * contract's steps in order: the Entry for this platform (`failed(platform_unsupported)`), the
- * Entry file (`failed(spawn_error)`), the Data Directory (created when missing), then the Gateway
- * Token and the `launches` row (nothing before this step gets either), then the log file, then,
- * for a web UI Kind, a free port. The process runs with the Data Directory as its working
- * directory and the contract's environment. A terminal window opens next, and the process starts
- * in a pty of the terminal's size once the window reports it. A web window opens at once on its
- * Starting state and the process starts with its output piped to the log (`waiting-ready`); the
- * port is tried every 250 ms, and once it accepts a connection the Harness's page comes into the
- * window (`ready`). One that does not within `ui.readyTimeoutSeconds` is stopped with the shutdown
- * sequence and ends `failed(ready_timeout)` with the last 50 lines of its log.
+ * Entry file (`failed(spawn_error)`), the Data Directory (created when missing), the Workspace
+ * (chosen in the main window before `launch.start`; a Harness that requires one and got none
+ * ends `failed(workspace_cancelled)`, and a chosen one is saved as its `last_workspace`), then the
+ * Gateway Token, bound to the Workspace too, and the `launches` row (nothing before this step gets
+ * either), then the log file, then, for a web UI Kind, a free port. The process runs in the
+ * Workspace, or in the Data Directory without one, with the contract's environment:
+ * `HARNESS_WORKSPACE` only when there is a Workspace. A terminal window opens next, and the
+ * process starts in a pty of the terminal's size once the window reports it. A web window opens
+ * at once on its Starting state and the process starts with its output piped to the log
+ * (`waiting-ready`); the port is tried every 250 ms, and once it accepts a connection the
+ * Harness's page comes into the window (`ready`). One that does not within
+ * `ui.readyTimeoutSeconds` is stopped with the shutdown sequence and ends `failed(ready_timeout)`
+ * with the last 50 lines of its log.
  *
  * Closing the window stops the Harness: SIGTERM to its process group, SIGKILL to the group after
  * {@link STOP_GRACE_MS} when the process or another process of its group is still there, the
@@ -273,6 +304,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
   const spawnProcess = options.spawnProcess ?? spawnPiped;
   const askPort = options.freePort ?? freePort;
   const openPath = options.openPath ?? (() => Promise.resolve());
+  const pickFolder = options.pickFolder ?? (() => Promise.resolve(null));
   const logError =
     options.logError ??
     ((message: string, error: unknown) => {
@@ -361,7 +393,13 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       return;
     }
     await mkdir(install.dataDir, { recursive: true });
-    // P0-05.4 asks for the Workspace here.
+    const { workspace } = launch;
+    if (manifest.workspace === 'required' && workspace === null) {
+      await finish(launch, { state: 'failed', reason: 'workspace_cancelled' });
+      return;
+    }
+    // Saved whenever a folder is used; launching without one keeps the last.
+    if (workspace !== null) installs.setLastWorkspace(harnessId, workspace);
     if (stopWasRequested(launch)) {
       await finish(launch, { state: 'stopped' });
       return;
@@ -373,6 +411,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       harnessVersion: install.version,
       launchId: launch.launchId,
       locale,
+      ...(workspace === null ? {} : { workspace }),
     });
     launch.tokenIssued = true;
     launches.begin({
@@ -406,7 +445,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     const command = {
       file: options.nodeCommand.path,
       args: [entryPath],
-      cwd: install.dataDir,
+      cwd: workspace ?? install.dataDir,
       env: {
         ...launchEnvironment(environment(), {
           gatewayUrl: options.gatewayUrl,
@@ -416,6 +455,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
           dataDir: install.dataDir,
           locale,
           platform: options.platform,
+          ...(workspace === null ? {} : { workspace }),
           ...(launch.port === null ? {} : { port: launch.port }),
         }),
         ...options.nodeCommand.env,
@@ -598,7 +638,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     return launch.ended;
   };
 
-  const start = (harnessId: string): IpcResult<LaunchStarted> => {
+  const start = (harnessId: string, chosen: string | null = null): IpcResult<LaunchStarted> => {
     const install = installs.get(harnessId);
     if (install === undefined) return fail('not_installed');
     const current = byHarness.get(harnessId);
@@ -614,6 +654,12 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       return fail('not_implemented', { method: 'launch.start' });
     }
     if (!options.defaultSlotBound(harnessId)) return fail('slot_unbound', { slot: 'default' });
+    // The folder the User chose in the main window, checked again here: it may have gone since.
+    if (chosen !== null && !isDirectorySync(chosen)) {
+      return fail('invalid_input', { method: 'launch.start' });
+    }
+    const workspace =
+      chosen === null || (install.manifest.workspace ?? 'none') === 'none' ? null : resolve(chosen);
 
     // The window of the previous launch, still open on its exit code, makes way for the new one.
     if (current !== undefined) {
@@ -631,6 +677,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     const launch: Launch = {
       launchId: randomUUID(),
       install,
+      workspace,
       startedAt: now().toISOString(),
       state: 'preparing',
       stopRequested: false,
@@ -672,6 +719,19 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
 
   return {
     start,
+    async chooseWorkspace(harnessId) {
+      const install = installs.get(harnessId);
+      if (install === undefined) return fail('not_installed');
+      const last = install.lastWorkspace;
+      const from = last !== null && (await isDirectory(last)) ? last : null;
+      return ok(await pickFolder(from));
+    },
+    async lastWorkspace(harnessId) {
+      const install = installs.get(harnessId);
+      if (install === undefined) return fail('not_installed');
+      const path = install.lastWorkspace;
+      return ok(path === null ? null : { path, exists: await isDirectory(path) });
+    },
     status: () => [...byHarness.values()].map(statusOf),
     isRunning: (harnessId) => byHarness.get(harnessId)?.finished === null,
     async stopAll() {
@@ -712,7 +772,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
           await mkdir(folder, { recursive: true });
           await openPath(folder);
         },
-        relaunch: () => start(harnessId),
+        relaunch: () => start(harnessId, launch.workspace),
         close() {
           windows.close(launchId);
         },
@@ -779,6 +839,27 @@ async function isFile(path: string): Promise<boolean> {
   }
 }
 
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `path` is an absolute path to an existing folder. Synchronous, so `launch.start` decides
+ * in one step whether the Harness already runs and what it launches with.
+ */
+function isDirectorySync(path: string): boolean {
+  if (!isAbsolute(path) || path.includes('\0')) return false;
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -791,6 +872,10 @@ function messageOf(error: unknown): string {
 export function createSupervisorStub(): Supervisor {
   return {
     start: () => fail('not_implemented', { method: 'launch.start' }),
+    chooseWorkspace: () =>
+      Promise.resolve(fail('not_implemented', { method: 'launch.chooseWorkspace' })),
+    lastWorkspace: () =>
+      Promise.resolve(fail('not_implemented', { method: 'launch.lastWorkspace' })),
     status: () => [],
     isRunning: () => false,
     stopAll: () => Promise.resolve(),

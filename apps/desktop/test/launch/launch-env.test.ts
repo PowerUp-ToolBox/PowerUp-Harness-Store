@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { launchEnvironment, type LaunchContract } from '../../src/main/runtime/launch-env.js';
 
-/** Ticket P0-05.2: the environment of the launch contract (docs/tech/architecture.md §4). */
+/**
+ * Tickets P0-05.2 and P0-05.4: the environment of the launch contract
+ * (docs/tech/architecture.md §4).
+ */
 
 const CONTRACT: LaunchContract = {
   gatewayUrl: 'http://127.0.0.1:51234/v1',
@@ -60,5 +63,19 @@ describe('launchEnvironment', () => {
   it('sets HARNESS_PORT for a web UI Kind, over an inherited one', () => {
     const env = launchEnvironment({ HARNESS_PORT: '1234' }, { ...CONTRACT, port: 52341 });
     expect(env).toEqual({ ...launchEnvironment({}, CONTRACT), HARNESS_PORT: '52341' });
+  });
+
+  it('sets HARNESS_WORKSPACE only when there is a Workspace, over an inherited one', () => {
+    const env = launchEnvironment(
+      { HARNESS_WORKSPACE: '/parent' },
+      { ...CONTRACT, workspace: '/Users/me/project' },
+    );
+    expect(env).toEqual({
+      ...launchEnvironment({}, CONTRACT),
+      HARNESS_WORKSPACE: '/Users/me/project',
+    });
+    expect(launchEnvironment({ HARNESS_WORKSPACE: '/parent' }, CONTRACT)).not.toHaveProperty(
+      'HARNESS_WORKSPACE',
+    );
   });
 });

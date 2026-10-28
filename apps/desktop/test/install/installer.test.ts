@@ -75,6 +75,9 @@ function storeThatCannotWrite(): InstallStore {
     markLaunched: (harnessId, at) => {
       store.markLaunched(harnessId, at);
     },
+    setLastWorkspace: (harnessId, path) => {
+      store.setLastWorkspace(harnessId, path);
+    },
   };
 }
 
@@ -114,6 +117,9 @@ describe('createInstaller', () => {
       },
       markLaunched: (harnessId, at) => {
         inner.markLaunched(harnessId, at);
+      },
+      setLastWorkspace: (harnessId, path) => {
+        inner.setLastWorkspace(harnessId, path);
       },
     });
     service = installer({

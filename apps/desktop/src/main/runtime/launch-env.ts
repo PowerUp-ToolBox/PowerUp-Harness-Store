@@ -23,14 +23,16 @@ export interface LaunchContract {
   readonly locale: string;
   /** Such as `darwin-arm64`. */
   readonly platform: string;
+  /** The Workspace's absolute path; absent when the launch has none. */
+  readonly workspace?: string;
   /** The port a web UI Kind Harness listens on; absent for a terminal one. */
   readonly port?: number;
 }
 
 /**
  * The environment a Harness process starts with: the inherited one without the
- * {@link STRIPPED} variables, then the launch contract's: `HARNESS_PORT` only for a web UI Kind.
- * `HARNESS_WORKSPACE` (a chosen Workspace) is added by P0-05.4.
+ * {@link STRIPPED} variables, then the launch contract's: `HARNESS_WORKSPACE` only when a
+ * Workspace was chosen (absent, never empty, otherwise), `HARNESS_PORT` only for a web UI Kind.
  */
 export function launchEnvironment(
   inherited: Readonly<Record<string, string | undefined>>,
@@ -52,6 +54,7 @@ export function launchEnvironment(
     HARNESS_DATA_DIR: contract.dataDir,
     HARNESS_LOCALE: contract.locale,
     HARNESS_PLATFORM: contract.platform,
+    ...(contract.workspace === undefined ? {} : { HARNESS_WORKSPACE: contract.workspace }),
     ...(contract.port === undefined ? {} : { HARNESS_PORT: String(contract.port) }),
   };
 }

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router';
 import type { InstalledHarness, IpcError, LaunchStatus } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
+import { WorkspaceSheet } from '../library/WorkspaceSheet.js';
 import { LibraryIcon } from '../shell/icons.js';
 
 /**
@@ -77,7 +78,8 @@ export function LibraryPage() {
  * "Starting…" while it starts; "Running…" with "Show window" while it runs (both bring its
  * window to the front, as a second launch would); "Stopping…" after its window closed; "Set up a
  * model first", which opens the Models page at this Harness, when nothing can fill its `default`
- * Model Slot; "Not available for your platform", disabled.
+ * Model Slot; "Not available for your platform", disabled. Launch first opens the Workspace sheet
+ * for a Harness whose Manifest asks for a Workspace (docs/ux/flows.md F3).
  */
 function HarnessCard({
   install,
@@ -90,6 +92,7 @@ function HarnessCard({
   const navigate = useNavigate();
   const [needsModel, setNeedsModel] = useState(false);
   const [error, setError] = useState<IpcError | null>(null);
+  const [choosingWorkspace, setChoosingWorkspace] = useState(false);
   const { harnessId } = install;
 
   useEffect(() => {
@@ -104,13 +107,23 @@ function HarnessCard({
     };
   }, [harnessId]);
 
-  const start = async () => {
+  /** Launches it, or focuses it while it runs; resolves the error to show, if any. */
+  const start = async (workspace?: string | null): Promise<IpcError | null> => {
+    const result = await window.api.launch.start(
+      workspace === undefined ? { harnessId } : { harnessId, workspace },
+    );
+    if (result.ok) return null;
+    if (result.error.code !== 'slot_unbound') return result.error;
+    setNeedsModel(true);
+    return null;
+  };
+  const startHere = () => {
     setError(null);
-    const result = await window.api.launch.start({ harnessId });
-    if (!result.ok) {
-      if (result.error.code === 'slot_unbound') setNeedsModel(true);
-      else setError(result.error);
-    }
+    void start().then(setError);
+  };
+  const launchFromCard = () => {
+    if ((install.manifest.workspace ?? 'none') === 'none') startHere();
+    else setChoosingWorkspace(true);
   };
   const openModels = () => {
     void navigate(`/models?harness=${encodeURIComponent(harnessId)}`);
@@ -143,11 +156,24 @@ function HarnessCard({
           install={install}
           state={launch?.state}
           needsModel={needsModel}
-          onStart={() => void start()}
+          onLaunch={launchFromCard}
+          onFocus={startHere}
           onOpenModels={openModels}
         />
       </div>
       {error === null ? null : <ErrorMessage error={error} />}
+      {choosingWorkspace ? (
+        <WorkspaceSheet
+          install={install}
+          onLaunch={(workspace) => {
+            setError(null);
+            return start(workspace);
+          }}
+          onClose={() => {
+            setChoosingWorkspace(false);
+          }}
+        />
+      ) : null}
     </article>
   );
 }
@@ -156,13 +182,17 @@ function PrimaryAction({
   install,
   state,
   needsModel,
-  onStart,
+  onLaunch,
+  onFocus,
   onOpenModels,
 }: {
   readonly install: InstalledHarness;
   readonly state: LaunchStatus['state'] | undefined;
   readonly needsModel: boolean;
-  readonly onStart: () => void;
+  /** Launch: through the Workspace sheet when the Harness asks for a Workspace. */
+  readonly onLaunch: () => void;
+  /** Running… and Show window: a launch while it runs brings its window to the front. */
+  readonly onFocus: () => void;
   readonly onOpenModels: () => void;
 }) {
   const { t } = useI18n();
@@ -185,10 +215,10 @@ function PrimaryAction({
     case 'ready':
       return (
         <>
-          <button type="button" className="button-primary" onClick={onStart}>
+          <button type="button" className="button-primary" onClick={onFocus}>
             {t('library.running')}
           </button>
-          <button type="button" className="button-link" onClick={onStart}>
+          <button type="button" className="button-link" onClick={onFocus}>
             {t('library.showWindow')}
           </button>
         </>
@@ -205,7 +235,7 @@ function PrimaryAction({
           {t('library.needsModel')}
         </button>
       ) : (
-        <button type="button" className="button-primary" onClick={onStart}>
+        <button type="button" className="button-primary" onClick={onLaunch}>
           {t('library.launch')}
         </button>
       );
