@@ -12,6 +12,7 @@ describe('buildApi (window.api)', () => {
       'connections',
       'connectivity',
       'diagnostics',
+      'installs',
       'on',
       'providers',
       'settings',
@@ -31,6 +32,12 @@ describe('buildApi (window.api)', () => {
     ]);
     expect(Object.keys(api.connectivity)).toEqual(['get', 'check']);
     expect(Object.keys(api.diagnostics)).toEqual(['get']);
+    expect(Object.keys(api.installs)).toEqual([
+      'chooseFolder',
+      'inspectFolder',
+      'installFromFolder',
+      'list',
+    ]);
     expect(Object.keys(api.providers)).toEqual(['list']);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
     expect(Object.isFrozen(api)).toBe(true);
@@ -59,13 +66,16 @@ describe('buildApi (window.api)', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
-  it.each(['connectivity.changed', 'auth.changed'] as const)('subscribes to %s', (event) => {
-    const listen = vi.fn<Listen>(() => () => undefined);
-    const api = buildApi(vi.fn<Invoke>(), listen);
-    const listener = vi.fn();
-    api.on(event, listener);
-    expect(listen).toHaveBeenCalledWith(event, listener);
-  });
+  it.each(['connectivity.changed', 'auth.changed', 'installs.changed'] as const)(
+    'subscribes to %s',
+    (event) => {
+      const listen = vi.fn<Listen>(() => () => undefined);
+      const api = buildApi(vi.fn<Invoke>(), listen);
+      const listener = vi.fn();
+      api.on(event, listener);
+      expect(listen).toHaveBeenCalledWith(event, listener);
+    },
+  );
 
   it('refuses an event name outside the contract', () => {
     const api = buildApi(vi.fn<Invoke>(), vi.fn<Listen>());

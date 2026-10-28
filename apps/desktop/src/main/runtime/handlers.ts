@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import type { AuthState, IpcMethodName, IpcOutput, IpcResult } from '../../shared/ipc.js';
 import { parseGlobalBindingChange } from './bindings.js';
 import {
@@ -119,7 +120,32 @@ export function createHandlers(services: Services): IpcHandlers {
       if (input !== undefined) return fail('invalid_input', { method: 'auth.whoami' });
       return authResult(() => services.auth.whoami());
     },
+    'installs.chooseFolder': async (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'installs.chooseFolder' });
+      return ok(await services.installs.chooseFolder());
+    },
+    'installs.inspectFolder': (input) => {
+      if (!isAbsolutePath(input)) {
+        return fail('invalid_input', { method: 'installs.inspectFolder' });
+      }
+      return services.installs.inspectFolder(input);
+    },
+    'installs.installFromFolder': (input) => {
+      if (!isAbsolutePath(input)) {
+        return fail('invalid_input', { method: 'installs.installFromFolder' });
+      }
+      return services.installs.installFromFolder(input);
+    },
+    'installs.list': async (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'installs.list' });
+      return ok(await services.installs.list());
+    },
   };
+}
+
+/** An absolute path of this OS, as the folder picker returns it. */
+function isAbsolutePath(input: unknown): input is string {
+  return typeof input === 'string' && !input.includes('\0') && isAbsolute(input);
 }
 
 /** The auth call's state, or its {@link StoreAuthError} as that error code; anything else throws. */

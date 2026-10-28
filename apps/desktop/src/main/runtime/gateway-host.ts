@@ -10,7 +10,7 @@ export type GatewayHost = Pick<GatewayOptions, 'resolveBinding' | 'getConnection
 export interface GatewayHostOptions {
   readonly store: ConnectionStore;
   readonly cipher: SecretCipher;
-  /** The installed Manifest of a Harness. Default: none (P0-05 installs Harnesses). */
+  /** The installed Manifest of a Harness (the `installs` table). Default: none. */
   readonly getManifest?: GatewayOptions['getManifest'];
 }
 
@@ -27,9 +27,9 @@ export interface GatewayHostOptions {
  * `resolveBinding` runs the normative order ({@link resolveSlotBinding}) over the global Slot
  * Bindings and the enabled Connections as they are now, so a Default Model set, changed or
  * cleared, or a Connection disabled or removed, applies to the next request. Model Overrides and
- * Recommended Models join it in P0-03.5; until then they are absent. `getManifest` knows no
- * Harness until installs do (P0-05), so in the app a Slot name still ends in `unknown_slot`;
- * explicit `provider/model` ids already reach the User's Connections.
+ * Recommended Models join it in P0-03.5; until then they are absent. `getManifest` answers the
+ * installed Manifest, read from the `installs` table on every request, so a Harness installed or
+ * replaced declares its Slots from its next request on.
  */
 export function createGatewayHost(options: GatewayHostOptions): GatewayHost {
   const { store, cipher } = options;

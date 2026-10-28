@@ -2,6 +2,7 @@ import type { Diagnostics, ProviderPreset, StartupStatus } from '../../shared/ip
 import type { BindingsService } from './bindings.js';
 import type { ConnectionsService } from './connections.js';
 import type { ConnectivityService } from './connectivity.js';
+import type { InstallsService } from './installer.js';
 import type { SettingsService } from './settings.js';
 import type { StoreAuth } from './store-auth.js';
 
@@ -35,4 +36,6 @@ export interface Services {
   readonly bindings: BindingsService;
   /** The Publisher's sign-in to the Store. */
   readonly auth: Pick<StoreAuth, 'signIn' | 'signOut' | 'whoami'>;
+  /** The installed Harnesses, and installing one from a local folder. */
+  readonly installs: InstallsService;
 }

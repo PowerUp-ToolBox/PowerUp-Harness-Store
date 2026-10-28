@@ -7,6 +7,7 @@
  * {@link IpcResult}; one event channel carries `{ event, payload }` from main to the renderer.
  */
 
+import type { DeclaredPermissions, Manifest, Platform, Problem } from '@harness-store/manifest';
 import type { Locale } from './i18n/locale.js';
 
 /**
@@ -36,6 +37,16 @@ export type IpcErrorCode =
   | 'sign_in_cancelled'
   /** The Store did not answer (network error, timeout or a 5xx). */
   | 'store_unreachable'
+  /**
+   * A Harness folder is not (or no longer) a valid Harness Package: it cannot be read, fails
+   * validation, or its Manifest changed since `installs.inspectFolder` showed it. The problems
+   * themselves come from `installs.inspectFolder`, never in the error.
+   */
+  | 'package_invalid'
+  /** The Harness is running, so it cannot be installed over (or uninstalled) now. */
+  | 'harness_running'
+  /** No Harness with this ID is installed. */
+  | 'not_installed'
   | 'invalid_request'
   | 'invalid_token'
   | 'invalid_host'
@@ -160,6 +171,102 @@ export interface IpcMethods {
    * signed out.
    */
   'auth.whoami': { input: undefined; output: AuthState };
+  /**
+   * Opens the OS folder picker over the main window; the chosen folder's absolute path, or null
+   * when the User cancelled.
+   */
+  'installs.chooseFolder': { input: undefined; output: string | null };
+  /**
+   * Validates the Harness folder at this absolute path with `validatePackage`, reading it without
+   * writing anything: every problem and warning, and, when it is valid, what the consent dialog
+   * shows. A folder that cannot be read answers `package_invalid`.
+   */
+  'installs.inspectFolder': { input: string; output: FolderInspection };
+  /**
+   * Installs the Harness folder at this absolute path as a local install, after the User
+   * consented: validates it again, copies its files into the install layout and records it.
+   * Installing the version already installed replaces it; another version replaces the installed
+   * one. `package_invalid` when the folder no longer validates or its Manifest changed since
+   * `installs.inspectFolder`; `harness_running` while that Harness runs.
+   */
+  'installs.installFromFolder': { input: string; output: InstalledVersion };
+  /**
+   * Every installed Harness: the most recently launched first, then the never-launched ones, by
+   * name.
+   */
+  'installs.list': { input: undefined; output: readonly InstalledHarness[] };
+}
+
+/** Where an installed Harness Package came from: the Store, or a local folder. */
+export type InstallSource = 'store' | 'local';
+
+/** The facts of a valid Manifest that the install consent dialog shows. */
+export interface ManifestSummary {
+  readonly harnessId: string;
+  readonly version: string;
+  readonly name: string;
+  readonly runtimeKind: Manifest['runtime']['kind'];
+  readonly uiKind: Manifest['ui']['kind'];
+  /** The Manifest's `workspace`, `none` when absent. */
+  readonly workspace: NonNullable<Manifest['workspace']>;
+  readonly platforms: readonly Platform[];
+  /**
+   * The Entry the Runtime runs: the path for a Node Harness; for a binary one, the path for this
+   * platform, null when the Harness does not declare it.
+   */
+  readonly entry: string | null;
+  readonly permissions: DeclaredPermissions;
+  /** Whether the Harness declares this platform (and, binary, has an Entry for it). */
+  readonly platformSupported: boolean;
+}
+
+/** What `validatePackage` found in a Harness folder. */
+export interface FolderInspection {
+  /** Whether it has no problem, so it can be installed. */
+  readonly valid: boolean;
+  /** Present exactly when `valid`. */
+  readonly manifestSummary: ManifestSummary | null;
+  /** Every problem, as `validatePackage` returned it: shown by `manifest.<messageKey>`. */
+  readonly problems: readonly Problem[];
+  /** Findings that do not block installing, such as an ignored key. */
+  readonly warnings: readonly Problem[];
+}
+
+/** The Harness and version an install put in place. */
+export interface InstalledVersion {
+  readonly harnessId: string;
+  readonly version: string;
+}
+
+/** An installed Harness, as the Library and the Models page show it. */
+export interface InstalledHarness {
+  readonly harnessId: string;
+  readonly version: string;
+  /** The Manifest's display name. */
+  readonly name: string;
+  /** The Publisher: the Harness ID's publisher segment. */
+  readonly publisher: string;
+  readonly source: InstallSource;
+  /** The installed Manifest. */
+  readonly manifest: Manifest;
+  /** The absolute path of the installed files, `harnesses/<publisher>/<slug>/<version>/`. */
+  readonly installPath: string;
+  /** ISO-8601 UTC. */
+  readonly installedAt: string;
+  /** ISO-8601 UTC; null until it is first launched. */
+  readonly lastLaunchedAt: string | null;
+  /**
+   * The Harness's `assets/icon.png` as a `data:` URL (the renderer may load no file), null when
+   * it cannot be read.
+   */
+  readonly iconDataUrl: string | null;
+  /** Whether it can run on this platform: listed in `platforms`, with an Entry. */
+  readonly platformSupported: boolean;
+}
+
+/** Which installed Harness changed: installed, replaced by another version, or removed. */
+export interface InstallsChanged {
+  readonly harnessId: string;
 }
 
 /** Whether a Publisher is signed in to the Store, and as whom. */
@@ -446,6 +553,10 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'auth.signIn': true,
   'auth.signOut': true,
   'auth.whoami': true,
+  'installs.chooseFolder': true,
+  'installs.inspectFolder': true,
+  'installs.installFromFolder': true,
+  'installs.list': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */
@@ -461,6 +572,8 @@ export interface IpcEvents {
   'connectivity.changed': Connectivity;
   /** The Store sign-in state changed; `session_expired` asks the screen in use to sign in again. */
   'auth.changed': AuthChanged;
+  /** An installed Harness was installed, replaced or removed; lists read `installs.list` again. */
+  'installs.changed': InstallsChanged;
   [event: `progress:${string}`]: unknown;
 }
 
@@ -482,7 +595,12 @@ export const IPC_INVOKE_CHANNEL = 'harness-store:invoke';
 export const IPC_EVENT_CHANNEL = 'harness-store:event';
 
 export function isIpcEventName(name: string): name is IpcEventName {
-  return name === 'connectivity.changed' || name === 'auth.changed' || /^progress:.+$/.test(name);
+  return (
+    name === 'connectivity.changed' ||
+    name === 'auth.changed' ||
+    name === 'installs.changed' ||
+    /^progress:.+$/.test(name)
+  );
 }
 
 type Domain<M extends string> = M extends `${infer D}.${string}` ? D : never;

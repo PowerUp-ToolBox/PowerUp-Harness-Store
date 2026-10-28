@@ -131,13 +131,13 @@ Created by a migration. Paths are relative to their bucket (no bucket prefix in 
 
 | table | purpose | key columns |
 |---|---|---|
-| `installs` | installed Harnesses | `harness_id` PK, `version`, `manifest` json, `install_path`, `data_dir`, `installed_at`, `last_launched_at`, `last_workspace`, `consented_permissions` json, `available_version` (from update check) |
+| `installs` | installed Harnesses, one version per Harness | `harness_id` PK, `version`, `manifest` json, `install_path`, `data_dir`, `installed_at`, `last_launched_at`, `last_workspace`, `consented_permissions` json, `available_version` (from update check), `source` (`store` or `local`: installed from a local folder with "Install this folder locally", never updated from the Store) |
 | `connections` | Provider Connections | `id` PK (`anthropic`, `openai-compatible:<slug>` …), `provider_id`, `display_name`, `base_url` (NULL = the Provider's default), `secret_ref` (row id in `secrets`, NULL without a key), `key_hint` (last 4 characters of the key, `''` for a key under 12 characters, so the masked key is shown without decrypting), `enabled`, `last_tested_at` (ISO-8601 UTC), `last_test_ok`, `last_test_error` (the Provider's own text), `last_test_failure` (`provider_timeout` or `unexpected_response` when the last test failed without Provider text, else NULL), `test_model` (the model the User named for the last passed test, which later tests reuse; NULL for the catalogue's) |
 | `secrets` | encrypted blobs | `id` PK (= the Connection id, or `store:session` for the Publisher's Store session: access and refresh token, user id, expiry and the last profile read, as JSON; never GitHub's own token), `ciphertext` blob (Electron safeStorage), `created_at` |
 | `slot_bindings` | Slot Bindings | `scope` (`global` or `harness:<id>`), `slot`, `provider_id` (the Connection id, e.g. `openai-compatible:vllm`; no foreign key, removing a Connection deletes its rows in the same transaction), `model`; PK (`scope`, `slot`) |
 | `usage_records` | Usage Records | as defined in gateway-protocol §7; index on (`harness_id`, `timestamp`) |
 | `settings` | key/value | `locale`, `update_check_interval`, `store_base_url`, `onboarding_done`, `window_state` (main process only) |
-| `launches` | audit of launches | `launch_id`, `harness_id`, `version`, `started_at`, `ended_at`, `exit_code`, `token_revoked_at` |
+| `launches` | audit of launches | `launch_id` PK, `harness_id`, `version`, `started_at`, `ended_at`, `exit_code`, `token_revoked_at`; index on (`harness_id`, `started_at`) |
 
 Global Slot Bindings for `default` are the User's Default Model. Rows with scope `harness:<id>` are Model Overrides.
 

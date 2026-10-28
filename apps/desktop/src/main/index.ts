@@ -4,7 +4,18 @@
  * unit-tested under plain Node.
  */
 import { join, resolve } from 'node:path';
-import { app, BrowserWindow, ipcMain, net, safeStorage, screen, session, shell } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  net,
+  safeStorage,
+  screen,
+  session,
+  shell,
+  type OpenDialogOptions,
+} from 'electron';
 import { IPC_EVENT_CHANNEL, IPC_INVOKE_CHANNEL, type IpcEventMessage } from '../shared/ipc.js';
 import { startRuntime, type Runtime } from './runtime/bootstrap.js';
 import { createDispatcher } from './runtime/dispatcher.js';
@@ -125,6 +136,15 @@ async function start(): Promise<void> {
     providerFetch: (input, init) => globalThis.fetch(input, init),
     // safeStorage is usable from `ready` on, which start() runs after.
     secretCipher: createSafeStorageCipher(safeStorage, process.platform),
+    // "Install this folder locally": the native folder picker, as a sheet of the main window.
+    pickFolder: async () => {
+      const options: OpenDialogOptions = { properties: ['openDirectory'] };
+      const result =
+        mainWindow === null
+          ? await dialog.showOpenDialog(options)
+          : await dialog.showOpenDialog(mainWindow, options);
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    },
     emit: (event, payload) => {
       if (mainWindow === null || mainWindow.isDestroyed()) return;
       const message: IpcEventMessage = { event, payload };

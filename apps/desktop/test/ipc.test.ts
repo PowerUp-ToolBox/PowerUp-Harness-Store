@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createDispatcher, UntrustedSenderError } from '../src/main/runtime/dispatcher.js';
 import { createHandlers, type IpcHandlers } from '../src/main/runtime/handlers.js';
 import { createConnectionsStub, providerPresets } from '../src/main/runtime/connections.js';
+import { createInstallsStub } from '../src/main/runtime/installer.js';
 import { ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { StoreAuthError } from '../src/main/runtime/store-auth.js';
@@ -50,6 +51,7 @@ const fakeServices: Services = {
         avatarUrl: null,
       }),
   },
+  installs: { ...createInstallsStub(), chooseFolder: () => Promise.resolve('/Users/me/hello') },
 };
 const en = translatorFor('en');
 
@@ -134,6 +136,8 @@ describe('IPC handlers against a fake service container', () => {
     'auth.signIn',
     'auth.signOut',
     'auth.whoami',
+    'installs.chooseFolder',
+    'installs.list',
   ])('%s rejects any input as invalid_input', async (method) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input: {} })).resolves.toMatchObject({
@@ -187,6 +191,11 @@ describe('IPC handlers against a fake service container', () => {
     ['bindings.setGlobal', undefined],
     ['bindings.setGlobal', { slot: 'default' }],
     ['bindings.setGlobal', { slot: 'default', target: 'ollama/qwen3:8b' }],
+    ['installs.inspectFolder', undefined],
+    ['installs.inspectFolder', 'relative/folder'],
+    ['installs.inspectFolder', '/folder\u0000'],
+    ['installs.installFromFolder', { path: '/folder' }],
+    ['installs.installFromFolder', ''],
   ])('%s rejects %j as invalid_input', async (method, input) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
@@ -213,6 +222,14 @@ describe('IPC handlers against a fake service container', () => {
     ).resolves.toEqual({
       ok: true,
       data: [{ slot: 'fast', connectionId: 'ollama', model: 'qwen3:8b' }],
+    });
+  });
+
+  it('installs.chooseFolder returns the folder the picker chose', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'installs.chooseFolder' })).resolves.toEqual({
+      ok: true,
+      data: '/Users/me/hello',
     });
   });
 

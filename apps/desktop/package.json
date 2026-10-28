@@ -22,7 +22,8 @@
     "test:onboarding": "vitest run onboarding",
     "test:connections": "vitest run connections",
     "test:bindings": "vitest run bindings",
-    "test:auth": "vitest run auth sign-in"
+    "test:auth": "vitest run auth sign-in",
+    "test:install": "vitest run install"
   },
   "devDependencies": {
     "@formatjs/icu-messageformat-parser": "3.5.21",

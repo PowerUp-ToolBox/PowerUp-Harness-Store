@@ -1254,3 +1254,274 @@ input[aria-invalid='true'] {
 .connection-row-test .field {
   flex: 0 1 280px;
 }
+
+/* Library (P0-05.1): one card per installed Harness. */
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.harness-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg);
+}
+
+.harness-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.harness-icon {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+}
+
+.harness-icon.monogram {
+  font-size: 16px;
+}
+
+.harness-card-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.harness-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.harness-card-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.harness-card-subtitle {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.harness-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.badge {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--color-sidebar-active);
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.library-empty {
+  align-items: center;
+  gap: 14px;
+  padding: 64px 16px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.library-empty svg {
+  width: 48px;
+  height: 48px;
+}
+
+.library-empty .empty-panel-title {
+  color: var(--color-text);
+  font-size: 17px;
+}
+
+.library-empty .button-primary {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+/* Publish: "Install this folder locally" (P0-05.1). */
+.install-folder {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.install-folder-title {
+  margin: 0;
+  font-size: 17px;
+}
+
+.install-folder-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.install-folder-path {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.install-folder-done {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-success-bg);
+  color: var(--color-text);
+}
+
+.problem-panel,
+.warning-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-error-border);
+  border-radius: 10px;
+  background: var(--color-error-bg);
+}
+
+.warning-panel {
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-bg);
+}
+
+.problem-panel-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.problem-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.problem-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  overflow-wrap: anywhere;
+}
+
+/* The install consent dialog (shared with P0-10). */
+.permission-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.permission-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.permission-item[data-severity='medium'] {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+
+.permission-item[data-severity='high'] {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.permission-item svg {
+  flex: 0 0 18px;
+  margin-top: 1px;
+}
+
+.permission-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.permission-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.permission-consequence {
+  font-size: 12px;
+}
+
+.fact-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fact-chips li {
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: var(--color-sidebar);
+  font-size: 12px;
+}
+
+.consent-id {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.modal .consent-note {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  font-size: 13px;
+}
+
+.modal .no-sandbox {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}

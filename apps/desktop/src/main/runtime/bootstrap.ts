@@ -21,6 +21,9 @@ import {
 } from './connectivity.js';
 import { DATABASE_FILE_NAME, openDatabase } from './database.js';
 import { createGatewayHost } from './gateway-host.js';
+import { platformOf } from './harness-paths.js';
+import { createInstallStore, type InstallStore } from './install-store.js';
+import { createInstaller, createInstallsStub, type InstallsService } from './installer.js';
 import { createLocalDetector, type LocalProbeTarget } from './local-detection.js';
 import type { SecretCipher } from './secret-cipher.js';
 import type { Services } from './services.js';
@@ -83,6 +86,16 @@ export interface RuntimeOptions {
    * reversible fake.
    */
   readonly secretCipher: SecretCipher;
+  /**
+   * Opens the OS folder picker (Electron's `dialog`) and resolves the chosen folder, or null when
+   * the User cancels. Default: always cancelled.
+   */
+  readonly pickFolder?: () => Promise<string | null>;
+  /**
+   * This machine's platform as `<process.platform>-<process.arch>`, which decides whether an
+   * installed Harness can run here. Default: this process's.
+   */
+  readonly platform?: string;
   /** Pushes an event to the main window; dropped while there is none. */
   readonly emit?: <E extends IpcEventName>(event: E, payload: IpcEvents[E]) => void;
   /** Creates the Model Gateway; tests wrap the real one to make `listen` fail. */
@@ -147,6 +160,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     usageRecords: UsageRecordStore;
     connections: ConnectionStore;
     session: SessionSlot;
+    installs: InstallStore;
   } | null = null;
   try {
     mkdirSync(options.dataDir, { recursive: true });
@@ -156,6 +170,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       usageRecords: createUsageRecordStore(db),
       connections: createConnectionStore(db),
       session: createSqliteSessionSlot(db),
+      installs: createInstallStore(db),
     };
   } catch (error) {
     db?.close();
@@ -167,12 +182,15 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   /** The Model Gateway's port while it listens; null before, after a failed start and on shutdown. */
   let gatewayPort: number | null = null;
   if (sqlite !== null) {
-    const { usageRecords } = sqlite;
-    // Connections and Slot Bindings are read from SQLite on every request. Installed Manifests
-    // arrive with P0-05, so until then no Slot name is declared and only explicit provider/model
-    // ids resolve.
+    const { usageRecords, installs } = sqlite;
+    // Connections, Slot Bindings and the installed Manifests are read from SQLite on every
+    // request.
     gateway = (options.createGateway ?? createGateway)({
-      ...createGatewayHost({ store: sqlite.connections, cipher: options.secretCipher }),
+      ...createGatewayHost({
+        store: sqlite.connections,
+        cipher: options.secretCipher,
+        getManifest: (harnessId) => Promise.resolve(installs.get(harnessId)?.manifest ?? null),
+      }),
       onUsage: (record) => {
         usageRecords.insert(record);
         return Promise.resolve();
@@ -200,6 +218,17 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
               ? {}
               : { targets: options.localProbeTargets }),
           }),
+          ...(options.now === undefined ? {} : { now: options.now }),
+        });
+  const installs: InstallsService =
+    sqlite === null
+      ? createInstallsStub()
+      : createInstaller({
+          store: sqlite.installs,
+          root: options.dataDir,
+          platform: platformOf(options.platform ?? `${process.platform}-${process.arch}`),
+          pickFolder: options.pickFolder ?? (() => Promise.resolve(null)),
+          onChanged: (harnessId) => options.emit?.('installs.changed', { harnessId }),
           ...(options.now === undefined ? {} : { now: options.now }),
         });
   let stopping = false;
@@ -248,6 +277,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           ? createBindingsStub()
           : createBindingsService(connectionStore),
       auth,
+      installs,
     },
     windowState: {
       read() {

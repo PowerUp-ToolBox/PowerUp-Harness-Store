@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react';
 import type { AuthState, IpcError } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
+import { InstallFolderPanel } from '../install/InstallFolderPanel.js';
 
-// Placeholder: the Publish flow arrives in P0-08. Until then the screen only exercises the Store
+// Placeholder: the Publish flow arrives in P0-08. Until then the screen exercises the Store
 // sign-in of P0-07.2 (`auth.*`), the only screen that shows it (docs/ux/flows.md, F5): sign in
 // with GitHub in the browser, see the login, sign out. P0-08.1 builds the real sign-in card.
+// "Install this folder locally" (P0-05.1) works signed out and offline, so it is always shown.
 export function PublishPage() {
   const { t } = useI18n();
   const [auth, setAuth] = useState<AuthState | null>(null);
@@ -66,6 +68,7 @@ export function PublishPage() {
       )}
       {error === null ? null : <ErrorMessage error={error} />}
       <p className="placeholder">{t('publish.placeholder')}</p>
+      <InstallFolderPanel />
     </div>
   );
 }

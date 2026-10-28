@@ -3,6 +3,7 @@ import m0001 from './migrations/0001_settings_and_usage_records.sql?raw';
 import m0002 from './migrations/0002_connections_and_slot_bindings.sql?raw';
 import m0003 from './migrations/0003_connection_test_failure.sql?raw';
 import m0004 from './migrations/0004_connection_test_model.sql?raw';
+import m0005 from './migrations/0005_installs_and_launches.sql?raw';
 
 /** The local SQLite file's name in the app data root (data-model.md, install layout). */
 export const DATABASE_FILE_NAME = 'harness-store.sqlite';
@@ -12,7 +13,7 @@ export const DATABASE_FILE_NAME = 'harness-store.sqlite';
  * built main process does not need them on disk. A new migration is a new file appended here;
  * a released one is never edited.
  */
-export const MIGRATIONS: readonly string[] = [m0001, m0002, m0003, m0004];
+export const MIGRATIONS: readonly string[] = [m0001, m0002, m0003, m0004, m0005];
 
 /**
  * Opens (creating it if needed) the Runtime's SQLite database at `path` and brings its schema up

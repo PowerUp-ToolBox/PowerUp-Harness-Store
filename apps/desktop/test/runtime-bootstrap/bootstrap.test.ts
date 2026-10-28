@@ -142,6 +142,8 @@ describe('startRuntime on a clean install', () => {
     await runtime.shutdown();
     expect(tables(databasePath)).toEqual([
       'connections',
+      'installs',
+      'launches',
       'secrets',
       'settings',
       'slot_bindings',
