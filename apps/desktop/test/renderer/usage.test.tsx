@@ -38,6 +38,8 @@ function row(fields: Partial<UsageRow>): UsageRow {
 interface Answers {
   readonly total: UsageRow;
   readonly harness: readonly UsageRow[];
+  /** The all-time, unfiltered `['harness']` query's (the Harness filter's options); default `harness`. */
+  readonly harnessOptions?: readonly UsageRow[];
   readonly model: readonly UsageRow[];
   readonly day: readonly UsageRow[];
   readonly provider: readonly UsageRow[];
@@ -136,9 +138,14 @@ const REVIEWER: InstalledHarness = {
 
 function answer(answers: Answers) {
   return (query: UsageQuery) => {
+    const allTime =
+      query.from === null &&
+      query.to === null &&
+      query.harnessId === undefined &&
+      query.providerId === undefined;
     const rows: Record<string, readonly UsageRow[]> = {
       '': [answers.total],
-      harness: answers.harness,
+      harness: allTime ? (answers.harnessOptions ?? answers.harness) : answers.harness,
       'harness,model': answers.model,
       day: answers.day,
       provider: answers.provider,
@@ -297,7 +304,14 @@ describe('Usage page', () => {
   it('Today and All change the period start; a period without records shows zeros', async () => {
     const api = await openUsage();
     api.usage.query.mockImplementation(
-      answer({ total: NO_USAGE, harness: ANSWERS.harness, model: [], day: [], provider: [] }),
+      answer({
+        total: NO_USAGE,
+        harness: [],
+        harnessOptions: ANSWERS.harness,
+        model: [],
+        day: [],
+        provider: ANSWERS.provider,
+      }),
     );
     const before = new Date();
     act(() => {
@@ -309,7 +323,14 @@ describe('Usage page', () => {
     );
     expect(screen.getByRole('button', { name: 'Today' }).getAttribute('aria-pressed')).toBe('true');
     expect(totals()).toEqual(['Requests 0', 'Errors 0', 'Prompt tokens 0', 'Completion tokens 0']);
+    expect(tableRows('Usage by Harness and model')).toEqual([]);
     expect(tableRows('Daily breakdown')).toEqual([]);
+    // The filters still offer every Harness and Provider that has records.
+    expect(
+      within(screen.getByRole('combobox', { name: 'Harness' }))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['All Harnesses', 'Code Reviewer', 'gone/old']);
 
     act(() => {
       fireEvent.click(screen.getByRole('button', { name: 'All' }));
@@ -421,6 +442,51 @@ describe('Usage page', () => {
     expect(api.usage.export).toHaveBeenCalledOnce();
     const [filter] = api.usage.export.mock.calls[0] ?? [];
     expect(filter).toEqual({ from: viewed?.from, to: null, providerId: 'ollama' });
+    expect(screen.getByText('Saved usage.csv')).not.toBeNull();
+  });
+
+  it('an export that fails stays shown through live refreshes until the next export', async () => {
+    const api = await openUsage();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    api.usage.export.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        messageKey: 'error.internal_error',
+        message: 'Internal error.',
+      },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+      await Promise.resolve();
+    });
+    await settle();
+    const failure =
+      'Something went wrong inside Harness Store. Try again, and restart the app if it keeps happening.';
+    expect(screen.getByRole('alert').textContent).toBe(failure);
+
+    // A Harness keeps writing records: the page loads again, successfully, and the failure stays.
+    const calls = api.usage.query.mock.calls.length;
+    act(() => {
+      api.emit('usage.recorded', { harnessId: 'acme/reviewer' });
+    });
+    await settle();
+    act(() => {
+      api.emit('usage.recorded', { harnessId: 'acme/reviewer' });
+      vi.advanceTimersByTime(2000);
+    });
+    await settle();
+    expect(api.usage.query.mock.calls.length).toBe(calls + 12);
+    expect(screen.getByRole('alert').textContent).toBe(failure);
+
+    // The next export that succeeds clears it.
+    api.usage.export.mockResolvedValue({ ok: true, data: { path: '/Users/me/usage.csv' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText('Saved usage.csv')).not.toBeNull();
   });
 

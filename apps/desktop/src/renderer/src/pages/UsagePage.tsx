@@ -62,7 +62,13 @@ export function UsagePage() {
   const [harnessId, setHarnessId] = useState('');
   const [providerId, setProviderId] = useState('');
   const [view, setView] = useState<UsageView | null>(null);
+  /** Why the last load failed; the next load that succeeds clears it. */
   const [error, setError] = useState<IpcError | null>(null);
+  /**
+   * Why the last Export CSV failed. Kept apart from `error` so a live refresh, which may load
+   * again within 2 seconds, never hides it: only the next export clears it.
+   */
+  const [exportError, setExportError] = useState<IpcError | null>(null);
   const [names, setNames] = useState<Names>({ installs: [], connections: [] });
   const [clearing, setClearing] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -147,10 +153,11 @@ export function UsagePage() {
 
   const exportCsv = async () => {
     setExporting(true);
+    setExportError(null);
     const result = await window.api.usage.export(filterNow());
     setExporting(false);
     if (!result.ok) {
-      setError(result.error);
+      setExportError(result.error);
       return;
     }
     if (result.data !== null) {
@@ -275,6 +282,7 @@ export function UsagePage() {
           {t('usage.clear')}
         </button>
       </div>
+      {exportError === null ? null : <ErrorMessage error={exportError} />}
       {error === null ? null : <ErrorMessage error={error} />}
       <div className="usage-table-frame">
         <table className="usage-table" aria-label={t('usage.byHarness')}>
