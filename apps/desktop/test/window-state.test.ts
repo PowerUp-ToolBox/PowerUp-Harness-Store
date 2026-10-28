@@ -42,6 +42,39 @@ describe('initialWindowBounds', () => {
     const tiny = { ...SAVED, width: 400, height: 300 };
     expect(initialWindowBounds(tiny, [PRIMARY])).toMatchObject({ width: 960, height: 640 });
   });
+
+  it('shrinks a window saved on a larger display to fit the work area it reopens on', () => {
+    const laptop: Rectangle = { x: 0, y: 0, width: 1440, height: 900 };
+    const huge = { x: 0, y: 0, width: 2400, height: 1400, isMaximized: false };
+    expect(initialWindowBounds(huge, [laptop])).toEqual({ ...laptop, isMaximized: false });
+  });
+
+  it('moves a window whose title bar would be above the work area back inside it', () => {
+    // A monitor arranged above the primary was removed; the centre is still on the primary.
+    const above = { ...SAVED, x: 200, y: -300, height: 800 };
+    expect(initialWindowBounds(above, [PRIMARY])).toEqual({ ...above, y: PRIMARY.y });
+  });
+
+  it('moves a window that overhangs the right and bottom edges back inside the work area', () => {
+    const overhang = { ...SAVED, x: 1300, y: 700 };
+    expect(initialWindowBounds(overhang, [PRIMARY])).toEqual({
+      ...overhang,
+      x: PRIMARY.x + PRIMARY.width - SAVED.width,
+      y: PRIMARY.y + PRIMARY.height - SAVED.height,
+    });
+  });
+
+  it('keeps the minimum size on a work area smaller than it, pinned to the top-left corner', () => {
+    const small: Rectangle = { x: 0, y: 0, width: 800, height: 600 };
+    const saved = { ...SAVED, x: 50, y: 50, width: 700, height: 500 };
+    expect(initialWindowBounds(saved, [small])).toEqual({
+      x: 0,
+      y: 0,
+      width: 960,
+      height: 640,
+      isMaximized: false,
+    });
+  });
 });
 
 describe('parseWindowState', () => {
