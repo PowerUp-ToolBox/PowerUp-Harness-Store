@@ -343,6 +343,20 @@ describe('an expiring session', () => {
     expect(count('POST /auth/v1/token?grant_type=refresh_token')).toBe(0);
   });
 
+  it('is refreshed on time by a local clock minutes behind the Store’s', async () => {
+    // This machine's clock is 3 minutes slow: Auth's absolute expires_at, on the Store's clock,
+    // would still look 3 minutes away here once the Store refuses the token.
+    const auth = createAuth({ now: () => new Date(clock.getTime() - 180_000) });
+    const signedIn = await auth.signIn();
+    changes.length = 0;
+    advance(3600 + 10);
+
+    await expect(auth.whoami()).resolves.toEqual(signedIn);
+    expect(count('POST /auth/v1/token?grant_type=refresh_token')).toBe(1);
+    expect(changes).toEqual([]);
+    expect(slot.read()).toBeDefined();
+  });
+
   it('a refused refresh signs out with session_expired', async () => {
     const auth = createAuth();
     await auth.signIn();
@@ -492,6 +506,63 @@ describe('calls that overlap', () => {
       refreshToken: rotated,
       identity: { displayName: 'Renamed' },
     });
+  });
+
+  it('a sign-in still waiting for its browser does not throw away a refresh’s rotated tokens', async () => {
+    // The first browser comes back; the second never does.
+    const answers: (null | undefined)[] = [undefined, null];
+    const auth: StoreAuth = createAuth({
+      openExternal: (url) =>
+        store.browser((callback) => auth.handleCallback(callback), answers.shift())(url),
+      signInTimeoutMs: 100,
+    });
+    const signedIn = await auth.signIn();
+    changes.length = 0;
+    advance(3600 - 30);
+
+    // A refresh is under way when a second sign-in (to switch accounts) starts...
+    const release = store.hold('POST /auth/v1/token?grant_type=refresh_token');
+    const token = auth.accessToken();
+    await vi.waitFor(() => {
+      expect(count('POST /auth/v1/token?grant_type=refresh_token')).toBe(1);
+    });
+    const switching = auth.signIn();
+    await vi.waitFor(() => {
+      expect(store.opened).toHaveLength(2);
+    });
+    release();
+
+    // ...so the rotated session is stored, since the old refresh token no longer works...
+    const refreshed = await token;
+    const rotated = storedSession();
+    expect(refreshed).toBe(rotated?.accessToken);
+    expect(store.isRefreshTokenValid(String(rotated?.refreshToken))).toBe(true);
+    // ...and still works once the browser never comes back and the old session is kept.
+    await expect(switching).rejects.toMatchObject({ code: 'sign_in_timeout' });
+    advance(3600);
+    await expect(auth.whoami()).resolves.toEqual(signedIn);
+    expect(count('POST /auth/v1/token?grant_type=refresh_token')).toBe(2);
+    expect(changes).toEqual([]);
+  });
+
+  it('a session expiring while a sign-in exchanges its code does not cancel the sign-in', async () => {
+    const auth = createAuth();
+    await auth.signIn();
+    store.revokeRefreshTokens();
+    advance(3600);
+    changes.length = 0;
+
+    const release = store.hold('POST /auth/v1/token?grant_type=pkce');
+    const signingIn = auth.signIn();
+    await vi.waitFor(() => {
+      expect(count('POST /auth/v1/token?grant_type=pkce')).toBe(2);
+    });
+    await expect(auth.whoami()).resolves.toEqual({ signedIn: false });
+    release();
+
+    await expect(signingIn).resolves.toMatchObject({ signedIn: true });
+    await expect(auth.whoami()).resolves.toMatchObject({ signedIn: true });
+    expect(changes.map((change) => change.reason)).toEqual(['session_expired', 'signed_in']);
   });
 
   it('a 401 for the token of an earlier sign-in leaves the current one alone', async () => {

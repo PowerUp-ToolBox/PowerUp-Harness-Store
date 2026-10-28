@@ -1,10 +1,10 @@
 import type { SafeStorage } from 'electron';
 
 /**
- * Encrypts Connection secrets (API keys) for the `secrets` table. The app uses Electron's
- * `safeStorage`, backed by the OS keychain ({@link createSafeStorageCipher}); tests pass a
- * reversible in-memory fake. There is no plaintext fallback: when {@link isAvailable} resolves
- * false, the Runtime refuses to store a key.
+ * Encrypts Connection secrets (API keys) and the Publisher's Store session for the `secrets`
+ * table. The app uses Electron's `safeStorage`, backed by the OS keychain
+ * ({@link createSafeStorageCipher}); tests pass a reversible in-memory fake. There is no plaintext
+ * fallback: when {@link isAvailable} resolves false, the Runtime refuses to store either.
  */
 export interface SecretCipher {
   /** Whether secrets can be encrypted on this machine right now. */

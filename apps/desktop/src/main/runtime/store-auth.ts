@@ -121,7 +121,7 @@ type Identity = Omit<Extract<AuthState, { signedIn: true }>, 'signedIn'>;
 interface StoredSession {
   readonly accessToken: string;
   readonly refreshToken: string;
-  /** When the access token expires, in Unix seconds. */
+  /** When the access token expires, in Unix seconds on this machine's clock. */
   readonly expiresAt: number;
   /** The Supabase user id, which is the `profiles.id`. */
   readonly userId: string;
@@ -149,11 +149,19 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
   /** The sign-in waiting for its callback, if any. */
   let pending: { finish(result: string | StoreAuthError): void } | null = null;
   /**
-   * Bumped by every sign-in, sign-out and expiry. A step that awaited something (a decrypt
-   * included) writes the session or answers from it only if it is unchanged, so a sign-out is
-   * never undone by a refresh, whoami or sign-in that was already under way.
+   * Bumped by every sign-in that stores its session, sign-out and expiry. A step that awaited
+   * something (a decrypt included) writes the session or answers from it only if it is unchanged,
+   * so a sign-out is never undone by a refresh or whoami that was already under way. A sign-in
+   * still waiting for its browser changes nothing: until it stores its own session, the stored
+   * one stays in use, and a refresh of it must keep its rotated tokens.
    */
   let generation = 0;
+  /**
+   * Bumped by every sign-in as it starts and by every sign-out, so a sign-in stores its session
+   * only if no newer sign-in or sign-out came meanwhile. An expiry of the stored session does not
+   * cancel a sign-in under way.
+   */
+  let signIns = 0;
   /**
    * Bumped by every write or deletion of the stored session, refreshes included, so a step that
    * only updates the stored copy never writes back a session a refresh has rotated meanwhile.
@@ -262,6 +270,18 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
     slot.clear();
   }
 
+  async function encrypt(session: StoredSession): Promise<Uint8Array> {
+    try {
+      return await cipher.encrypt(JSON.stringify(session));
+    } catch (cause) {
+      throw new StoreAuthError(
+        'encryption_unavailable',
+        'The session cannot be stored encrypted.',
+        { cause },
+      );
+    }
+  }
+
   /**
    * Encrypts and stores `session`, unless the sign-in state changed since `expected.generation`
    * or, when given, the stored session changed since `expected.revision`. Returns the revision it
@@ -271,16 +291,7 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
     session: StoredSession,
     expected: { readonly generation: number; readonly revision?: number },
   ): Promise<number | null> {
-    let ciphertext: Uint8Array;
-    try {
-      ciphertext = await cipher.encrypt(JSON.stringify(session));
-    } catch (cause) {
-      throw new StoreAuthError(
-        'encryption_unavailable',
-        'The session cannot be stored encrypted.',
-        { cause },
-      );
-    }
+    const ciphertext = await encrypt(session);
     if (generation !== expected.generation) return null;
     if (expected.revision !== undefined && revision !== expected.revision) return null;
     write(ciphertext);
@@ -398,8 +409,8 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
         );
       }
       cancelPending();
-      generation += 1;
-      const started = generation;
+      signIns += 1;
+      const attempt = signIns;
       // PKCE (RFC 7636): the code the browser brings back is worthless without this verifier,
       // which never leaves this process.
       const verifier = randomBytes(32).toString('base64url');
@@ -434,9 +445,14 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
       if (identity === null) {
         throw new StoreAuthError('sign_in_failed', 'The Store has no Publisher profile for it.');
       }
-      if ((await save({ ...tokens, identity }, { generation: started })) === null) {
+      const ciphertext = await encrypt({ ...tokens, identity });
+      if (signIns !== attempt) {
         throw new StoreAuthError('sign_in_cancelled', 'The sign-in was replaced.');
       }
+      // Only now is the session replaced: refreshes and whoami calls of the old one under way
+      // answer for this one instead.
+      generation += 1;
+      write(ciphertext);
       const state = signedIn(identity);
       onChange?.({ ...state, reason: 'signed_in' });
       return state;
@@ -444,6 +460,7 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
 
     async signOut() {
       cancelPending();
+      signIns += 1;
       generation += 1;
       const ciphertext = slot.read();
       if (ciphertext === undefined) return SIGNED_OUT;
@@ -552,7 +569,13 @@ function sameIdentity(a: Identity, b: Identity): boolean {
   );
 }
 
-/** The session of an Auth token answer (`grant_type=pkce` or `refresh_token`), else null. */
+/**
+ * The session of an Auth token answer (`grant_type=pkce` or `refresh_token`), else null. The
+ * expiry is `nowSeconds + expires_in`, on this machine's clock, rather than Auth's `expires_at`,
+ * which is on the Store's: with a local clock a few minutes slow, the token would otherwise still
+ * look fresh here after the Store had stopped accepting it, and the 401 would end a session whose
+ * refresh token still works. `expires_at` is used only when Auth sends no `expires_in`.
+ */
 function tokensFrom(body: unknown, nowSeconds: number): Omit<StoredSession, 'identity'> | null {
   if (!isRecord(body) || !isRecord(body.user)) return null;
   const { access_token: accessToken, refresh_token: refreshToken } = body;
@@ -561,10 +584,10 @@ function tokensFrom(body: unknown, nowSeconds: number): Omit<StoredSession, 'ide
   if (typeof accessToken !== 'string' || typeof refreshToken !== 'string') return null;
   if (typeof userId !== 'string') return null;
   const expiry =
-    typeof expiresAt === 'number'
-      ? expiresAt
-      : typeof expiresIn === 'number'
-        ? nowSeconds + expiresIn
+    typeof expiresIn === 'number'
+      ? nowSeconds + expiresIn
+      : typeof expiresAt === 'number'
+        ? expiresAt
         : null;
   if (expiry === null) return null;
   return { accessToken, refreshToken, expiresAt: expiry, userId };
