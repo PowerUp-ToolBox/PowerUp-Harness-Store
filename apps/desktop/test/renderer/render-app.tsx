@@ -21,6 +21,9 @@ import type {
   IpcEventName,
   IpcEvents,
   IpcResult,
+  LaunchRequest,
+  LaunchStarted,
+  LaunchStatus,
   LocalProvider,
   ModelInfo,
   ModelOverride,
@@ -162,7 +165,8 @@ export interface FakeApiOptions {
  * same for the Model Overrides `bindings.getForHarness` lists, while `bindings.resolveAll` answers
  * `not_implemented`; nobody is signed in to the Store, `auth.signIn` signs
  * in as `octo-cat` and `auth.signOut` signs out; nothing is installed, the folder picker is
- * cancelled, and inspecting or installing a folder answers `not_implemented`; a test changes
+ * cancelled, and inspecting or installing a folder answers `not_implemented`; nothing was
+ * launched, and launching answers `not_implemented`; a test changes
  * `app.status`, `diagnostics.get`, the `connectivity`, `connections`, `bindings` or `installs`
  * methods before rendering to say otherwise, and pushes events with `emit`.
  */
@@ -305,6 +309,14 @@ export function installFakeApi(
         notImplemented('installs.installFromFolder', path),
       ),
       list: vi.fn((): Promise<IpcResult<readonly InstalledHarness[]>> =>
+        Promise.resolve({ ok: true, data: [] }),
+      ),
+    },
+    launch: {
+      start: vi.fn((request: LaunchRequest): Promise<IpcResult<LaunchStarted>> =>
+        notImplemented('launch.start', request.harnessId),
+      ),
+      status: vi.fn((): Promise<IpcResult<readonly LaunchStatus[]>> =>
         Promise.resolve({ ok: true, data: [] }),
       ),
     },

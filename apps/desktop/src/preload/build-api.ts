@@ -1,8 +1,12 @@
 import {
+  HARNESS_WINDOW_METHODS,
+  isHarnessWindowEventName,
+  type HarnessWindowApi,
+} from '../shared/harness-ipc.js';
+import {
   IPC_METHODS,
   isIpcEventName,
   type DesktopApi,
-  type IpcEventName,
   type IpcRequest,
   type IpcResult,
 } from '../shared/ipc.js';
@@ -11,7 +15,7 @@ import {
 export type Invoke = (request: IpcRequest) => Promise<IpcResult<unknown>>;
 
 /** Listens on the event channel for one event name; returns the unsubscribe function. */
-export type Listen = (event: IpcEventName, listener: (payload: unknown) => void) => () => void;
+export type Listen = (event: string, listener: (payload: unknown) => void) => () => void;
 
 type MethodCall = (input?: unknown) => Promise<IpcResult<unknown>>;
 
@@ -21,16 +25,38 @@ type MethodCall = (input?: unknown) => Promise<IpcResult<unknown>>;
  * `ipcRenderer` in. Every level is frozen, so a renderer bug cannot swap a method out.
  */
 export function buildApi(invoke: Invoke, listen: Listen): DesktopApi {
+  return buildBridge(IPC_METHODS, isIpcEventName, invoke, listen) as unknown as DesktopApi;
+}
+
+/**
+ * Builds a Harness window's `window.harness` from {@link HARNESS_WINDOW_METHODS}, the same way;
+ * src/preload/harness.ts passes `ipcRenderer` on the Harness window's own channels.
+ */
+export function buildHarnessApi(invoke: Invoke, listen: Listen): HarnessWindowApi {
+  return buildBridge(
+    HARNESS_WINDOW_METHODS,
+    isHarnessWindowEventName,
+    invoke,
+    listen,
+  ) as unknown as HarnessWindowApi;
+}
+
+function buildBridge(
+  methods: readonly string[],
+  isEventName: (name: string) => boolean,
+  invoke: Invoke,
+  listen: Listen,
+): object {
   const domains: Record<string, Record<string, MethodCall>> = {};
-  for (const method of IPC_METHODS) {
+  for (const method of methods) {
     const [domain, verb] = method.split('.') as [string, string];
     domains[domain] ??= {};
     domains[domain][verb] = (input?: unknown) => invoke({ method, input });
   }
   const on = (event: string, listener: (payload: unknown) => void): (() => void) => {
-    if (!isIpcEventName(event)) throw new TypeError(`Unknown event: ${event}`);
+    if (!isEventName(event)) throw new TypeError(`Unknown event: ${event}`);
     return listen(event, listener);
   };
   for (const verbs of Object.values(domains)) Object.freeze(verbs);
-  return Object.freeze({ ...domains, on }) as unknown as DesktopApi;
+  return Object.freeze({ ...domains, on });
 }

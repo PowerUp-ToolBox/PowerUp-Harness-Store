@@ -228,6 +228,69 @@ export interface IpcMethods {
    * name.
    */
   'installs.list': { input: undefined; output: readonly InstalledHarness[] };
+  /**
+   * Launches an installed Harness (docs/tech/architecture.md §4) and answers as soon as its launch
+   * has begun; how it goes arrives as `launch.state` events. One instance per Harness: while it
+   * runs, the answer is `focused` and its window comes to the front instead (a launch that is
+   * stopping is left to stop). `not_installed`; `slot_unbound` when no model can fill its
+   * `default` Model Slot, and nothing starts; `not_implemented` for a web UI Kind (P0-05.3) or a
+   * binary runtime kind (P0-05.5).
+   */
+  'launch.start': { input: LaunchRequest; output: LaunchStarted };
+  /** The latest launch of every Harness launched since the app started. */
+  'launch.status': { input: undefined; output: readonly LaunchStatus[] };
+}
+
+/** Which installed Harness to launch. */
+export interface LaunchRequest {
+  readonly harnessId: string;
+}
+
+/** A launch that began (`started`), or the running one whose window was focused instead. */
+export interface LaunchStarted {
+  readonly outcome: 'started' | 'focused';
+  readonly launchId: string;
+}
+
+/**
+ * Where a launch is (P0-05 spec, launch state machine). A Harness never launched since the app
+ * started is idle and has no status. `preparing`: resolving its Entry and Data Directory, issuing
+ * its Gateway Token; `spawning`: its window is open and the process is being started;
+ * `waiting-ready`: a web Harness's process runs, its port does not answer yet (P0-05.3); `ready`:
+ * it runs; `stopping`: it was asked to stop (SIGTERM, then SIGKILL after 5 s); `stopped` and
+ * `failed`: it has ended, and its Gateway Token is revoked.
+ */
+export type LaunchState =
+  'preparing' | 'spawning' | 'waiting-ready' | 'ready' | 'stopping' | 'stopped' | 'failed';
+
+/**
+ * Why a launch failed: the process could not be started (`spawn_error`), never became ready
+ * (`ready_timeout`, web), exited on its own with a code other than 0 (`exit_nonzero`), the
+ * Harness does not run on this platform (`platform_unsupported`), or the User cancelled the
+ * Workspace picker of a Harness that requires one (`workspace_cancelled`).
+ */
+export type LaunchFailure =
+  'spawn_error' | 'ready_timeout' | 'exit_nonzero' | 'platform_unsupported' | 'workspace_cancelled';
+
+/** One launch of a Harness, as `launch.status` lists it and `launch.state` reports it. */
+export interface LaunchStatus {
+  readonly harnessId: string;
+  readonly launchId: string;
+  readonly state: LaunchState;
+  /** Present exactly when `state` is `failed`. */
+  readonly reason?: LaunchFailure;
+  /**
+   * How the process ended, once it has: its exit code, or 128 + the signal number for a process
+   * a signal ended (137 after SIGKILL). Absent before, and when it never started.
+   */
+  readonly exitCode?: number;
+  /** ISO-8601 UTC. */
+  readonly startedAt: string;
+}
+
+/** A route of the main window to show, such as `/models?harness=acme%2Fhello`. */
+export interface AppNavigate {
+  readonly path: string;
 }
 
 /** Where an installed Harness Package came from: the Store, or a local folder. */
@@ -640,6 +703,8 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'installs.inspectFolder': true,
   'installs.installFromFolder': true,
   'installs.list': true,
+  'launch.start': true,
+  'launch.status': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */
@@ -657,6 +722,13 @@ export interface IpcEvents {
   'auth.changed': AuthChanged;
   /** An installed Harness was installed, replaced or removed; lists read `installs.list` again. */
   'installs.changed': InstallsChanged;
+  /** A launch changed state; sent on every change, `launch.status` lists the latest ones. */
+  'launch.state': LaunchStatus;
+  /**
+   * Shows a route in the main window: a Harness window's model indicator opens the Models page
+   * at that Harness's card.
+   */
+  'app.navigate': AppNavigate;
   [event: `progress:${string}`]: unknown;
 }
 
@@ -682,6 +754,8 @@ export function isIpcEventName(name: string): name is IpcEventName {
     name === 'connectivity.changed' ||
     name === 'auth.changed' ||
     name === 'installs.changed' ||
+    name === 'launch.state' ||
+    name === 'app.navigate' ||
     /^progress:.+$/.test(name)
   );
 }
@@ -689,9 +763,24 @@ export function isIpcEventName(name: string): name is IpcEventName {
 type Domain<M extends string> = M extends `${infer D}.${string}` ? D : never;
 type Verb<M extends string, D extends string> = M extends `${D}.${infer V}` ? V : never;
 
-type MethodFunction<M extends IpcMethodName> = [IpcInput<M>] extends [undefined]
-  ? () => Promise<IpcResult<IpcOutput<M>>>
-  : (input: IpcInput<M>) => Promise<IpcResult<IpcOutput<M>>>;
+type MethodFunction<T> = T extends { input: infer I; output: infer O }
+  ? [I] extends [undefined]
+    ? () => Promise<IpcResult<O>>
+    : (input: I) => Promise<IpcResult<O>>
+  : never;
+
+/**
+ * The calls of a bridge built from a method table (`'<domain>.<verb>'` → input and output):
+ * `bridge.<domain>.<verb>(input)`. `window.api` is the one over {@link IpcMethods}; a Harness
+ * window's `window.harness` (./harness-ipc.ts) is another.
+ */
+export type BridgeCalls<Methods> = {
+  readonly [D in Domain<keyof Methods & string>]: {
+    readonly [V in Verb<keyof Methods & string, D>]: MethodFunction<
+      Methods[Extract<`${D}.${V}`, keyof Methods>]
+    >;
+  };
+};
 
 /** Subscribes to one event; returns the function that unsubscribes. */
 export type IpcSubscribe = <E extends IpcEventName>(
@@ -700,8 +789,4 @@ export type IpcSubscribe = <E extends IpcEventName>(
 ) => () => void;
 
 /** The only object the renderer sees: `window.api.<domain>.<verb>(input)` plus `on`. */
-export type DesktopApi = {
-  readonly [D in Domain<IpcMethodName>]: {
-    readonly [V in Verb<IpcMethodName, D>]: MethodFunction<Extract<`${D}.${V}`, IpcMethodName>>;
-  };
-} & { readonly on: IpcSubscribe };
+export type DesktopApi = BridgeCalls<IpcMethods> & { readonly on: IpcSubscribe };

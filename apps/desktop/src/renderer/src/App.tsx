@@ -1,4 +1,5 @@
-import { Navigate, Route, Routes } from 'react-router';
+import { useEffect } from 'react';
+import { Navigate, Route, Routes, useNavigate } from 'react-router';
 import { StoreGate } from './connectivity/StoreGate.js';
 import { useSettings } from './i18n/I18nProvider.js';
 import { HarnessDetailPage } from './pages/HarnessDetailPage.js';
@@ -22,7 +23,16 @@ import { Shell } from './shell/Shell.js';
  */
 export function App() {
   const { settings } = useSettings();
+  const navigate = useNavigate();
   const home = settings.onboardingDone ? '/library' : '/onboarding';
+  // A Harness window's model indicator shows the Models page at its Harness's card.
+  useEffect(
+    () =>
+      window.api.on('app.navigate', ({ path }) => {
+        void navigate(path);
+      }),
+    [navigate],
+  );
   return (
     <Routes>
       <Route path="/onboarding" element={<OnboardingPage />} />

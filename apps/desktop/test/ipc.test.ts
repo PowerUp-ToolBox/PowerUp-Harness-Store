@@ -56,6 +56,19 @@ const fakeServices: Services = {
       }),
   },
   installs: { ...createInstallsStub(), chooseFolder: () => Promise.resolve('/Users/me/hello') },
+  launch: {
+    start: (harnessId) => ok({ outcome: 'started', launchId: `launch-of-${harnessId}` }),
+    status: () => [
+      {
+        harnessId: 'acme/hello',
+        launchId: 'launch-1',
+        state: 'failed',
+        reason: 'exit_nonzero',
+        exitCode: 3,
+        startedAt: '2026-10-28T09:00:00.000Z',
+      },
+    ],
+  },
 };
 const en = translatorFor('en');
 
@@ -142,6 +155,7 @@ describe('IPC handlers against a fake service container', () => {
     'auth.whoami',
     'installs.chooseFolder',
     'installs.list',
+    'launch.status',
   ])('%s rejects any input as invalid_input', async (method) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input: {} })).resolves.toMatchObject({
@@ -228,11 +242,33 @@ describe('IPC handlers against a fake service container', () => {
     ['installs.inspectFolder', '/folder\u0000'],
     ['installs.installFromFolder', { path: '/folder' }],
     ['installs.installFromFolder', ''],
+    ['launch.start', undefined],
+    ['launch.start', 'acme/hello'],
+    ['launch.start', { harnessId: '' }],
+    ['launch.start', { harnessId: 'acme/hello', workspace: '/Users/me' }],
   ])('%s rejects %j as invalid_input', async (method, input) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
       ok: false,
       error: { code: 'invalid_input', params: { method } },
+    });
+  });
+
+  it('launch.start starts the Harness named and answers the launch', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'launch.start', input: { harnessId: 'acme/hello' } }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { outcome: 'started', launchId: 'launch-of-acme/hello' },
+    });
+  });
+
+  it('launch.status lists the latest launches', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'launch.status' })).resolves.toMatchObject({
+      ok: true,
+      data: [{ harnessId: 'acme/hello', state: 'failed', reason: 'exit_nonzero', exitCode: 3 }],
     });
   });
 

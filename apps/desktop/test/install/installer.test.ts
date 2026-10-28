@@ -72,6 +72,9 @@ function storeThatCannotWrite(): InstallStore {
     put: () => {
       throw new Error('database is locked');
     },
+    markLaunched: (harnessId, at) => {
+      store.markLaunched(harnessId, at);
+    },
   };
 }
 

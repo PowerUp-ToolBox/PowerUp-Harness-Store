@@ -13,6 +13,7 @@ describe('buildApi (window.api)', () => {
       'connectivity',
       'diagnostics',
       'installs',
+      'launch',
       'on',
       'providers',
       'settings',
@@ -45,6 +46,7 @@ describe('buildApi (window.api)', () => {
       'installFromFolder',
       'list',
     ]);
+    expect(Object.keys(api.launch)).toEqual(['start', 'status']);
     expect(Object.keys(api.providers)).toEqual(['list']);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
     expect(Object.isFrozen(api)).toBe(true);

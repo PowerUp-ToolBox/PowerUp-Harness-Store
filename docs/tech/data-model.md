@@ -137,7 +137,7 @@ Created by a migration. Paths are relative to their bucket (no bucket prefix in 
 | `slot_bindings` | Slot Bindings | `scope` (`global` or `harness:<id>`), `slot`, `provider_id` (the Connection id, e.g. `openai-compatible:vllm`; no foreign key, removing a Connection deletes its rows in the same transaction), `model`; PK (`scope`, `slot`) |
 | `usage_records` | Usage Records | as defined in gateway-protocol §7; index on (`harness_id`, `timestamp`) |
 | `settings` | key/value | `locale`, `update_check_interval`, `store_base_url`, `onboarding_done`, `window_state` (main process only) |
-| `launches` | audit of launches | `launch_id` PK, `harness_id`, `version`, `started_at`, `ended_at`, `exit_code`, `token_revoked_at`; index on (`harness_id`, `started_at`) |
+| `launches` | audit of launches | `launch_id` PK, `harness_id`, `version`, `started_at`, `ended_at`, `exit_code` (128 + the signal number for a process a signal ended; NULL when unknown), `token_revoked_at`; index on (`harness_id`, `started_at`). A row is written when the launch's Gateway Token is issued; rows a crash of the app left open are closed at the next start |
 
 Global Slot Bindings for `default` are the User's Default Model. Rows with scope `harness:<id>` are Model Overrides.
 
@@ -145,6 +145,7 @@ Install layout on disk (app data root):
 ```
 harnesses/<publisher>/<slug>/<version>/   unpacked package (read-only intent)
 data/<publisher>/<slug>/                  Data Directory (survives updates, deleted on uninstall)
+logs/<publisher>/<slug>/<launchId>.log    launch logs, the 20 newest per Harness (kept on uninstall)
 downloads/                                temp
 harness-store.sqlite
 ```

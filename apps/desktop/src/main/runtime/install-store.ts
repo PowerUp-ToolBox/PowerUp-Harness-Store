@@ -34,6 +34,8 @@ export interface InstallStore {
    * Harness was last launched and its last Workspace, and clears `available_version`.
    */
   put(install: NewInstall): void;
+  /** Records when the Harness was last launched (ISO-8601 UTC); nothing for one not installed. */
+  markLaunched(harnessId: string, at: string): void;
 }
 
 interface SqlInstallRow {
@@ -86,6 +88,9 @@ export function createInstallStore(db: DatabaseSync): InstallStore {
        consented_permissions = excluded.consented_permissions, source = excluded.source,
        available_version = NULL`,
   );
+  const updateLaunched = db.prepare(
+    'UPDATE installs SET last_launched_at = ? WHERE harness_id = ?',
+  );
   return {
     all: () => (selectAll.all() as unknown as SqlInstallRow[]).map(fromSql),
     get(harnessId) {
@@ -103,6 +108,9 @@ export function createInstallStore(db: DatabaseSync): InstallStore {
         JSON.stringify(install.consentedPermissions),
         install.source,
       );
+    },
+    markLaunched(harnessId, at) {
+      updateLaunched.run(at, harnessId);
     },
   };
 }

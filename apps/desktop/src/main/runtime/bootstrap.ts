@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { createGateway, type Gateway, type GatewayOptions } from '@harness-store/gateway';
 import type { IpcEventName, IpcEvents, StartupStage, StartupStatus } from '../../shared/ipc.js';
-import { createBindingsService, createBindingsStub } from './bindings.js';
+import { createBindingsService, createBindingsStub, resolveHarnessSlot } from './bindings.js';
 import { createConnectionStore, type ConnectionStore } from './connection-store.js';
 import {
   createConnectionsService,
@@ -21,10 +21,12 @@ import {
 } from './connectivity.js';
 import { DATABASE_FILE_NAME, openDatabase } from './database.js';
 import { createGatewayHost } from './gateway-host.js';
-import { platformOf } from './harness-paths.js';
+import { harnessPaths, platformOf } from './harness-paths.js';
 import { createInstallStore, type InstallStore } from './install-store.js';
 import { createInstaller, createInstallsStub, type InstallsService } from './installer.js';
+import { createLaunchStore, type LaunchStore } from './launch-store.js';
 import { createLocalDetector, type LocalProbeTarget } from './local-detection.js';
+import { spawnNodePty, type PtySpawner } from './pty.js';
 import type { SecretCipher } from './secret-cipher.js';
 import type { Services } from './services.js';
 import {
@@ -39,6 +41,13 @@ import {
   type SettingsStore,
 } from './settings-store.js';
 import { createStoreAuth, type StoreAuth, type StoreFetch } from './store-auth.js';
+import {
+  createSupervisor,
+  createSupervisorStub,
+  type HarnessWindows,
+  type NodeCommand,
+  type Supervisor,
+} from './supervisor.js';
 import { createUsageRecordStore, type UsageRecordStore } from './usage-records.js';
 import { parseWindowState, type WindowState } from './window-state.js';
 
@@ -98,6 +107,25 @@ export interface RuntimeOptions {
   readonly platform?: string;
   /** Pushes an event to the main window; dropped while there is none. */
   readonly emit?: <E extends IpcEventName>(event: E, payload: IpcEvents[E]) => void;
+  /**
+   * Opens and drives the Harness windows (src/main/harness-windows.ts); tests pass a fake. Without
+   * it nothing can be launched: `launch.start` answers `not_implemented`.
+   */
+  readonly harnessWindows?: HarnessWindows;
+  /** Opens a file or folder with the OS (Electron's `shell.openPath`): a launch's log. */
+  readonly openPath?: (path: string) => Promise<void>;
+  /**
+   * How a Node Harness is run. Default: this process's executable with `ELECTRON_RUN_AS_NODE=1`,
+   * which is Electron acting as Node in the app, and Node itself under plain Node.
+   */
+  readonly nodeCommand?: NodeCommand;
+  /** Starts a terminal Harness in a pty. Default: node-pty. */
+  readonly spawnPty?: PtySpawner;
+  /**
+   * The environment a Harness inherits, before the launch contract strips and sets variables.
+   * Default: this process's.
+   */
+  readonly harnessEnvironment?: () => Readonly<Record<string, string | undefined>>;
   /** Creates the Model Gateway; tests wrap the real one to make `listen` fail. */
   readonly createGateway?: (options: GatewayOptions) => Gateway;
   /**
@@ -119,6 +147,11 @@ export interface Runtime {
    * their access token from it.
    */
   readonly auth: StoreAuth;
+  /**
+   * The Process Supervisor: the Electron entry point routes each Harness window's calls to its
+   * launch (`window`).
+   */
+  readonly supervisor: Supervisor;
   /** The main window's geometry, kept in the `window_state` setting. */
   readonly windowState: {
     read(): WindowState | null;
@@ -126,9 +159,9 @@ export interface Runtime {
     save(state: WindowState): void;
   };
   /**
-   * Stops the Store connectivity checks and the Model Gateway (it stops listening and hands over
-   * its last Usage Records), then closes the database. Idempotent: later calls return the first
-   * call's promise.
+   * Stops every running Harness (the shutdown sequence, at most 10 s in all), the Store
+   * connectivity checks and the Model Gateway (it stops listening and hands over its last Usage
+   * Records), then closes the database. Idempotent: later calls return the first call's promise.
    */
   shutdown(): Promise<void>;
 }
@@ -164,6 +197,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     connections: ConnectionStore;
     session: SessionSlot;
     installs: InstallStore;
+    launches: LaunchStore;
   } | null = null;
   try {
     mkdirSync(options.dataDir, { recursive: true });
@@ -174,7 +208,10 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       connections: createConnectionStore(db),
       session: createSqliteSessionSlot(db),
       installs: createInstallStore(db),
+      launches: createLaunchStore(db),
     };
+    // Launches the last run left open ended with it (the app crashed or was killed).
+    sqlite.launches.closeOpen((options.now?.() ?? new Date()).toISOString());
   } catch (error) {
     db?.close();
     db = null;
@@ -184,6 +221,8 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   let gateway: Gateway | null = null;
   /** The Model Gateway's port while it listens; null before, after a failed start and on shutdown. */
   let gatewayPort: number | null = null;
+  /** Its `HARNESS_GATEWAY_URL` once it listens. */
+  let gatewayUrl: string | null = null;
   if (sqlite !== null) {
     const { usageRecords, installs } = sqlite;
     // Connections, Slot Bindings (Default Models and Model Overrides) and the installed
@@ -200,13 +239,17 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       },
     });
     try {
-      gatewayPort = (await gateway.listen('127.0.0.1', 0)).port;
+      const listening = await gateway.listen('127.0.0.1', 0);
+      gatewayPort = listening.port;
+      gatewayUrl = listening.url;
     } catch (error) {
       status = failed('gateway', error);
     }
   }
 
   const store = sqlite?.settings ?? createMemorySettingsStore();
+  const settings = createSettingsService(store, options.osLocale);
+  const platform = platformOf(options.platform ?? `${process.platform}-${process.arch}`);
   const connectionStore = sqlite?.connections;
   const connections: ConnectionsService =
     connectionStore === undefined
@@ -223,14 +266,51 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           }),
           ...(options.now === undefined ? {} : { now: options.now }),
         });
+  const supervisor: Supervisor =
+    sqlite === null ||
+    gateway === null ||
+    gatewayUrl === null ||
+    options.harnessWindows === undefined
+      ? createSupervisorStub()
+      : createSupervisor({
+          installs: sqlite.installs,
+          launches: sqlite.launches,
+          paths: harnessPaths(options.dataDir),
+          platform,
+          gatewayUrl,
+          tokens: gateway,
+          locale: () => settings.get().resolvedLocale,
+          defaultSlotBound: (harnessId) => {
+            const install = sqlite.installs.get(harnessId);
+            return (
+              install !== undefined &&
+              resolveHarnessSlot(sqlite.connections, install.manifest, harnessId, 'default') !==
+                null
+            );
+          },
+          windows: options.harnessWindows,
+          spawnPty: options.spawnPty ?? spawnNodePty,
+          nodeCommand: options.nodeCommand ?? {
+            path: process.execPath,
+            env: { ELECTRON_RUN_AS_NODE: '1' },
+          },
+          ...(options.harnessEnvironment === undefined
+            ? {}
+            : { environment: options.harnessEnvironment }),
+          emit: (status) => options.emit?.('launch.state', status),
+          ...(options.openPath === undefined ? {} : { openPath: options.openPath }),
+          ...(options.now === undefined ? {} : { now: options.now }),
+          logError,
+        });
   const installs: InstallsService =
     sqlite === null
       ? createInstallsStub()
       : createInstaller({
           store: sqlite.installs,
           root: options.dataDir,
-          platform: platformOf(options.platform ?? `${process.platform}-${process.arch}`),
+          platform,
           pickFolder: options.pickFolder ?? (() => Promise.resolve(null)),
+          isRunning: (harnessId) => supervisor.isRunning(harnessId),
           onChanged: (harnessId) => options.emit?.('installs.changed', { harnessId }),
           logError,
           ...(options.now === undefined ? {} : { now: options.now }),
@@ -263,9 +343,10 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     status: startupStatus,
     connectivity,
     auth,
+    supervisor,
     services: {
       app: { version: options.version, status: () => startupStatus, quit: options.quit },
-      settings: createSettingsService(store, options.osLocale),
+      settings,
       diagnostics: {
         get: () => ({
           version: options.version,
@@ -282,6 +363,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           : createBindingsService(sqlite.connections, sqlite.installs),
       auth,
       installs,
+      launch: supervisor,
     },
     windowState: {
       read() {
@@ -300,6 +382,9 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     shutdown() {
       stopped ??= (async () => {
         stopping = true;
+        // Harnesses first: their tokens are revoked and their launches recorded while the Gateway
+        // and the database are still there.
+        await supervisor.stopAll();
         connectivity.stop();
         gatewayPort = null;
         try {

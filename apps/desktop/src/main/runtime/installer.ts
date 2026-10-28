@@ -495,7 +495,7 @@ async function exists(path: string): Promise<boolean> {
 }
 
 /** The installed `assets/icon.png` as a `data:` URL; null when it cannot be read. */
-async function readIcon(installPath: string): Promise<string | null> {
+export async function readIcon(installPath: string): Promise<string | null> {
   try {
     const bytes = await readFile(join(installPath, 'assets', 'icon.png'));
     return `data:image/png;base64,${bytes.toString('base64')}`;

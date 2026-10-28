@@ -27,16 +27,21 @@ export function entryFor(manifest: Manifest, platform: Platform | null): string 
 /**
  * Where the Runtime keeps Harnesses under the app data root (data-model.md, install layout):
  * the unpacked Harness Package in `harnesses/<publisher>/<slug>/<version>/`, the Data Directory
- * in `data/<publisher>/<slug>/` (it survives updates) and temporary files in `downloads/`.
+ * in `data/<publisher>/<slug>/` (it survives updates), the launch logs in
+ * `logs/<publisher>/<slug>/` (outside the Data Directory, so they outlive an uninstall) and
+ * temporary files in `downloads/`.
  */
 export interface HarnessPaths {
   readonly harnesses: string;
   readonly data: string;
+  readonly logs: string;
   readonly downloads: string;
   /** The folder a version of a Harness is installed in. */
   installPath(harnessId: string, version: string): string;
   /** The Harness's Data Directory. */
   dataDir(harnessId: string): string;
+  /** The folder of the Harness's launch logs, one `<launchId>.log` per launch. */
+  logsDir(harnessId: string): string;
 }
 
 /**
@@ -47,6 +52,7 @@ export interface HarnessPaths {
 export function harnessPaths(root: string): HarnessPaths {
   const harnesses = join(root, 'harnesses');
   const data = join(root, 'data');
+  const logs = join(root, 'logs');
   const under = (base: string, ...segments: string[]) => {
     const path = join(base, ...segments);
     if (!isInside(base, path) || segments.some((segment) => segment.includes('..'))) {
@@ -57,9 +63,11 @@ export function harnessPaths(root: string): HarnessPaths {
   return {
     harnesses,
     data,
+    logs,
     downloads: join(root, 'downloads'),
     installPath: (harnessId, version) => under(harnesses, ...harnessId.split('/'), version),
     dataDir: (harnessId) => under(data, ...harnessId.split('/')),
+    logsDir: (harnessId) => under(logs, ...harnessId.split('/')),
   };
 }
 

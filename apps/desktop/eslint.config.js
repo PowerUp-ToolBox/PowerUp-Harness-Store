@@ -12,8 +12,9 @@ export default defineConfig(
   harnessStore,
   {
     // The Runtime's services and IPC handlers, and the code shared with the renderer, never import
-    // Electron (types aside), so they are unit-tested under plain Node. Only src/main/index.ts and
-    // src/preload/index.ts touch Electron.
+    // Electron (types aside), so they are unit-tested under plain Node. Only src/main/index.ts,
+    // src/main/harness-windows.ts (the Harness windows) and the preloads (src/preload/index.ts,
+    // src/preload/harness.ts) touch Electron.
     name: 'harness-store/desktop-electron-free',
     files: ['src/main/runtime/**', 'src/shared/**', 'src/preload/build-api.ts', 'src/renderer/**'],
     rules: {
@@ -24,7 +25,8 @@ export default defineConfig(
             {
               name: 'electron',
               allowTypeImports: true,
-              message: 'Only src/main/index.ts and src/preload/index.ts may use Electron.',
+              message:
+                'Only src/main/index.ts, src/main/harness-windows.ts and the preloads may use Electron.',
             },
           ],
         },

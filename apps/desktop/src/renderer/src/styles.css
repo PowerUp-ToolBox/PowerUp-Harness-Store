@@ -1511,6 +1511,96 @@ input[aria-invalid='true'] {
   text-decoration: none;
 }
 
+/* A launched Harness's state on its card (P0-05.2): the secondary "Show window". */
+.harness-card-actions .button-link {
+  padding: 0 4px;
+}
+
+/* A Harness window's own page (P0-05.2): the thin top bar, then the embedded terminal. */
+.harness-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.harness-bar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+}
+
+.harness-bar-icon {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.harness-bar-icon.monogram {
+  font-size: 11px;
+}
+
+.harness-bar-name {
+  font-weight: 600;
+}
+
+.harness-bar-models {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.model-chip:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+.harness-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.harness-bar-status {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.harness-bar-status.failed {
+  color: var(--color-error);
+}
+
+.harness-bar-error {
+  padding: 0 10px;
+}
+
+.harness-terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0 0 6px;
+  background: #1b1c1f;
+}
+
 /* Publish: "Install this folder locally" (P0-05.1). */
 .install-folder {
   display: flex;

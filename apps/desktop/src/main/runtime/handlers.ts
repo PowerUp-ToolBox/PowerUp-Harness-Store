@@ -1,5 +1,11 @@
 import { isAbsolute } from 'node:path';
-import type { AuthState, IpcMethodName, IpcOutput, IpcResult } from '../../shared/ipc.js';
+import type {
+  AuthState,
+  IpcMethodName,
+  IpcOutput,
+  IpcResult,
+  LaunchRequest,
+} from '../../shared/ipc.js';
 import {
   isHarnessIdInput,
   parseGlobalBindingChange,
@@ -165,7 +171,24 @@ export function createHandlers(services: Services): IpcHandlers {
       if (input !== undefined) return fail('invalid_input', { method: 'installs.list' });
       return ok(await services.installs.list());
     },
+    'launch.start': (input) => {
+      const request = parseLaunchRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'launch.start' });
+      return services.launch.start(request.harnessId);
+    },
+    'launch.status': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'launch.status' });
+      return ok(services.launch.status());
+    },
   };
+}
+
+/** `{ harnessId }`, nothing else. */
+function parseLaunchRequest(input: unknown): LaunchRequest | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { harnessId, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0 || !isHarnessIdInput(harnessId)) return null;
+  return { harnessId };
 }
 
 /** An absolute path of this OS, as the folder picker returns it. */

@@ -1,7 +1,9 @@
 # Packaging for the current OS: `pnpm --filter @harness-store/desktop package`. It is a manual step;
 # the root `pnpm build` (and CI) only compiles with electron-vite. Main and preload bundle all their
-# dependencies (electron.vite.config.ts), so the app ships out/ and package.json, no node_modules.
-# Code signing and auto-update are deferred (P0-04 Out of Scope).
+# dependencies (electron.vite.config.ts) but node-pty, the one runtime `dependency`: a native module
+# for terminal Harnesses, shipped from node_modules and kept outside the asar archive, as native
+# code and its macOS spawn-helper cannot run from inside it. Its N-API prebuilds need no rebuild
+# for Electron. Code signing and auto-update are deferred (P0-04 Out of Scope).
 appId: io.github.powerup-toolbox.harness-store
 productName: Harness Store
 directories:
@@ -9,6 +11,9 @@ directories:
 files:
   - out/**
   - package.json
+  - node_modules/node-pty/**
+asarUnpack:
+  - node_modules/node-pty/**
 npmRebuild: false
 mac:
   target: dmg
