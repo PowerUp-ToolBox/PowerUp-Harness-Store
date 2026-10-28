@@ -1,4 +1,6 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -8,24 +10,28 @@ import { startRuntime, type Runtime } from '../../src/main/runtime/bootstrap.js'
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createHarnessWindowHandlers } from '../../src/main/runtime/harness-window-handlers.js';
+import { spawnPiped, type PipedSpawnOptions } from '../../src/main/runtime/piped-process.js';
 import { spawnNodePty } from '../../src/main/runtime/pty.js';
-import type { HarnessWindows } from '../../src/main/runtime/supervisor.js';
+import type { HarnessWindows, WebWindowSpec } from '../../src/main/runtime/supervisor.js';
 import type { HarnessWindowEventName } from '../../src/shared/harness-ipc.js';
 import type { IpcEventName, IpcEvents, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
 
 /**
- * Ticket P0-06.2, the reference Harnesses end to end through the Supervisor seam: the real Runtime
- * with its SQLite file in a temp app data root and the real Model Gateway, its `default` Slot bound
- * (as the Default Model) to the `ollama` Connection pointing at the fake Provider (`model-a`, which
- * echoes the last user message word by word). Each example's built Harness folder, out/, is
- * installed through the installer and run for real in a pty (node-pty, under this test's Node);
- * the test types into it as the Harness window's terminal would. Only the windows are faked.
+ * Tickets P0-06.2 and P0-06.3, the reference Harnesses end to end through the Supervisor seam: the
+ * real Runtime with its SQLite file in a temp app data root and the real Model Gateway, its
+ * `default` Slot bound (as the Default Model) to the `ollama` Connection pointing at the fake
+ * Provider (`model-a`, which echoes the last user message word by word). Each example's built
+ * Harness folder, out/, is installed through the installer and run for real: hello-term in a pty
+ * (node-pty, under this test's Node), typed into as the Harness window's terminal would; hello-web
+ * with its output piped, its page fetched from the URL the Runtime shows in its window and driven
+ * in jsdom, whose `fetch` reaches the Harness's server for real. Only the windows are faked.
  *
  * The examples are built by the root `pnpm build`; without out/ these tests fail, never skip.
  */
 
 const HELLO_TERM = join(import.meta.dirname, '../../../../examples/hello-term/out');
+const HELLO_WEB = join(import.meta.dirname, '../../../../examples/hello-web/out');
 const PLATFORM = `${process.platform}-${process.arch}`;
 const MAIN_WINDOW = {};
 const SIZE = { cols: 100, rows: 30 };
@@ -36,22 +42,33 @@ let fake: FakeProvider;
 let runtime: Runtime | undefined;
 let windows: ReturnType<typeof createFakeWindows>;
 let states: LaunchStatus[];
+/** What the Runtime started each piped (web) Harness process with. */
+let spawned: PipedSpawnOptions[];
 
 beforeAll(() => {
-  if (!existsSync(join(HELLO_TERM, 'manifest.json'))) {
-    throw new Error(
-      'examples/hello-term/out/ is not built: run `pnpm build` at the repository root first.',
-    );
+  for (const [name, out] of [
+    ['hello-term', HELLO_TERM],
+    ['hello-web', HELLO_WEB],
+  ] as const) {
+    if (!existsSync(join(out, 'manifest.json'))) {
+      throw new Error(
+        `examples/${name}/out/ is not built: run \`pnpm build\` at the repository root first.`,
+      );
+    }
   }
 });
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'harness-store-reference-'));
   userData = join(root, 'userData');
-  fake = await startFakeProvider({ aliases: { 'model-a': 'fake/echo' } });
+  fake = await startFakeProvider({
+    aliases: { 'model-a': 'fake/echo', 'model-stall': 'fake/stall' },
+  });
   states = [];
+  spawned = [];
 });
 afterEach(async () => {
+  for (const page of pages.splice(0)) page.close();
   await runtime?.shutdown();
   runtime = undefined;
   await fake.close();
@@ -76,6 +93,10 @@ async function start(locale: 'en' | 'zh-CN'): Promise<Runtime> {
     },
     harnessWindows: windows,
     spawnPty: spawnNodePty,
+    spawnProcess: (options) => {
+      spawned.push(options);
+      return spawnPiped(options);
+    },
     // Credentials of the User's shell, which the launch contract keeps from the Harness.
     harnessEnvironment: () => ({ ...process.env, OPENAI_API_KEY: 'sk-parent-openai' }),
     openPath: () => Promise.resolve(true),
@@ -122,22 +143,38 @@ function windowCall(launchId: string, method: string, input?: unknown) {
   })(launchId, { method, input });
 }
 
-/** Harness windows without Electron: a terminal window's page reports itself ready at once. */
+/**
+ * Harness windows without Electron: a terminal window's page reports itself ready at once; a web
+ * window records the URL of the Harness's page the Runtime shows in it, and whether that page
+ * answered right then. `close` closes a web window as Electron does (its `closed` event).
+ */
 function createFakeWindows() {
   const open = new Set<string>();
   const sent: { launchId: string; event: HarnessWindowEventName; payload: unknown }[] = [];
+  const webSpecs: WebWindowSpec[] = [];
+  const onWebClosed = new Map<string, () => void>();
+  const shown = new Map<string, { url: string; statusWhenShown: Promise<number> }>();
   const fakes = {
     open,
     sent,
+    webSpecs,
+    shown,
     openTerminal(spec) {
       open.add(spec.launchId);
       queueMicrotask(() => void windowCall(spec.launchId, 'terminal.ready', SIZE));
     },
-    // hello-web arrives in P0-06.3.
-    openWeb() {
-      throw new Error('No web window in these tests');
+    openWeb(spec, onClosed) {
+      open.add(spec.launchId);
+      webSpecs.push(spec);
+      onWebClosed.set(spec.launchId, onClosed);
     },
-    showWeb: () => undefined,
+    showWeb(launchId, url) {
+      const statusWhenShown = fetch(url).then(
+        (response) => response.status,
+        () => 0,
+      );
+      shown.set(launchId, { url, statusWhenShown });
+    },
     hideWeb: () => undefined,
     reloadWeb: () => undefined,
     layoutWeb: () => undefined,
@@ -147,6 +184,9 @@ function createFakeWindows() {
     focus: (launchId) => open.has(launchId),
     close(launchId) {
       open.delete(launchId);
+      const onClosed = onWebClosed.get(launchId);
+      onWebClosed.delete(launchId);
+      onClosed?.();
     },
   } satisfies HarnessWindows & Record<string, unknown>;
   return fakes;
@@ -358,5 +398,360 @@ describe('hello-term (examples/hello-term/out)', () => {
     await expect(waitForEnd(launchId)).resolves.toMatchObject({ state: 'stopped', exitCode: 0 });
     // The refused call never reached a Provider, so it has no Usage Record.
     expect(rows('usage_records')).toMatchObject([{ slot: 'default', status: 'ok' }]);
+  });
+});
+
+/** jsdom, typed only as far as these tests drive the page with it (it ships no types). */
+interface PageElement {
+  readonly textContent: string | null;
+  readonly hidden: boolean;
+  value: string;
+  getAttribute(name: string): string | null;
+  requestSubmit(): void;
+  dispatchEvent(event: object): boolean;
+}
+interface PageWindow {
+  readonly document: {
+    readonly documentElement: { readonly lang: string };
+    getElementById(id: string): PageElement | null;
+  };
+  readonly Event: new (type: string) => object;
+  fetch: typeof fetch;
+  TextDecoder: typeof TextDecoder;
+  close(): void;
+}
+const { JSDOM } = createRequire(import.meta.url)('jsdom') as {
+  JSDOM: new (
+    html: string,
+    options: { url: string; runScripts: 'dangerously'; beforeParse: (window: PageWindow) => void },
+  ) => { readonly window: PageWindow };
+};
+
+/** The pages opened in jsdom, closed after each test. */
+const pages: PageWindow[] = [];
+
+/** The URL of the page the Runtime showed in `launchId`'s window. */
+function shownUrl(launchId: string): URL {
+  const shown = windows.shown.get(launchId);
+  if (shown === undefined) throw new Error('No page was shown');
+  return new URL(shown.url);
+}
+
+/**
+ * Loads the page shown in `launchId`'s window in jsdom and runs its script, as the Harness window
+ * would. The page's `fetch` goes to the Harness's server for real; every URL it asks for is kept.
+ */
+async function openPage(launchId: string) {
+  const url = shownUrl(launchId);
+  const response = await fetch(url);
+  const html = await response.text();
+  const requested: string[] = [];
+  const { window } = new JSDOM(html, {
+    url: url.href,
+    runScripts: 'dangerously',
+    beforeParse(page) {
+      page.TextDecoder = TextDecoder;
+      page.fetch = (input, init) => {
+        const target = new URL(input instanceof Request ? input.url : input, url);
+        requested.push(target.href);
+        return fetch(target, init);
+      };
+    },
+  });
+  pages.push(window);
+  const element = (id: string) => {
+    const found = window.document.getElementById(id);
+    if (found === null) throw new Error(`The page has no #${id}`);
+    return found;
+  };
+  /** Types `text` into the message box and sends it, as the User would. */
+  const send = (text: string) => {
+    element('message').value = text;
+    element('composer').requestSubmit();
+  };
+  /** Waits until the latest answer is complete (or failed), then returns its text. */
+  const reply = (part: string) =>
+    waitFor(
+      () => {
+        const latest = window.document.getElementById('reply');
+        const text = latest?.textContent ?? '';
+        return latest?.getAttribute('aria-busy') === null && text.includes(part) ? text : undefined;
+      },
+      `a reply with ${JSON.stringify(part)}`,
+    );
+  return { window, response, html, requested, element, send, reply };
+}
+
+/** One HTTP request to hello-web's server, with full control of its headers (`Host` included). */
+function serverRequest(
+  port: number,
+  options: { method: string; path: string; headers?: Record<string, string>; body?: string },
+): Promise<{ status: number; headers: IncomingHttpHeaders; body: string }> {
+  return new Promise((resolve, reject) => {
+    const outgoing = httpRequest(
+      {
+        host: '127.0.0.1',
+        port,
+        method: options.method,
+        path: options.path,
+        headers: options.headers,
+      },
+      (incoming) => {
+        let body = '';
+        incoming.setEncoding('utf8');
+        incoming.on('data', (chunk: string) => (body += chunk));
+        incoming.on('end', () => {
+          resolve({ status: incoming.statusCode ?? 0, headers: incoming.headers, body });
+        });
+      },
+    );
+    outgoing.on('error', reject);
+    outgoing.end(options.body);
+  });
+}
+
+/** The events of a `/chat` response body, in order. */
+function sseEvents(body: string): { event: string; data: unknown }[] {
+  return body
+    .split('\n\n')
+    .filter((block) => block !== '')
+    .map((block) => {
+      const lines = block.split('\n');
+      const event = lines.find((line) => line.startsWith('event: '))?.slice(7) ?? '';
+      const data = lines.find((line) => line.startsWith('data: '))?.slice(6) ?? 'null';
+      return { event, data: JSON.parse(data) as unknown };
+    });
+}
+
+const chat = (port: number, messages: unknown) =>
+  serverRequest(port, {
+    method: 'POST',
+    path: '/chat',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
+  });
+
+describe('hello-web (examples/hello-web/out)', () => {
+  const harnessId = 'harness-store/hello-web';
+
+  async function launchHelloWeb(locale: 'en' | 'zh-CN') {
+    await start(locale);
+    await expect(call('installs.installFromFolder', HELLO_WEB)).resolves.toMatchObject({
+      ok: true,
+    });
+    const launchId = await launch(harnessId, null);
+    await waitFor(
+      () => (lastState(launchId)?.state === 'ready' ? true : undefined),
+      'the launch to be ready',
+    );
+    return launchId;
+  }
+
+  it('shows its chat page once it serves it; a message streams in from the default Slot, the page names the model that wrote it, and one Usage Record is left', async () => {
+    const launchId = await launchHelloWeb('en');
+    // Its window opened at once, on its Starting state; the page came in once it answered.
+    expect(windows.webSpecs).toEqual([{ launchId, harnessId, name: 'Hello Web', size: {} }]);
+    expect(states.filter((each) => each.launchId === launchId).map((each) => each.state)).toEqual([
+      'preparing',
+      'spawning',
+      'waiting-ready',
+      'ready',
+    ]);
+    const url = shownUrl(launchId);
+    expect(url.href).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+    await expect(windows.shown.get(launchId)?.statusWhenShown).resolves.toBe(200);
+    const env = spawned.at(-1)?.env ?? {};
+    expect(env.HARNESS_PORT).toBe(url.port);
+    const token = env.HARNESS_GATEWAY_TOKEN ?? '';
+    const gatewayUrl = env.HARNESS_GATEWAY_URL ?? '';
+    expect(token).not.toBe('');
+
+    const page = await openPage(launchId);
+    // Its page may connect to its own origin only, and never holds the Gateway's address or token.
+    expect(page.response.headers.get('content-security-policy')).toContain("connect-src 'self'");
+    expect(page.response.headers.get('content-security-policy')).toContain("default-src 'self'");
+    expect(page.html).toContain('<html lang="en">');
+    expect(page.html).not.toContain(token);
+    expect(page.html).not.toContain(gatewayUrl);
+    expect(page.element('locale').value).toBe('en');
+    expect(page.element('send').textContent).toBe('Send');
+    expect(page.element('answered').hidden).toBe(true);
+
+    const message = 'Hello from the reference page';
+    page.send(message);
+    // The fake Provider echoes the message back, word by word, through the Gateway and /chat.
+    await expect(page.reply(message)).resolves.toBe(message);
+    // Once the answer is complete, the page names the model that wrote it.
+    expect(page.element('model').textContent).toBe('ollama/model-a');
+    expect(page.element('answered').hidden).toBe(false);
+    expect(page.requested).toEqual([`${url.origin}/chat`]);
+    expect(chatRequests()).toEqual([
+      expect.objectContaining({
+        model: 'model-a',
+        stream: true,
+        messages: [{ role: 'user', content: message }],
+      }),
+    ]);
+
+    // Exactly one Usage Record, this Harness's, written during this launch.
+    expect(rows('usage_records')).toEqual([
+      expect.objectContaining({
+        harness_id: harnessId,
+        harness_version: '0.1.0',
+        slot: 'default',
+        provider: 'ollama',
+        model: 'model-a',
+        status: 'ok',
+      }),
+    ]);
+    windows.close(launchId);
+    await expect(waitForEnd(launchId)).resolves.toMatchObject({ state: 'stopped' });
+    const [launchRow] = rows('launches');
+    expect(launchRow).toMatchObject({ launch_id: launchId, harness_id: harnessId });
+    const usage = rows('usage_records');
+    expect(usage).toHaveLength(1);
+    const timestamp = String(usage[0]?.timestamp);
+    expect(timestamp >= String(launchRow?.started_at)).toBe(true);
+    expect(timestamp <= String(launchRow?.ended_at)).toBe(true);
+  });
+
+  it('starts in HARNESS_LOCALE (zh-CN), keeps the conversation, says where to bind a model, and its menu switches it to English', async () => {
+    const launchId = await launchHelloWeb('zh-CN');
+    const page = await openPage(launchId);
+    expect(page.html).toContain('<html lang="zh-CN">');
+    expect(page.window.document.documentElement.lang).toBe('zh-CN');
+    expect(page.element('locale').value).toBe('zh-CN');
+    expect(page.element('send').textContent).toBe('发送');
+    expect(page.element('message').getAttribute('placeholder')).toBe('向 default 模型槽位发送消息');
+
+    page.send('你好');
+    await page.reply('你好');
+    page.send('second question');
+    await page.reply('second question');
+    // The second request carries the first exchange: the page keeps the conversation.
+    expect(chatRequests().at(-1)?.messages).toEqual([
+      { role: 'user', content: '你好' },
+      { role: 'assistant', content: '你好' },
+      { role: 'user', content: 'second question' },
+    ]);
+
+    await bindDefault(null);
+    page.send('anyone there?');
+    await expect(page.reply('模型槽位')).resolves.toBe(
+      '模型槽位“default”还没有绑定模型。请在 Harness Store 的模型页绑定一个，然后重新发送消息。',
+    );
+    expect(page.element('reply').getAttribute('role')).toBe('alert');
+
+    const menu = page.element('locale');
+    menu.value = 'en';
+    menu.dispatchEvent(new page.window.Event('change'));
+    expect(page.window.document.documentElement.lang).toBe('en');
+    expect(page.element('send').textContent).toBe('Send');
+    expect(page.element('reply').textContent).toBe(
+      'No model is bound to the Model Slot "default". Bind one on the Models page of Harness Store, then send your message again.',
+    );
+
+    // The unanswered message is not part of the conversation.
+    await bindDefault('model-a');
+    page.send('now?');
+    await page.reply('now?');
+    expect(chatRequests().at(-1)?.messages).toEqual([
+      { role: 'user', content: '你好' },
+      { role: 'assistant', content: '你好' },
+      { role: 'user', content: 'second question' },
+      { role: 'assistant', content: 'second question' },
+      { role: 'user', content: 'now?' },
+    ]);
+    expect(rows('usage_records')).toHaveLength(3);
+  });
+
+  it('answers /chat with Server-Sent Events ending in the model that wrote the answer, refuses other callers, and aborts the Gateway call when its page goes away', async () => {
+    const launchId = await launchHelloWeb('en');
+    const port = Number(shownUrl(launchId).port);
+    const env = spawned.at(-1)?.env ?? {};
+
+    const answered = await chat(port, [{ role: 'user', content: 'one two three' }]);
+    expect(answered.status).toBe(200);
+    expect(answered.headers['content-type']).toBe('text/event-stream; charset=utf-8');
+    expect(sseEvents(answered.body)).toEqual([
+      { event: 'token', data: { text: 'one ' } },
+      { event: 'token', data: { text: 'two ' } },
+      { event: 'token', data: { text: 'three' } },
+      { event: 'done', data: { model: 'ollama/model-a' } },
+    ]);
+    expect(answered.body).not.toContain(env.HARNESS_GATEWAY_TOKEN ?? 'no token');
+    expect(answered.body).not.toContain(env.HARNESS_GATEWAY_URL ?? 'no url');
+
+    // Only its own page may call: JSON from this origin's Host, on the one route.
+    const valid = JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] });
+    await expect(
+      serverRequest(port, {
+        method: 'POST',
+        path: '/chat',
+        headers: { Host: `evil.example:${String(port)}`, 'Content-Type': 'application/json' },
+        body: valid,
+      }),
+    ).resolves.toMatchObject({ status: 403 });
+    await expect(
+      serverRequest(port, {
+        method: 'POST',
+        path: '/chat',
+        headers: { 'Content-Type': 'text/plain' },
+        body: valid,
+      }),
+    ).resolves.toMatchObject({ status: 415 });
+    await expect(chat(port, [])).resolves.toMatchObject({ status: 400 });
+    await expect(chat(port, [{ role: 'system', content: 'x' }])).resolves.toMatchObject({
+      status: 400,
+    });
+    await expect(serverRequest(port, { method: 'GET', path: '/chat' })).resolves.toMatchObject({
+      status: 404,
+    });
+    await expect(serverRequest(port, { method: 'GET', path: '/other' })).resolves.toMatchObject({
+      status: 404,
+    });
+    // The refused requests never reached the Gateway.
+    expect(chatRequests()).toHaveLength(1);
+
+    await bindDefault(null);
+    const unbound = await chat(port, [{ role: 'user', content: 'hi' }]);
+    expect(unbound.status).toBe(200);
+    expect(sseEvents(unbound.body)).toEqual([
+      {
+        event: 'error',
+        data: {
+          code: 'slot_unbound',
+          message:
+            'No model is bound to the Model Slot "default". Bind one on the Models page of Harness Store.',
+        },
+      },
+    ]);
+
+    // A page that goes away mid-answer: hello-web aborts its Gateway call, the Gateway its own.
+    await bindDefault('model-stall');
+    const leaving = httpRequest({
+      host: '127.0.0.1',
+      port,
+      method: 'POST',
+      path: '/chat',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const status = new Promise<number>((resolve) => {
+      leaving.on('response', (incoming) => {
+        resolve(incoming.statusCode ?? 0);
+      });
+    });
+    leaving.on('error', () => undefined);
+    leaving.end(valid);
+    await expect(status).resolves.toBe(200);
+    const stalled = await waitFor(
+      () =>
+        fake.requests.find(
+          (each) => (each.body as { model?: string } | null)?.model === 'model-stall',
+        ),
+      'the stalled call to reach the fake Provider',
+    );
+    leaving.destroy();
+    await waitFor(() => (stalled.aborted ? true : undefined), 'the Provider call to be aborted');
   });
 });

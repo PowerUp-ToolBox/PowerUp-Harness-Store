@@ -142,7 +142,20 @@ importers:
         specifier: 1.2.11
         version: 1.2.11
 
-  examples/hello-web: {}
+  examples/hello-web:
+    devDependencies:
+      '@harness-store/manifest':
+        specifier: workspace:*
+        version: link:../../packages/manifest
+      '@harness-store/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
+      rolldown:
+        specifier: 1.2.11
+        version: 1.2.11
 
   packages/gateway:
     dependencies:
