@@ -290,6 +290,43 @@ describe('stop', () => {
     expect(changes).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('aborts the request in flight and ends its check at once', async () => {
+    const { service, fetch } = serviceAnswering('hang');
+    const check = service.check();
+    await vi.advanceTimersByTimeAsync(0);
+    service.stop();
+    expect(fetch.mock.calls[0]?.[1].signal.aborted).toBe(true);
+    await expect(check).resolves.toEqual({ state: 'unknown' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('ends a check in flight at once even when fetch ignores the abort signal', async () => {
+    const fetch = vi.fn<FetchLike>(() => new Promise(() => undefined));
+    const service = createConnectivityService({ fetch, storeBaseUrl: () => STORE_URL });
+    services.push(service);
+    const check = service.check();
+    await vi.advanceTimersByTimeAsync(0);
+    service.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(check).resolves.toEqual({ state: 'unknown' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('sends no request and reads no setting for a check or reported failure after it', async () => {
+    const storeBaseUrl = vi.fn(() => STORE_URL);
+    const { service, fetch, changes, answer } = serviceAnswering(200, storeBaseUrl);
+    await service.check();
+    service.stop();
+    answer('refused');
+    await expect(service.check()).resolves.toEqual({ state: 'online' });
+    service.reportFailure();
+    await vi.advanceTimersByTimeAsync(60 * MINUTE);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(storeBaseUrl).toHaveBeenCalledOnce();
+    expect(changes).toEqual([{ state: 'online' }]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe('storeBaseUrlFrom', () => {

@@ -30,7 +30,9 @@ describe('Store routes while the Store is unreachable', () => {
       installOfflineApi();
       await renderApp(hash);
       const panel = offlinePanel();
-      expect(within(panel).getByText('Check your internet connection, then try again.'));
+      expect(
+        within(panel).getByText('Check your internet connection, then try again.'),
+      ).toBeDefined();
       expect(within(panel).getByRole('button', { name: 'Retry' })).toBeDefined();
       expect(screen.queryByText(/appear here/)).toBeNull();
       // Still inside the shell: the User can leave for another section.

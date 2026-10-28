@@ -43,7 +43,10 @@ export interface ConnectivityService {
    * the Store is already known to be offline, when the scheduled re-check is left to run.
    */
   reportFailure(): void;
-  /** Cancels the scheduled re-check; nothing is checked or reported after this. */
+  /**
+   * Cancels the scheduled re-check and aborts the check in flight; nothing is checked or reported
+   * after this, and later calls to `check` resolve with the last state without a request.
+   */
   stop(): void;
 }
 
@@ -57,6 +60,8 @@ export function createConnectivityService(options: ConnectivityOptions): Connect
   const { fetch, storeBaseUrl, onChange } = options;
   let state: ConnectivityState = 'unknown';
   let inFlight: Promise<Connectivity> | null = null;
+  /** Aborts the request of the check in flight, if there is one. */
+  let abortInFlight: AbortController | null = null;
   let recheck: ReturnType<typeof setTimeout> | null = null;
   /** Offline results in a row; picks the delay of the next automatic check. */
   let offlineResults = 0;
@@ -88,11 +93,17 @@ export function createConnectivityService(options: ConnectivityOptions): Connect
   };
 
   const check = (): Promise<Connectivity> => {
-    inFlight ??= isReachable(fetch, storeBaseUrl).then((reachable) => {
-      inFlight = null;
-      settle(reachable ? 'online' : 'offline');
-      return { state };
-    });
+    if (stopped) return Promise.resolve({ state });
+    if (inFlight === null) {
+      const controller = new AbortController();
+      abortInFlight = controller;
+      inFlight = isReachable(fetch, storeBaseUrl, controller).then((reachable) => {
+        inFlight = null;
+        abortInFlight = null;
+        settle(reachable ? 'online' : 'offline');
+        return { state };
+      });
+    }
     return inFlight;
   };
 
@@ -105,19 +116,32 @@ export function createConnectivityService(options: ConnectivityOptions): Connect
     stop() {
       stopped = true;
       cancelRecheck();
+      abortInFlight?.abort();
     },
   };
 }
 
-/** One `HEAD` request to the Store base URL; resolves false on any failure, never rejects. */
-async function isReachable(fetch: FetchLike, storeBaseUrl: () => string): Promise<boolean> {
-  const controller = new AbortController();
+/**
+ * One `HEAD` request to the Store base URL; resolves false on any failure, on the timeout or once
+ * `controller` aborts, and never rejects.
+ */
+async function isReachable(
+  fetch: FetchLike,
+  storeBaseUrl: () => string,
+  controller: AbortController,
+): Promise<boolean> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  // The race ends the check on time even if `fetch` ignores the abort signal.
+  // The race ends the check on time, or at once on abort, even if `fetch` ignores the signal.
   const timedOut = new Promise<false>((resolve) => {
+    controller.signal.addEventListener(
+      'abort',
+      () => {
+        resolve(false);
+      },
+      { once: true },
+    );
     timeout = setTimeout(() => {
       controller.abort();
-      resolve(false);
     }, CHECK_TIMEOUT_MS);
   });
   const answered = Promise.resolve()
