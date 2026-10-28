@@ -199,6 +199,9 @@ async function start(): Promise<void> {
           : await dialog.showOpenDialog(mainWindow, options);
       return result.canceled ? null : (result.filePaths[0] ?? null);
     },
+    // `launch.state` and `installs.changed` go to the main window only, which shows every
+    // Harness. A Harness window hears about its own launch alone, as `window.state` on its own
+    // channel (./harness-windows.ts); its page has no use for other launches.
     emit: emitToMainWindow,
     // Every Harness runs in a window of its own (./harness-windows.ts).
     harnessWindows,
