@@ -54,7 +54,9 @@ export function migrate(db: DatabaseSync, migrations: readonly string[]): void {
       db.exec(`PRAGMA user_version = ${String(version)}`);
       db.exec('COMMIT');
     } catch (error) {
-      db.exec('ROLLBACK');
+      // SQLite ends the transaction itself on some errors (a full disk, an I/O error, an
+      // ON CONFLICT ROLLBACK constraint); a ROLLBACK then would throw and hide the real cause.
+      if (db.isTransaction) db.exec('ROLLBACK');
       throw new Error(`Database migration ${String(version)} failed.`, { cause: error });
     }
   });

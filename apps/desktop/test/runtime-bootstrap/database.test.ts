@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -130,17 +130,43 @@ describe('openDatabase', () => {
     expect(schema(db).map(({ name }) => name)).toEqual(['a']);
   });
 
+  it('reports the real cause when SQLite already rolled the failing migration back', () => {
+    open(['CREATE TABLE a (x INTEGER)']).close();
+    // ON CONFLICT ROLLBACK makes SQLite end the transaction itself, as a full disk does.
+    const failing =
+      'CREATE TABLE b (y UNIQUE ON CONFLICT ROLLBACK); INSERT INTO b VALUES (1); INSERT INTO b VALUES (1);';
+    let thrown: unknown;
+    try {
+      open(['CREATE TABLE a (x INTEGER)', failing]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe('Database migration 2 failed.');
+    expect(((thrown as Error).cause as Error).message).toMatch(/UNIQUE constraint failed/);
+    const db = new DatabaseSync(path);
+    opened.push(db);
+    expect(schemaVersion(db)).toBe(1);
+    expect(schema(db).map(({ name }) => name)).toEqual(['a']);
+  });
+
   it('refuses a database a newer app version migrated', () => {
     open(['CREATE TABLE a (x INTEGER)', 'CREATE TABLE b (y INTEGER)']).close();
     expect(() => open(['CREATE TABLE a (x INTEGER)'])).toThrow(/newer version of Harness Store/);
   });
 
   it('bundles every SQL file in migrations/, in file name order', () => {
-    const files = readdirSync(join(import.meta.dirname, '../../src/main/runtime/migrations'))
+    const migrationsDir = join(import.meta.dirname, '../../src/main/runtime/migrations');
+    const files = readdirSync(migrationsDir)
       .filter((name) => name.endsWith('.sql'))
       .sort();
     expect(files.map((name) => /^(\d{4})_/.exec(name)?.[1])).toEqual(
       MIGRATIONS.map((_, index) => String(index + 1).padStart(4, '0')),
+    );
+    // The ?raw imports give each file's exact text, so this catches a misordered or duplicated
+    // entry in the hand-maintained MIGRATIONS array.
+    expect(files.map((name) => readFileSync(join(migrationsDir, name), 'utf8'))).toEqual(
+      MIGRATIONS,
     );
   });
 
