@@ -9,15 +9,21 @@ export interface FakeCipher extends SecretCipher {
   readonly decrypts: number;
   /** `decrypt`, synchronously, for a test to read what was stored. */
   reveal(ciphertext: Uint8Array): string;
+  /**
+   * Holds every `decrypt` (as a keychain prompt does) until the returned function is called, so
+   * a test can act while one is pending.
+   */
+  holdDecrypts(): () => void;
 }
 
 /**
  * Encrypts by flipping every byte and prefixing a marker, so the ciphertext never contains the
- * plaintext and only this fake can read it back. Like safeStorage, `encrypt` rejects while
- * unavailable; `decrypt` rejects anything it did not produce.
+ * plaintext and only this fake can read it back. Like safeStorage, `encrypt` and `decrypt` reject
+ * while unavailable, and `decrypt` rejects anything it did not produce.
  */
 export function createFakeCipher(available = true): FakeCipher {
   let decrypts = 0;
+  let held: Promise<void> | null = null;
   const reveal = (ciphertext: Uint8Array) => {
     const marker = ciphertext.subarray(0, MARKER.length);
     if (!marker.every((byte, index) => byte === MARKER[index])) {
@@ -42,7 +48,19 @@ export function createFakeCipher(available = true): FakeCipher {
     async decrypt(ciphertext) {
       decrypts += 1;
       await Promise.resolve();
+      if (held !== null) await held;
+      if (!this.available) throw new Error('Decryption is not available.');
       return reveal(ciphertext);
+    },
+    holdDecrypts() {
+      let release!: () => void;
+      held = new Promise((resolve) => {
+        release = () => {
+          held = null;
+          resolve();
+        };
+      });
+      return release;
     },
   };
 }

@@ -38,6 +38,13 @@ export interface FakeStoreAuth {
   revokeRefreshTokens(): void;
   /** Whether a refresh token is still accepted. */
   isRefreshTokenValid(token: string): boolean;
+  /** How many refresh tokens are still accepted, whoever they were issued to. */
+  liveRefreshTokens(): number;
+  /**
+   * Holds every request starting with `request` (`METHOD /path`) until the returned function is
+   * called; the request is recorded at once.
+   */
+  hold(request: string): () => void;
 }
 
 /**
@@ -55,6 +62,7 @@ export function createFakeStoreAuth(now: () => Date = () => new Date()): FakeSto
   const accessTokens = new Map<string, { userId: string; expiresAt: number }>();
   const refreshTokens = new Map<string, string>();
   let counter = 0;
+  const holds: { prefix: string; released: Promise<void> }[] = [];
   const seconds = () => Math.floor(now().getTime() / 1000);
 
   const json = (status: number, body: unknown) =>
@@ -88,58 +96,64 @@ export function createFakeStoreAuth(now: () => Date = () => new Date()): FakeSto
     return entry !== undefined && entry.expiresAt > seconds() ? entry.userId : null;
   };
 
+  /** The answer of the fake Store to one request. */
+  const respond = (target: URL, method: string, init: RequestInit): Response => {
+    const headers = new Headers(init.headers);
+    if (target.origin !== FAKE_STORE_URL || headers.get('apikey') !== FAKE_ANON_KEY) {
+      return json(401, { message: 'Invalid API key' });
+    }
+    const body =
+      typeof init.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {};
+    const grant = target.searchParams.get('grant_type');
+    if (method === 'POST' && target.pathname === '/auth/v1/token' && grant === 'pkce') {
+      const code = codes.get(String(body.auth_code));
+      codes.delete(String(body.auth_code));
+      const verifier = String(body.code_verifier);
+      const challenge = createHash('sha256').update(verifier).digest('base64url');
+      if (code?.challenge !== challenge) {
+        return json(400, { error_code: 'flow_state_not_found' });
+      }
+      return issue(code.userId);
+    }
+    if (method === 'POST' && target.pathname === '/auth/v1/token' && grant === 'refresh_token') {
+      const token = String(body.refresh_token);
+      const userId = refreshTokens.get(token);
+      if (userId === undefined) {
+        return json(400, { error_code: 'refresh_token_not_found' });
+      }
+      refreshTokens.delete(token);
+      return issue(userId);
+    }
+    if (method === 'POST' && target.pathname === '/auth/v1/logout') {
+      const userId = bearerUser(headers);
+      if (userId === null) return json(401, { message: 'invalid JWT' });
+      for (const [token, owner] of refreshTokens) if (owner === userId) refreshTokens.delete(token);
+      return json(204, null);
+    }
+    if (method === 'GET' && target.pathname === '/rest/v1/profiles') {
+      const userId = bearerUser(headers);
+      if (userId === null) return json(401, { code: 'PGRST301' });
+      const id = target.searchParams.get('id')?.replace(/^eq\./, '');
+      const profile = id === undefined ? undefined : profiles.get(id);
+      return json(200, profile === undefined ? [] : [profile]);
+    }
+    return json(404, { message: 'Not found' });
+  };
+
   const fake: FakeStoreAuth = {
     requests,
     profiles,
     opened,
     offline: false,
     nextUser: '',
-    fetch(url, init) {
+    async fetch(url, init) {
       const target = new URL(url);
       const method = init.method ?? 'GET';
-      requests.push(`${method} ${target.pathname}${target.search}`);
-      if (fake.offline) return Promise.reject(new TypeError('fetch failed'));
-      const headers = new Headers(init.headers);
-      if (target.origin !== FAKE_STORE_URL || headers.get('apikey') !== FAKE_ANON_KEY) {
-        return Promise.resolve(json(401, { message: 'Invalid API key' }));
-      }
-      const body =
-        typeof init.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {};
-      const grant = target.searchParams.get('grant_type');
-      if (method === 'POST' && target.pathname === '/auth/v1/token' && grant === 'pkce') {
-        const code = codes.get(String(body.auth_code));
-        codes.delete(String(body.auth_code));
-        const verifier = String(body.code_verifier);
-        const challenge = createHash('sha256').update(verifier).digest('base64url');
-        if (code?.challenge !== challenge) {
-          return Promise.resolve(json(400, { error_code: 'flow_state_not_found' }));
-        }
-        return Promise.resolve(issue(code.userId));
-      }
-      if (method === 'POST' && target.pathname === '/auth/v1/token' && grant === 'refresh_token') {
-        const token = String(body.refresh_token);
-        const userId = refreshTokens.get(token);
-        if (userId === undefined) {
-          return Promise.resolve(json(400, { error_code: 'refresh_token_not_found' }));
-        }
-        refreshTokens.delete(token);
-        return Promise.resolve(issue(userId));
-      }
-      if (method === 'POST' && target.pathname === '/auth/v1/logout') {
-        const userId = bearerUser(headers);
-        if (userId === null) return Promise.resolve(json(401, { message: 'invalid JWT' }));
-        for (const [token, owner] of refreshTokens)
-          if (owner === userId) refreshTokens.delete(token);
-        return Promise.resolve(json(204, null));
-      }
-      if (method === 'GET' && target.pathname === '/rest/v1/profiles') {
-        const userId = bearerUser(headers);
-        if (userId === null) return Promise.resolve(json(401, { code: 'PGRST301' }));
-        const id = target.searchParams.get('id')?.replace(/^eq\./, '');
-        const profile = id === undefined ? undefined : profiles.get(id);
-        return Promise.resolve(json(200, profile === undefined ? [] : [profile]));
-      }
-      return Promise.resolve(json(404, { message: 'Not found' }));
+      const line = `${method} ${target.pathname}${target.search}`;
+      requests.push(line);
+      for (const hold of holds) if (line.startsWith(hold.prefix)) await hold.released;
+      if (fake.offline) throw new TypeError('fetch failed');
+      return respond(target, method, init);
     },
     browser(deliver, answer) {
       return (url) => {
@@ -181,6 +195,21 @@ export function createFakeStoreAuth(now: () => Date = () => new Date()): FakeSto
       refreshTokens.clear();
     },
     isRefreshTokenValid: (token) => refreshTokens.has(token),
+    liveRefreshTokens: () => refreshTokens.size,
+    hold(request) {
+      let release!: () => void;
+      const entry = {
+        prefix: request,
+        released: new Promise<void>((resolve) => {
+          release = () => {
+            holds.splice(holds.indexOf(entry), 1);
+            resolve();
+          };
+        }),
+      };
+      holds.push(entry);
+      return release;
+    },
   };
   return fake;
 }

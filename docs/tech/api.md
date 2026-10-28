@@ -24,7 +24,8 @@ GitHub is the only sign-in, and only Publishers sign in (P0-07.2). The desktop a
 2. `POST /auth/v1/token?grant_type=pkce` with `{ auth_code, code_verifier }` → `{ access_token, refresh_token, expires_in, expires_at, user: { id, … }, provider_token }`. The app keeps the access and refresh token, `expires_at` and `user.id`, encrypted (`secrets` row `store:session`, data-model.md §2); `provider_token`, GitHub's own token, is dropped.
 3. The profile: `profiles?id=eq.<user.id>&select=github_login,display_name,avatar_url` with `authorization: Bearer <access_token>`. The row comes from the profile trigger (§1); without it the sign-in fails.
 4. An access token that expires within 60 s is refreshed first: `POST /auth/v1/token?grant_type=refresh_token` with `{ refresh_token }` (refresh tokens rotate; the new session is stored encrypted again). A 4xx answer other than 429 ends the session (the app signs out and reports `session_expired`); no answer, a 429 or a 5xx keeps it.
-5. Sign-out deletes the stored session, then `POST /auth/v1/logout?scope=local` with the access token (best effort), which revokes the refresh token.
+5. Sign-out deletes the stored session, then `POST /auth/v1/logout?scope=local` with the access token (best effort, at most 5 s in all), which revokes the refresh token. Logout takes only an unexpired access token, so one that expires within 60 s is first exchanged as in step 4 (the new tokens are used for the logout only, never stored).
+6. A session that does not decrypt (the OS keychain is locked or the prompt was denied) counts as signed out for that call but stays stored, so the next call or launch can read it; one that decrypts to something that is not a session is deleted. A Store call answering 401 ends the session (`session_expired`) only while the token it was made with is still the stored one.
 
 ## Edge Functions
 

@@ -210,7 +210,7 @@
   "error.sign_in_failed": "GitHub 登录未完成，请重试。",
   "error.sign_in_timeout": "登录耗时过长。请重试，并在 5 分钟内在浏览器中完成。",
   "error.sign_in_cancelled": "此次登录已被新的登录或退出登录取代。",
-  "error.store_unreachable": "Store 没有响应。请检查网络连接后重试。",
+  "error.store_unreachable": "商店没有响应。请检查网络连接后重试。",
   "error.encryption_unavailable": "Harness Store 无法保存此密钥：本机没有可用的安全密钥存储。在 Linux 上，请安装并解锁 GNOME Keyring 或 KWallet 等密钥环，然后重启 Harness Store。Key 和登录会话永远不会以明文保存。",
   "error.invalid_request": "Model Gateway 无法解析该请求。",
   "error.invalid_token": "Gateway Token 缺失、无效或已被吊销。请重新启动该 Harness。",

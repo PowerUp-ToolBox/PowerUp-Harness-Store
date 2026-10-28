@@ -18,8 +18,11 @@ win:
 linux:
   target: AppImage
 # The Store sign-in comes back from the browser as harnessstore://auth-callback (P0-07.2). macOS
-# reads this from Info.plist, Linux from the .desktop file; on Windows the app registers it at
-# runtime (app.setAsDefaultProtocolClient in src/main/index.ts).
+# reads this from Info.plist; on Windows the app registers it at runtime
+# (app.setAsDefaultProtocolClient in src/main/index.ts). On Linux it only goes into the .desktop
+# file embedded in the AppImage, which the AppImage does not install: the browser can hand the
+# callback to the app only once that file is installed (appimaged, AppImageLauncher), so sign-in
+# from a bare AppImage times out (known limitation, P0-07 spec).
 protocols:
   - name: Harness Store
     schemes:

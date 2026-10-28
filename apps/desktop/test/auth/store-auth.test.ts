@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthChanged } from '../../src/shared/ipc.js';
 import { openDatabase } from '../../src/main/runtime/database.js';
 import {
@@ -232,6 +232,33 @@ describe('the stored session', () => {
     const second = launch();
     await expect(second.auth.whoami()).resolves.toEqual({ signedIn: false });
   });
+
+  it('deletes a stored row that decrypts to something that is not a session', async () => {
+    const { auth, db } = launch();
+    slot.write(await cipher.encrypt('{"not":"a session"}'));
+    await expect(auth.whoami()).resolves.toEqual({ signedIn: false });
+    expect(db.prepare('SELECT id FROM secrets').all()).toEqual([]);
+  });
+
+  it('keeps a session the OS cannot decrypt at launch (a denied keychain prompt) for the next launch', async () => {
+    const first = launch();
+    const signedIn = await first.auth.signIn();
+    first.db.close();
+
+    cipher.available = false;
+    const second = launch();
+    await expect(second.auth.whoami()).resolves.toEqual({ signedIn: false });
+    await expect(second.auth.accessToken()).resolves.toBeNull();
+    expect(second.db.prepare('SELECT id FROM secrets').all()).toEqual([
+      { id: STORE_SESSION_SECRET_ID },
+    ]);
+    expect(changes.map((change) => change.reason)).toEqual(['signed_in']);
+    second.db.close();
+
+    cipher.available = true;
+    const third = launch();
+    await expect(third.auth.whoami()).resolves.toEqual(signedIn);
+  });
 });
 
 describe('signing out', () => {
@@ -248,6 +275,20 @@ describe('signing out', () => {
     expect(store.isRefreshTokenValid(refreshToken)).toBe(false);
     await expect(auth.whoami()).resolves.toEqual({ signedIn: false });
     await expect(auth.accessToken()).resolves.toBeNull();
+  });
+
+  it('revokes the session even when its access token has expired (refreshed for the logout only)', async () => {
+    const auth = createAuth();
+    await auth.signIn();
+    clock = new Date(clock.getTime() + 2 * 3600 * 1000);
+
+    await expect(auth.signOut()).resolves.toEqual({ signedIn: false });
+    expect(store.requests.slice(-2)).toEqual([
+      'POST /auth/v1/token?grant_type=refresh_token',
+      'POST /auth/v1/logout?scope=local',
+    ]);
+    expect(store.liveRefreshTokens()).toBe(0);
+    expect(slot.read()).toBeUndefined();
   });
 
   it('still signs out locally when the Store does not answer', async () => {
@@ -331,7 +372,7 @@ describe('an expiring session', () => {
     const auth = createAuth();
     await auth.signIn();
     changes.length = 0;
-    auth.sessionRejected();
+    await auth.sessionRejected(String(await auth.accessToken()));
     expect(slot.read()).toBeUndefined();
     expect(changes).toEqual([{ signedIn: false, reason: 'session_expired' }]);
     await expect(auth.whoami()).resolves.toEqual({ signedIn: false });
@@ -368,11 +409,101 @@ describe('whoami', () => {
     expect(changes.at(-1)).toEqual({ signedIn: false, reason: 'session_expired' });
   });
 
-  it('treats a session it cannot decrypt (a reset keychain) as signed out', async () => {
+  it('treats a session it cannot decrypt (a reset keychain) as signed out, until a new sign-in', async () => {
     const auth = createAuth();
     await auth.signIn();
-    slot.write(new TextEncoder().encode('not this cipher'));
+    const unreadable = new TextEncoder().encode('not this cipher');
+    slot.write(unreadable);
+    changes.length = 0;
     await expect(auth.whoami()).resolves.toEqual({ signedIn: false });
+    await auth.sessionRejected('access-1');
+    // Kept (it may be readable again later) but never reported as a session that expired.
+    expect(slot.read()).toBe(unreadable);
+    expect(changes).toEqual([]);
+    await expect(auth.signIn()).resolves.toMatchObject({ signedIn: true });
+    await expect(auth.whoami()).resolves.toMatchObject({ signedIn: true });
+  });
+});
+
+describe('calls that overlap', () => {
+  const advance = (seconds: number) => {
+    clock = new Date(clock.getTime() + seconds * 1000);
+  };
+
+  it('a sign-out while the session is being decrypted is not undone by a refresh', async () => {
+    const auth = createAuth();
+    await auth.signIn();
+    changes.length = 0;
+    advance(3600 - 30);
+
+    const release = cipher.holdDecrypts();
+    const token = auth.accessToken();
+    const state = auth.whoami();
+    const signedOut = auth.signOut();
+    release();
+
+    await expect(token).resolves.toBeNull();
+    await expect(state).resolves.toEqual({ signedIn: false });
+    await signedOut;
     expect(slot.read()).toBeUndefined();
+    expect(changes).toEqual([{ signedIn: false, reason: 'signed_out' }]);
+    await expect(auth.whoami()).resolves.toEqual({ signedIn: false });
+  });
+
+  it('a sign-out while whoami decrypts the session answers signed out', async () => {
+    const auth = createAuth();
+    await auth.signIn();
+    const release = cipher.holdDecrypts();
+    const state = auth.whoami();
+    const signedOut = auth.signOut();
+    release();
+    await expect(state).resolves.toEqual({ signedIn: false });
+    await signedOut;
+    expect(slot.read()).toBeUndefined();
+  });
+
+  it('a new profile copy never writes back a refresh token that a refresh rotated meanwhile', async () => {
+    store.nextUser = 'user-4';
+    const auth = createAuth();
+    await auth.signIn();
+    const profile = store.profiles.get('user-4');
+    if (profile === undefined) throw new Error('No profile');
+    profile.display_name = 'Renamed';
+    advance(3600 - 90);
+
+    // whoami reads the session (90 s left: no refresh) and waits for the profile...
+    const release = store.hold('GET /rest/v1/profiles');
+    const state = auth.whoami();
+    await vi.waitFor(() => {
+      expect(count('GET /rest/v1/profiles')).toBe(2);
+    });
+    // ...while another call refreshes it, which rotates the refresh token.
+    advance(60);
+    await auth.accessToken();
+    const rotated = String(storedSession()?.refreshToken);
+    release();
+
+    await expect(state).resolves.toMatchObject({ displayName: 'Renamed' });
+    expect(storedSession()?.refreshToken).toBe(rotated);
+    expect(store.isRefreshTokenValid(rotated)).toBe(true);
+    // The next whoami stores the new profile copy, with the rotated token.
+    await expect(auth.whoami()).resolves.toMatchObject({ displayName: 'Renamed' });
+    expect(storedSession()).toMatchObject({
+      refreshToken: rotated,
+      identity: { displayName: 'Renamed' },
+    });
+  });
+
+  it('a 401 for the token of an earlier sign-in leaves the current one alone', async () => {
+    const auth = createAuth();
+    await auth.signIn();
+    const earlier = String(await auth.accessToken());
+    await auth.signOut();
+    await auth.signIn();
+    changes.length = 0;
+
+    await auth.sessionRejected(earlier);
+    expect(changes).toEqual([]);
+    await expect(auth.whoami()).resolves.toMatchObject({ signedIn: true });
   });
 });

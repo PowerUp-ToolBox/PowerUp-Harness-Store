@@ -51,6 +51,13 @@ describe('catalog parity (CI)', () => {
       expect(Object.values(catalog).every((value) => typeof value === 'string')).toBe(true);
     }
   });
+
+  it('zh-CN names the Store 商店 (docs/ux/screens.md); only the product name keeps "Store"', () => {
+    const bare = Object.entries(zhCN)
+      .filter(([, message]) => /\bStore\b/.test(message.replaceAll('Harness Store', '')))
+      .map(([key]) => key);
+    expect(bare).toEqual([]);
+  });
 });
 
 describe('Manifest problems in the catalogs', () => {

@@ -82,13 +82,15 @@ export interface StoreAuth {
   signIn(): Promise<AuthState>;
   /**
    * Deletes the stored session at once, then revokes it at the Store (best effort, a few seconds
-   * at most). A sign-in waiting for its callback is cancelled.
+   * at most), refreshing an access token that has expired first since Auth's logout needs a valid
+   * one. A sign-in waiting for its callback is cancelled.
    */
   signOut(): Promise<AuthState>;
   /**
    * The signed-in Publisher, with the profile read from the Store now (the stored copy while the
    * Store does not answer). A session the Store refuses is deleted: signed out, and an
-   * `auth.changed` with `session_expired`.
+   * `auth.changed` with `session_expired`. A session the OS cannot decrypt right now is signed out
+   * for this call but kept, for the next call or launch to read.
    */
   whoami(): Promise<AuthState>;
   /**
@@ -105,10 +107,12 @@ export interface StoreAuth {
    */
   accessToken(): Promise<string | null>;
   /**
-   * For Store calls made with {@link accessToken}: the Store answered 401, so the session is no
-   * longer valid. Deletes it and sends `session_expired`.
+   * For Store calls made with {@link accessToken}: the Store answered 401 to `accessToken`, so
+   * the session is no longer valid. Deletes it and sends `session_expired`, but only while it is
+   * still the stored session: a 401 for the token of a session that was since refreshed, signed
+   * out or replaced by another sign-in changes nothing.
    */
-  sessionRejected(): void;
+  sessionRejected(accessToken: string): Promise<void>;
 }
 
 type Identity = Omit<Extract<AuthState, { signedIn: true }>, 'signedIn'>;
@@ -125,6 +129,13 @@ interface StoredSession {
   readonly identity: Identity;
 }
 
+/** The stored session (null: signed out) as of a `generation` and `revision`. */
+interface Snapshot {
+  readonly session: StoredSession | null;
+  readonly generation: number;
+  readonly revision: number;
+}
+
 const SIGNED_OUT: AuthState = { signedIn: false };
 
 const signedIn = (identity: Identity): AuthState => ({ signedIn: true, ...identity });
@@ -138,13 +149,18 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
   /** The sign-in waiting for its callback, if any. */
   let pending: { finish(result: string | StoreAuthError): void } | null = null;
   /**
-   * Bumped by every sign-in, sign-out and expiry. A step that awaited something writes the
-   * session only if it is unchanged, so a sign-out is never undone by a refresh or sign-in that
-   * was already under way.
+   * Bumped by every sign-in, sign-out and expiry. A step that awaited something (a decrypt
+   * included) writes the session or answers from it only if it is unchanged, so a sign-out is
+   * never undone by a refresh, whoami or sign-in that was already under way.
    */
   let generation = 0;
+  /**
+   * Bumped by every write or deletion of the stored session, refreshes included, so a step that
+   * only updates the stored copy never writes back a session a refresh has rotated meanwhile.
+   */
+  let revision = 0;
   /** The refresh in flight: refresh tokens rotate, so two callers must share one refresh. */
-  let refreshing: Promise<StoredSession | null> | null = null;
+  let refreshing: Promise<Snapshot> | null = null;
 
   async function request(
     path: string,
@@ -196,21 +212,65 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
     return identityFrom(row);
   }
 
+  /**
+   * The stored session, decrypted. A ciphertext that decrypts to something that is not a session
+   * is deleted. One that does not decrypt is kept and counts as signed out for this call only:
+   * `safeStorage` also fails while the OS keychain is unavailable for a moment (a denied macOS
+   * keychain prompt, a Linux keyring not unlocked yet), and the next call or launch can read it.
+   * The next sign-in or sign-out replaces it.
+   */
   async function load(): Promise<StoredSession | null> {
+    const started = revision;
     const ciphertext = slot.read();
     if (ciphertext === undefined) return null;
+    let plaintext: string;
     try {
-      const session = parseStoredSession(JSON.parse(await cipher.decrypt(ciphertext)));
-      if (session !== null) return session;
+      plaintext = await cipher.decrypt(ciphertext);
     } catch {
-      // Not decryptable any more (another OS user, a reset keychain): signed out.
+      return null;
     }
-    if (slot.read() === ciphertext) slot.clear();
-    return null;
+    let session: StoredSession | null = null;
+    try {
+      session = parseStoredSession(JSON.parse(plaintext));
+    } catch {
+      // Not JSON: not a session.
+    }
+    if (session === null && revision === started) clear();
+    return session;
   }
 
-  /** Encrypts and stores `session`, unless the sign-in state changed since `expected`. */
-  async function save(session: StoredSession, expected: number): Promise<boolean> {
+  /**
+   * The stored session with the state it belongs to. A sign-in, sign-out, refresh or expiry that
+   * happens while it is being decrypted makes it read again, so a caller never acts on a session
+   * that was replaced or deleted in the meantime.
+   */
+  async function current(): Promise<Snapshot> {
+    for (;;) {
+      const at = { generation, revision };
+      const session = await load();
+      if (generation === at.generation && revision === at.revision) return { session, ...at };
+    }
+  }
+
+  function write(ciphertext: Uint8Array): void {
+    revision += 1;
+    slot.write(ciphertext);
+  }
+
+  function clear(): void {
+    revision += 1;
+    slot.clear();
+  }
+
+  /**
+   * Encrypts and stores `session`, unless the sign-in state changed since `expected.generation`
+   * or, when given, the stored session changed since `expected.revision`. Returns the revision it
+   * wrote, else null.
+   */
+  async function save(
+    session: StoredSession,
+    expected: { readonly generation: number; readonly revision?: number },
+  ): Promise<number | null> {
     let ciphertext: Uint8Array;
     try {
       ciphertext = await cipher.encrypt(JSON.stringify(session));
@@ -221,31 +281,32 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
         { cause },
       );
     }
-    if (generation !== expected) return false;
-    slot.write(ciphertext);
-    return true;
+    if (generation !== expected.generation) return null;
+    if (expected.revision !== undefined && revision !== expected.revision) return null;
+    write(ciphertext);
+    return revision;
   }
 
   function expire(): void {
     generation += 1;
-    slot.clear();
+    clear();
     onChange?.({ signedIn: false, reason: 'session_expired' });
   }
 
   /** The stored session, refreshed first when its access token is about to expire. */
-  async function freshSession(): Promise<StoredSession | null> {
-    const session = await load();
+  async function freshSession(): Promise<Snapshot> {
+    const snapshot = await current();
+    const { session } = snapshot;
     if (session === null || session.expiresAt - nowSeconds() > REFRESH_MARGIN_SECONDS) {
-      return session;
+      return snapshot;
     }
     refreshing ??= (async () => {
-      const started = generation;
       try {
         const reply = await request('/auth/v1/token?grant_type=refresh_token', {
           method: 'POST',
           body: { refresh_token: session.refreshToken },
         });
-        if (generation !== started) return await load();
+        if (generation !== snapshot.generation) return await current();
         if (unavailable(reply.status)) {
           throw new StoreAuthError(
             'store_unreachable',
@@ -255,15 +316,47 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
         const tokens = reply.status === 200 ? tokensFrom(reply.body, nowSeconds()) : null;
         if (tokens === null) {
           expire();
-          return null;
+          return { session: null, generation, revision };
         }
+        // The old refresh token no longer works, so the rotated session is stored whatever
+        // else was stored meanwhile for this sign-in (a newer profile copy is read again later).
         const next: StoredSession = { ...tokens, identity: session.identity };
-        return (await save(next, started)) ? next : await load();
+        const written = await save(next, { generation: snapshot.generation });
+        return written === null
+          ? await current()
+          : { session: next, generation: snapshot.generation, revision: written };
       } finally {
         refreshing = null;
       }
     })();
     return refreshing;
+  }
+
+  /**
+   * Revokes `session` at the Store. Auth's logout takes only an unexpired access token, so one
+   * that expires soon is first exchanged for a new one (not stored: the session is already gone
+   * from this machine). Best effort, and within {@link LOGOUT_TIMEOUT_MS} in all.
+   */
+  async function revoke(session: StoredSession): Promise<void> {
+    const deadline = Date.now() + LOGOUT_TIMEOUT_MS;
+    const remaining = () => Math.max(1, deadline - Date.now());
+    let accessToken = session.accessToken;
+    if (session.expiresAt - nowSeconds() <= REFRESH_MARGIN_SECONDS) {
+      const reply = await request(
+        '/auth/v1/token?grant_type=refresh_token',
+        { method: 'POST', body: { refresh_token: session.refreshToken } },
+        remaining(),
+      );
+      const tokens = reply.status === 200 ? tokensFrom(reply.body, nowSeconds()) : null;
+      // Refused: the Store already ended the session. No answer: nothing more to try.
+      if (tokens === null) return;
+      accessToken = tokens.accessToken;
+    }
+    await request(
+      '/auth/v1/logout?scope=local',
+      { method: 'POST', token: accessToken },
+      remaining(),
+    );
   }
 
   /** Opens the browser on `url` and resolves with the code of the callback that comes back. */
@@ -341,7 +434,7 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
       if (identity === null) {
         throw new StoreAuthError('sign_in_failed', 'The Store has no Publisher profile for it.');
       }
-      if (!(await save({ ...tokens, identity }, started))) {
+      if ((await save({ ...tokens, identity }, { generation: started })) === null) {
         throw new StoreAuthError('sign_in_cancelled', 'The sign-in was replaced.');
       }
       const state = signedIn(identity);
@@ -354,17 +447,11 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
       generation += 1;
       const ciphertext = slot.read();
       if (ciphertext === undefined) return SIGNED_OUT;
-      slot.clear();
+      clear();
       onChange?.({ signedIn: false, reason: 'signed_out' });
       try {
         const session = parseStoredSession(JSON.parse(await cipher.decrypt(ciphertext)));
-        if (session !== null) {
-          await request(
-            '/auth/v1/logout?scope=local',
-            { method: 'POST', token: session.accessToken },
-            LOGOUT_TIMEOUT_MS,
-          );
-        }
+        if (session !== null) await revoke(session);
       } catch {
         // Best effort: the session is gone from this machine whatever the Store answered.
       }
@@ -372,32 +459,36 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
     },
 
     async whoami() {
-      let session: StoredSession | null;
+      const stateNow = async () => {
+        const { session } = await current();
+        return session === null ? SIGNED_OUT : signedIn(session.identity);
+      };
+      let snapshot: Snapshot;
       try {
-        session = await freshSession();
+        snapshot = await freshSession();
       } catch (error) {
         if (!(error instanceof StoreAuthError) || error.code !== 'store_unreachable') throw error;
-        const stored = await load();
-        return stored === null ? SIGNED_OUT : signedIn(stored.identity);
+        return stateNow();
       }
+      const { session } = snapshot;
       if (session === null) return SIGNED_OUT;
-      const started = generation;
       let identity: Identity | null;
       try {
         identity = await readProfile(session.accessToken, session.userId);
       } catch (error) {
         if (!(error instanceof StoreAuthError) || error.code !== 'store_unreachable') throw error;
-        return signedIn(session.identity);
+        return stateNow();
       }
-      if (generation !== started) {
-        const current = await load();
-        return current === null ? SIGNED_OUT : signedIn(current.identity);
-      }
+      // A sign-in, sign-out or expiry while the profile was read: answer for the state now.
+      if (generation !== snapshot.generation) return stateNow();
       if (identity === null) {
         expire();
         return SIGNED_OUT;
       }
-      if (!sameIdentity(identity, session.identity)) await save({ ...session, identity }, started);
+      if (!sameIdentity(identity, session.identity)) {
+        // Only if no refresh stored a rotated session meanwhile; the next whoami tries again.
+        await save({ ...session, identity }, snapshot);
+      }
       return signedIn(identity);
     },
 
@@ -428,11 +519,12 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
     },
 
     async accessToken() {
-      return (await freshSession())?.accessToken ?? null;
+      return (await freshSession()).session?.accessToken ?? null;
     },
 
-    sessionRejected() {
-      if (slot.read() !== undefined) expire();
+    async sessionRejected(accessToken) {
+      const { session, generation: at } = await current();
+      if (session?.accessToken === accessToken && generation === at) expire();
     },
   };
 }
