@@ -31,7 +31,11 @@ import { startRuntime, type Runtime } from './runtime/bootstrap.js';
 import { createDispatcher, UntrustedSenderError } from './runtime/dispatcher.js';
 import { createHandlers } from './runtime/handlers.js';
 import { createHarnessWindowHandlers } from './runtime/harness-window-handlers.js';
-import { isAllowedExternalUrl, mainWindowOptions } from './runtime/main-window.js';
+import {
+  harnessPartition,
+  isAllowedExternalUrl,
+  mainWindowOptions,
+} from './runtime/main-window.js';
 import { createSafeStorageCipher } from './runtime/secret-cipher.js';
 import { STORE_ASSET_SCHEME, storeAssetSource } from '../shared/store-assets.js';
 import { AUTH_SCHEME } from './runtime/store-auth.js';
@@ -220,6 +224,9 @@ async function start(): Promise<void> {
       if (error !== '') console.error(`Could not open ${path}: ${error}`);
       return error === '';
     },
+    // What a web Harness's page kept in its own session goes with it on uninstall.
+    clearHarnessSession: (harnessId) =>
+      session.fromPartition(harnessPartition(harnessId)).clearStorageData(),
   });
   const started = await runtime;
   // Quit while starting: the Runtime is already shutting down.

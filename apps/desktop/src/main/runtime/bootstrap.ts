@@ -123,6 +123,8 @@ export interface RuntimeOptions {
    * Directory, resolving whether the OS opened it.
    */
   readonly openPath?: (path: string) => Promise<boolean>;
+  /** Clears a web Harness's browser session when it is uninstalled (see createInstaller). */
+  readonly clearHarnessSession?: (harnessId: string) => Promise<void>;
   /**
    * How a Node Harness is run. Default: this process's executable with `ELECTRON_RUN_AS_NODE=1`,
    * which is Electron acting as Node in the app, and Node itself under plain Node.
@@ -346,6 +348,9 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           pickFolder: options.pickFolder ?? (() => Promise.resolve(null)),
           isRunning: (harnessId) => supervisor.isRunning(harnessId),
           onChanged: (harnessId) => options.emit?.('installs.changed', { harnessId }),
+          ...(options.clearHarnessSession === undefined
+            ? {}
+            : { clearHarnessSession: options.clearHarnessSession }),
           downloader: createStoreDownloader({
             fetch: options.storeFetch ?? ((url, init) => globalThis.fetch(url, init)),
             storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),

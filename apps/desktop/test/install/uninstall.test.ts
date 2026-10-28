@@ -365,6 +365,27 @@ describe('the installer on its own', () => {
     expect(installing()).toBe(false);
   });
 
+  it('clears the browser session of the uninstalled Harness, and finishes when that fails', async () => {
+    recordInstall();
+    const cleared: string[] = [];
+    const errors: string[] = [];
+    const service = createInstaller({
+      store,
+      root: join(root, 'userData'),
+      platform: null,
+      pickFolder: () => Promise.resolve(null),
+      clearHarnessSession: (harnessId) => {
+        cleared.push(harnessId);
+        return Promise.reject(new Error('session is gone'));
+      },
+      logError: (message) => errors.push(message),
+    });
+    await expect(service.uninstall(TERM)).resolves.toEqual({ ok: true, data: null });
+    expect(cleared).toEqual([TERM]);
+    expect(errors).toEqual([`Could not clear the browser session of ${TERM}`]);
+    expect(store.get(TERM)).toBeUndefined();
+  });
+
   it('refuses with harness_installing while an update of it downloads, deleting nothing', async () => {
     recordInstall();
     // A Store that never answers the `download` call until the update is cancelled.

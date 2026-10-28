@@ -124,6 +124,11 @@ export interface InstallerOptions {
   readonly isRunning?: (harnessId: string) => boolean;
   /** Told after an install replaced what `list` returns. */
   readonly onChanged?: (harnessId: string) => void;
+  /**
+   * Clears what a web Harness's page kept in its browser session (cookies, localStorage, caches;
+   * Electron keeps it outside the Data Directory), called once its uninstall is done.
+   */
+  readonly clearHarnessSession?: (harnessId: string) => Promise<void>;
   /** The Store's `download` function and the transfer; without it Store installs are refused. */
   readonly downloader?: StoreDownloader;
   /** Told how far a Store install's download is (`progress:<jobId>`). */
@@ -198,8 +203,9 @@ export interface InstallerOptions {
  * Harness counts as installing, so nothing launches it. It deletes the install folder, then the
  * Data Directory (neither ever followed through a link), then the row and the Harness's Model
  * Overrides in one transaction: a failure partway leaves the row, and uninstalling again finishes
- * the job, as a folder already gone counts as deleted. The launch logs and Usage Records stay,
- * and the time of the uninstall is written beside the logs ({@link UNINSTALLED_AT_FILE}).
+ * the job, as a folder already gone counts as deleted. A web Harness's browser session is then
+ * cleared (best effort). The launch logs and Usage Records stay, and the time of the uninstall is
+ * written beside the logs ({@link UNINSTALLED_AT_FILE}).
  *
  * An install the app quit or crashed in leaves its row in a transient state and its files in
  * `downloads/`. Before the first install or listing, the installer deletes those rows, puts back
@@ -656,6 +662,11 @@ export function createInstaller(options: InstallerOptions): InstallsService {
           installing.delete(harnessId);
         }
         icons.delete(row.installPath);
+        try {
+          await options.clearHarnessSession?.(harnessId);
+        } catch (error) {
+          logError(`Could not clear the browser session of ${harnessId}`, error);
+        }
         await markLogsUninstalled(paths.logsDir(harnessId), now(), logError);
         options.onChanged?.(harnessId);
         return ok(null);
