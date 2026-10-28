@@ -66,7 +66,7 @@ describe('Store routes while the Store is unreachable', () => {
       answer(connectivityResult('online'));
       await Promise.resolve();
     });
-    expect(screen.getByText('Featured and new Harnesses appear here.')).toBeDefined();
+    expect(screen.getByText('There are no Harnesses in the Store yet.')).toBeDefined();
     expect(screen.queryByRole('region', { name: "Can't reach the Store" })).toBeNull();
     expect(screen.queryByText(BANNER)).toBeNull();
   });
@@ -146,14 +146,14 @@ describe('connectivity from the Runtime', () => {
     const api = installFakeApi();
     api.connectivity.get.mockResolvedValue(connectivityResult('unknown'));
     await renderApp('#/store');
-    expect(screen.getByText('Featured and new Harnesses appear here.')).toBeDefined();
+    expect(screen.getByText('There are no Harnesses in the Store yet.')).toBeDefined();
     expect(screen.queryByText(BANNER)).toBeNull();
   });
 
   it('follows connectivity.changed: the banner and panel come and go without a reload', async () => {
     const api = installFakeApi();
     await renderApp('#/store');
-    expect(screen.getByText('Featured and new Harnesses appear here.')).toBeDefined();
+    expect(screen.getByText('There are no Harnesses in the Store yet.')).toBeDefined();
 
     act(() => {
       api.emit('connectivity.changed', { state: 'offline' });
@@ -161,10 +161,13 @@ describe('connectivity from the Runtime', () => {
     expect(offlinePanel()).toBeDefined();
     expect(screen.getByText(BANNER)).toBeDefined();
 
-    act(() => {
+    // The Store screen mounts afresh and reads the Store home again.
+    await act(async () => {
       api.emit('connectivity.changed', { state: 'online' });
+      await Promise.resolve();
     });
-    expect(screen.getByText('Featured and new Harnesses appear here.')).toBeDefined();
+    expect(screen.getByText('There are no Harnesses in the Store yet.')).toBeDefined();
+    expect(api.store.home).toHaveBeenCalledTimes(2);
     expect(screen.queryByText(BANNER)).toBeNull();
   });
 

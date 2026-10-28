@@ -39,6 +39,8 @@ import type {
   Settings,
   SettingsPatch,
   StartupStatus,
+  StoreHome,
+  StoreHomeRequest,
   UnpublishedVersion,
   UnpublishRequest,
 } from '../../src/shared/ipc.js';
@@ -156,6 +158,14 @@ export function connectionSummary(
   };
 }
 
+/** A Store home with no Harness in any row, on a Mac with Apple silicon. */
+export const EMPTY_STORE_HOME: StoreHome = {
+  platform: 'darwin-arm64',
+  featured: [],
+  mostDownloaded: [],
+  newest: [],
+};
+
 export interface FakeApiOptions {
   /** Whether the first-run wizard already ran; true, a returning User, unless a test says so. */
   readonly onboardingDone?: boolean;
@@ -164,7 +174,7 @@ export interface FakeApiOptions {
 /**
  * A fake `window.api` whose settings behave like the Runtime's: `osLocale` stands in for
  * `app.getLocale()` and an override set through `settings.set` wins over it. The Runtime started
- * fine, the Store is online, there are no Connections or Slot Bindings, detection finds nothing,
+ * fine, the Store is online and its home has no Harnesses, there are no Connections or Slot Bindings, detection finds nothing,
  * `connections.add`, `update`, `remove` and `test` (of a saved Connection) answer
  * `not_implemented`, `connections.testDraft` passes finding no models and `connections.models`
  * lists none; `bindings.setGlobal` sets or clears a Default Model that `bindings.getGlobal` then
@@ -221,6 +231,11 @@ export function installFakeApi(
       ),
       check: vi.fn((): Promise<IpcResult<Connectivity>> =>
         Promise.resolve(connectivityResult('online')),
+      ),
+    },
+    store: {
+      home: vi.fn<(request: StoreHomeRequest) => Promise<IpcResult<StoreHome>>>(() =>
+        Promise.resolve({ ok: true, data: EMPTY_STORE_HOME }),
       ),
     },
     providers: {

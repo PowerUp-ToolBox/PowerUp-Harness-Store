@@ -25,7 +25,8 @@
     "test:auth": "vitest run auth sign-in",
     "test:install": "vitest run install",
     "test:launch": "vitest run launch",
-    "test:publish": "vitest run publish"
+    "test:publish": "vitest run publish",
+    "test:store-browsing": "vitest run store-home store-assets"
   },
   "devDependencies": {
     "@formatjs/icu-messageformat-parser": "3.5.21",

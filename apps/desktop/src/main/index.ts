@@ -11,6 +11,7 @@ import {
   dialog,
   ipcMain,
   net,
+  protocol,
   safeStorage,
   screen,
   session,
@@ -32,6 +33,7 @@ import { createHandlers } from './runtime/handlers.js';
 import { createHarnessWindowHandlers } from './runtime/harness-window-handlers.js';
 import { isAllowedExternalUrl, mainWindowOptions } from './runtime/main-window.js';
 import { createSafeStorageCipher } from './runtime/secret-cipher.js';
+import { STORE_ASSET_SCHEME, storeAssetSource } from './runtime/store-assets.js';
 import { AUTH_SCHEME } from './runtime/store-auth.js';
 import { initialWindowBounds } from './runtime/window-state.js';
 
@@ -47,6 +49,12 @@ let startedRuntime: Runtime | null = null;
 const harnessWindows = createHarnessWindows();
 /** Quitting: 'idle', then 'stopping' while the Runtime shuts down, then 'stopped'. */
 let quitState: 'idle' | 'stopping' | 'stopped' = 'idle';
+
+// The Store's images (./runtime/store-assets.ts): a standard, secure scheme, so an <img> of the
+// main window loads it like https. Must be registered before `ready`.
+protocol.registerSchemesAsPrivileged([
+  { scheme: STORE_ASSET_SCHEME, privileges: { standard: true, secure: true } },
+]);
 
 // One Runtime per profile: a second launch focuses the existing window instead.
 if (!app.requestSingleInstanceLock()) {
@@ -240,6 +248,12 @@ async function start(): Promise<void> {
         console.error(`Harness window handler ${method} threw`, error);
       },
     })(event.sender, request);
+  });
+  // The Store's images, fetched from the Store's asset bucket only; anything else is not found.
+  protocol.handle(STORE_ASSET_SCHEME, (request) => {
+    const source =
+      request.method === 'GET' ? storeAssetSource(request.url, started.storeBaseUrl()) : null;
+    return source === null ? new Response(null, { status: 404 }) : net.fetch(source);
   });
   // The renderer never needs camera, notifications, geolocation and the like.
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {

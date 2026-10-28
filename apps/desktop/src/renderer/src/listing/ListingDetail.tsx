@@ -1,9 +1,9 @@
-import type { Manifest, ModelSlot, Tag } from '@harness-store/manifest';
+import type { Manifest, ModelSlot } from '@harness-store/manifest';
 import type { ReactNode } from 'react';
 import { trustFactsOf } from '../../../shared/permissions.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { requirementsText } from '../models/requirements.js';
-import { HarnessIcon, PlatformBadges } from './HarnessCard.js';
+import { HarnessIcon, PlatformBadges, TagChips } from './HarnessCard.js';
 import { TrustBlock } from './TrustBlock.js';
 
 /** One entry of the version history, newest first. */
@@ -71,13 +71,7 @@ export function ListingDetail({
             <span>{t('listing.downloads', { count: downloads })}</span>
             <PlatformBadges platforms={manifest.platforms} />
           </div>
-          {manifest.tags === undefined || manifest.tags.length === 0 ? null : (
-            <ul className="tag-chips" aria-label={t('listing.tags')}>
-              {manifest.tags.map((tag) => (
-                <li key={tag}>{t(tagKey(tag))}</li>
-              ))}
-            </ul>
-          )}
+          <TagChips tags={manifest.tags ?? []} />
         </div>
       </header>
 
@@ -153,9 +147,4 @@ function SlotRow({ name, slot }: { readonly name: string; readonly slot: ModelSl
       )}
     </li>
   );
-}
-
-/** The catalog key of a tag's name: typed, so a schema tag without an entry fails typecheck. */
-function tagKey(tag: Tag): `tag.${Tag}` {
-  return `tag.${tag}`;
 }

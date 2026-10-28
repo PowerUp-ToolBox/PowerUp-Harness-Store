@@ -6,6 +6,7 @@ import type {
   IpcResult,
   LaunchRequest,
   PublishRequest,
+  StoreHomeRequest,
   UnpublishRequest,
 } from '../../shared/ipc.js';
 import {
@@ -71,6 +72,11 @@ export function createHandlers(services: Services): IpcHandlers {
     'connectivity.check': async (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'connectivity.check' });
       return ok(await services.connectivity.check());
+    },
+    'store.home': (input) => {
+      const request = parseStoreHomeRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'store.home' });
+      return services.store.home(request);
     },
     'providers.list': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'providers.list' });
@@ -234,6 +240,16 @@ export function createHandlers(services: Services): IpcHandlers {
       return services.publish.unpublish(request);
     },
   };
+}
+
+/** `{ refresh? }` with a boolean, nothing else; no input at all is `{}`. */
+function parseStoreHomeRequest(input: unknown): StoreHomeRequest | null {
+  if (input === undefined) return {};
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return null;
+  const { refresh, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0) return null;
+  if (refresh === undefined) return {};
+  return typeof refresh === 'boolean' ? { refresh } : null;
 }
 
 /** `{ harnessId, version }`, a `<publisher>/<slug>` ID and a version string, nothing else. */

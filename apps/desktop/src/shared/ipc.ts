@@ -7,7 +7,13 @@
  * {@link IpcResult}; one event channel carries `{ event, payload }` from main to the renderer.
  */
 
-import type { DeclaredPermissions, Manifest, Platform, Problem } from '@harness-store/manifest';
+import type {
+  DeclaredPermissions,
+  Manifest,
+  Platform,
+  Problem,
+  Tag,
+} from '@harness-store/manifest';
 import type { Locale } from './i18n/locale.js';
 
 /**
@@ -37,6 +43,11 @@ export type IpcErrorCode =
   | 'sign_in_cancelled'
   /** The Store did not answer (network error, timeout or a 5xx). */
   | 'store_unreachable'
+  /**
+   * A Store read got an answer that is not what api.md says it returns: a 5xx, another refusal or
+   * a body that is not the rows it asked for. The Store answers, so this is not offline.
+   */
+  | 'store_error'
   /**
    * The Store refused the Publisher's session (a 401), or nobody is signed in: the session is
    * ended (`session_expired`) and the Publish screen asks to sign in again.
@@ -144,6 +155,13 @@ export interface IpcMethods {
    * of starting a second one.
    */
   'connectivity.check': { input: undefined; output: Connectivity };
+  /**
+   * The Store home (P0-09.1): Featured, Most downloaded and New, read anonymously with api.md's
+   * three home reads at once. The answer is kept in memory for 5 minutes per Store base URL;
+   * `refresh` (Retry) reads again. `store_unreachable` when the Store did not answer (connectivity
+   * is checked again), `store_error` when it answered with something else.
+   */
+  'store.home': { input: StoreHomeRequest; output: StoreHome };
   /** Every Provider of the Gateway's table, in its order, local ones (Ollama, LM Studio) included. */
   'providers.list': { input: undefined; output: readonly ProviderPreset[] };
   /**
@@ -656,6 +674,45 @@ export interface Connectivity {
   readonly state: ConnectivityState;
 }
 
+/** How to read the Store home. */
+export interface StoreHomeRequest {
+  /** Read the Store again even when the answer kept in memory is less than 5 minutes old. */
+  readonly refresh?: boolean;
+}
+
+/** The Store home's three rows, each at most 12 Harnesses in the Store's order. */
+export interface StoreHome {
+  /**
+   * This machine's platform as a Manifest names it, for the platform badges; null on a platform
+   * no Manifest can declare.
+   */
+  readonly platform: Platform | null;
+  /** Ascending `featured_rank`. */
+  readonly featured: readonly StoreListing[];
+  /** By `download_count`, highest first. */
+  readonly mostDownloaded: readonly StoreListing[];
+  /** By the latest version's `published_at`, newest first. */
+  readonly newest: readonly StoreListing[];
+}
+
+/** A Harness as a Store list shows it on its card (api.md `<list columns>`). */
+export interface StoreListing {
+  readonly harnessId: string;
+  /** The Publisher's GitHub login: the publisher segment of the Harness ID. */
+  readonly publisher: string;
+  readonly name: string;
+  readonly summary: string;
+  /** A `store-asset:` URL of the icon in the Store's asset bucket; null for the monogram. */
+  readonly iconUrl: string | null;
+  readonly tags: readonly Tag[];
+  readonly downloadCount: number;
+  /** The latest published Harness Version. */
+  readonly latestVersion: string;
+  readonly latestPublishedAt: string;
+  /** The platforms the latest version declares. */
+  readonly platforms: readonly Platform[];
+}
+
 /** The app settings as the renderer sees them. */
 export interface Settings {
   /** The User's language override; absent means "System" (follow the OS locale). */
@@ -926,6 +983,7 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'diagnostics.get': true,
   'connectivity.get': true,
   'connectivity.check': true,
+  'store.home': true,
   'providers.list': true,
   'connections.detectLocal': true,
   'connections.list': true,

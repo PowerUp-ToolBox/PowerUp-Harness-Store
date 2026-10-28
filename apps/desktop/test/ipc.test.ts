@@ -7,12 +7,19 @@ import { fail, ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { StoreAuthError } from '../src/main/runtime/store-auth.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
-import { IPC_METHODS } from '../src/shared/ipc.js';
+import { IPC_METHODS, type StoreHomeRequest } from '../src/shared/ipc.js';
 
 const MAIN_WINDOW = { id: 'main window webContents' };
 const quit = vi.fn();
 const stopWatching = vi.fn();
 const cancel = vi.fn();
+const home = vi.fn((request?: StoreHomeRequest) =>
+  Promise.resolve(
+    request?.refresh === true
+      ? fail('store_unreachable')
+      : ok({ platform: 'darwin-arm64' as const, featured: [], mostDownloaded: [], newest: [] }),
+  ),
+);
 const fakeServices: Services = {
   app: {
     version: '1.2.3',
@@ -34,6 +41,7 @@ const fakeServices: Services = {
     get: () => ({ state: 'offline' }),
     check: () => Promise.resolve({ state: 'online' }),
   },
+  store: { home },
   providers: { list: () => providerPresets() },
   connections: createConnectionsStub(),
   bindings: {
@@ -162,6 +170,32 @@ describe('IPC handlers against a fake service container', () => {
       data: { state: 'online' },
     });
   });
+
+  it('store.home reads the Store home, again with { refresh: true }', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'store.home' })).resolves.toEqual({
+      ok: true,
+      data: { platform: 'darwin-arm64', featured: [], mostDownloaded: [], newest: [] },
+    });
+    expect(home).toHaveBeenLastCalledWith({});
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'store.home', input: { refresh: true } }),
+    ).resolves.toMatchObject({ ok: false, error: { code: 'store_unreachable' } });
+    expect(home).toHaveBeenLastCalledWith({ refresh: true });
+  });
+
+  it.each([42, 'refresh', [], { refresh: 'yes' }, { refresh: true, extra: 1 }])(
+    'store.home rejects %j as invalid_input',
+    async (input) => {
+      const { dispatch } = dispatcherFor();
+      home.mockClear();
+      await expect(dispatch(MAIN_WINDOW, { method: 'store.home', input })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'invalid_input', params: { method: 'store.home' } },
+      });
+      expect(home).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     'app.status',

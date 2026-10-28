@@ -43,6 +43,7 @@ import {
   type SettingsStore,
 } from './settings-store.js';
 import { createStoreAuth, type StoreAuth, type StoreFetch } from './store-auth.js';
+import { createStoreCatalogue } from './store-catalogue.js';
 import {
   createSupervisor,
   createSupervisorStub,
@@ -65,8 +66,8 @@ export interface RuntimeOptions {
   /** Makes the Store connectivity checks (Electron's `net.fetch`, so system proxies apply). */
   readonly fetch: FetchLike;
   /**
-   * Makes the Store's Auth and PostgREST calls for the Publisher's sign-in and the Publish flow
-   * (Electron's `net.fetch`). Default: Node's `fetch`.
+   * Makes the Store's Auth and PostgREST calls for the Publisher's sign-in, the Publish flow and
+   * the Store tab's reads (Electron's `net.fetch`). Default: Node's `fetch`.
    */
   readonly storeFetch?: StoreFetch;
   /**
@@ -151,6 +152,11 @@ export interface Runtime {
   readonly services: Services;
   /** Whether the Store is reachable; the Store client (P0-09) reports failed requests to it. */
   readonly connectivity: ConnectivityService;
+  /**
+   * The Store base URL now (the `store_base_url` setting): the Electron entry point serves the
+   * Store's images (`store-asset:`) from it.
+   */
+  storeBaseUrl(): string;
   /**
    * The Publisher's Store sign-in. The Electron entry point hands it every
    * `harnessstore://auth-callback` URL the OS opens the app with; Store clients (P0-08) take
@@ -364,9 +370,22 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     onStoreUnreachable: () => void connectivity.check(),
   });
 
+  // Every Store read of the Store tab is anonymous, whoever is signed in.
+  const storeCatalogue = createStoreCatalogue({
+    fetch: options.storeFetch ?? ((url, init) => globalThis.fetch(url, init)),
+    storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
+    anonKey: options.storeAnonKey ?? storeAnonKey(),
+    platform,
+    onStoreUnreachable: () => {
+      connectivity.reportFailure();
+    },
+    ...(options.now === undefined ? {} : { now: options.now }),
+  });
+
   return {
     status: startupStatus,
     connectivity,
+    storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
     auth,
     supervisor,
     services: {
@@ -380,6 +399,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
         }),
       },
       connectivity,
+      store: storeCatalogue,
       providers: { list: () => providerPresets() },
       connections,
       bindings:
