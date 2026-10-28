@@ -198,50 +198,64 @@ describe('harnessFacts', () => {
 });
 
 describe('reconsentChanges (the update prompt\'s "What changed")', () => {
-  /** Each line as "<severity> <sentence>" in `locale`; a fact has no severity. */
-  const lines = (added: readonly string[], locale: 'en' | 'zh-CN' = 'en') => {
+  /** Each line as "<severity> <sentence>" in `locale`, "New: " before a new item; a fact has no severity. */
+  const lines = (diff: Parameters<typeof reconsentChanges>[0], locale: 'en' | 'zh-CN' = 'en') => {
     const { t } = translatorFor(locale);
-    return reconsentChanges(added).map(
-      (change) => `${change.severity ?? 'fact'} ${t(change.messageKey, change.params)}`,
+    return reconsentChanges(diff).map(
+      (change) =>
+        `${change.severity ?? 'fact'} ${change.markedNew ? 'New: ' : ''}` +
+        t(change.messageKey, change.params),
     );
   };
+  /** The lines of the update from `previous` to `next`. */
+  const update = (previous: Manifest, next: Manifest, locale: 'en' | 'zh-CN' = 'en') =>
+    lines(diffForReconsent(previous, next), locale);
 
-  it('gives every kind of item diffForReconsent adds one line, in its order', () => {
+  const base = manifestWith({ default: {} });
+  const withPermissions = (permissions: DeclaredPermissions): Manifest => ({
+    ...base,
+    permissions,
+  });
+  const binary = (entry: Record<string, string>): Manifest => ({
+    ...base,
+    runtime: { kind: 'binary' },
+    platforms: Object.keys(entry) as Manifest['platforms'],
+    entry,
+  });
+
+  it('gives every kind of item diffForReconsent adds one "New:" line, in its order', () => {
     expect(
-      lines([
-        'permissions.filesystem.scope:none',
-        'permissions.filesystem.scope:workspace',
-        'permissions.filesystem.scope:home',
-        'permissions.filesystem.scope:paths',
-        'permissions.filesystem.paths:~/notes',
-        'permissions.shell',
-        'permissions.network.any',
-        'permissions.network.domains:api.github.com',
-        'entry:dist/main.js',
-        'entry.linux-x64:bin/tool',
-        'runtime.kind:binary',
-        'runtime.kind:node',
-      ]),
+      lines({
+        reasons: ['permissions_widened', 'entry_changed', 'runtime_kind_changed'],
+        added: [
+          'permissions.filesystem.scope:paths',
+          'permissions.filesystem.paths:~/notes',
+          'permissions.shell',
+          'permissions.network.any',
+          'permissions.network.domains:api.github.com',
+          'entry:dist/main.js',
+          'entry.linux-x64:bin/tool',
+          'runtime.kind:binary',
+          'runtime.kind:node',
+        ],
+        removed: [],
+      }),
     ).toEqual([
-      'low Uses only its own data directory',
-      'medium Reads and writes files in the folder you choose',
-      'high Accesses your home folder',
-      'high Reads and writes the paths it lists',
-      'high Reads and writes these paths: ~/notes',
-      'high Runs shell commands',
-      'high Connects to the internet (any site)',
-      'medium Connects to: api.github.com',
-      'fact Starts from dist/main.js',
-      'fact Starts from bin/tool on linux-x64',
-      'fact Native executable',
-      'fact Runs on the bundled Node runtime',
+      'high New: Reads and writes the paths it lists',
+      'high New: Reads and writes these paths: ~/notes',
+      'high New: Runs shell commands',
+      'high New: Connects to the internet (any site)',
+      'medium New: Connects to: api.github.com',
+      'fact New: Starts from dist/main.js',
+      'fact New: Starts from bin/tool on linux-x64',
+      'fact New: Native executable',
+      'fact New: Runs on the bundled Node runtime',
     ]);
   });
 
   it('keeps the item each line shows, so the prompt matches the diff exactly', () => {
-    const previous = manifestWith({ default: {} });
     const next: Manifest = {
-      ...previous,
+      ...base,
       entry: 'dist/main.js',
       permissions: {
         filesystem: { scope: 'home' },
@@ -249,13 +263,90 @@ describe('reconsentChanges (the update prompt\'s "What changed")', () => {
         network: { domains: ['api.github.com'] },
       },
     };
-    const { added } = diffForReconsent(previous, next);
-    expect(reconsentChanges(added).map((change) => change.item)).toEqual(added);
-    expect(lines(added, 'zh-CN')).toEqual([
-      'high 访问你的用户主目录',
-      'high 会执行命令行命令',
-      'medium 访问以下网站：api.github.com',
-      'fact 从 dist/main.js 启动',
+    const diff = diffForReconsent(base, next);
+    expect(reconsentChanges(diff).map((change) => change.item)).toEqual(diff.added);
+    expect(update(base, next, 'zh-CN')).toEqual([
+      'high New: 访问你的用户主目录',
+      'high New: 会执行命令行命令',
+      'medium New: 访问以下网站：api.github.com',
+      'fact New: 从 dist/main.js 启动',
     ]);
+  });
+
+  it.each<[string, DeclaredPermissions['filesystem'], DeclaredPermissions['filesystem'], string[]]>(
+    [
+      [
+        'none to the Workspace',
+        { scope: 'none' },
+        { scope: 'workspace' },
+        ['medium New: Reads and writes files in the folder you choose'],
+      ],
+      [
+        'the Workspace to the home folder',
+        { scope: 'workspace' },
+        { scope: 'home' },
+        ['high New: Accesses your home folder'],
+      ],
+      [
+        'the home folder to listed paths',
+        { scope: 'home' },
+        { scope: 'paths', paths: ['~/notes'] },
+        [
+          'high New: Reads and writes the paths it lists',
+          'high New: Reads and writes these paths: ~/notes',
+        ],
+      ],
+    ],
+  )('shows a filesystem scope widened from %s as new', (_name, before, after, expected) => {
+    const permissions = { shell: false, network: { domains: [] } };
+    expect(
+      update(
+        withPermissions({ ...permissions, filesystem: before }),
+        withPermissions({ ...permissions, filesystem: after }),
+      ),
+    ).toEqual(expected);
+  });
+
+  it.each<[string, DeclaredPermissions['filesystem'], DeclaredPermissions['filesystem']]>([
+    ['the home folder to the Workspace', { scope: 'home' }, { scope: 'workspace' }],
+    ['listed paths to the home folder', { scope: 'paths', paths: ['~/notes'] }, { scope: 'home' }],
+    ['the Workspace to none', { scope: 'workspace' }, { scope: 'none' }],
+  ])(
+    'never shows a filesystem scope narrowed from %s as new, next to a widening',
+    (_name, before, after) => {
+      const previous = withPermissions({
+        filesystem: before,
+        shell: false,
+        network: { domains: [] },
+      });
+      const next = withPermissions({ filesystem: after, shell: true, network: { domains: [] } });
+      expect(diffForReconsent(previous, next).required).toBe(true);
+      expect(update(previous, next)).toEqual(['high New: Runs shell commands']);
+      expect(update(previous, next, 'zh-CN')).toEqual(['high New: 会执行命令行命令']);
+    },
+  );
+
+  it('explains an Entry that only lost a platform, which needs consent again', () => {
+    const previous = binary({ 'darwin-arm64': 'bin/tool', 'linux-x64': 'bin/tool-linux' });
+    const next = binary({ 'darwin-arm64': 'bin/tool' });
+    const diff = diffForReconsent(previous, next);
+    expect(diff).toMatchObject({ required: true, reasons: ['entry_changed'], added: [] });
+    expect(reconsentChanges(diff)).toEqual([
+      {
+        item: 'entry.linux-x64:bin/tool-linux',
+        markedNew: false,
+        severity: null,
+        messageKey: 'update.change.entryGone',
+        params: { platform: 'linux-x64' },
+      },
+    ]);
+    expect(update(previous, next)).toEqual(['fact No longer starts on linux-x64']);
+    expect(update(previous, next, 'zh-CN')).toEqual(['fact 不再在 linux-x64 上启动']);
+  });
+
+  it('shows only the new path when the Entry also gained or changed one', () => {
+    const previous = binary({ 'darwin-arm64': 'bin/tool', 'linux-x64': 'bin/tool-linux' });
+    const next = binary({ 'darwin-arm64': 'bin/tool2' });
+    expect(update(previous, next)).toEqual(['fact New: Starts from bin/tool2 on darwin-arm64']);
   });
 });

@@ -316,11 +316,12 @@ describe('the update prompt (How to verify, step 3)', () => {
     expect(within(dialog).getByText('Writer 1.0.0 → 1.1.0')).toBeDefined();
 
     // Exactly the diff function's `added`, one "New:" line each, and no "Removed:" line.
-    const { added } = diffForReconsent(V1, V2_WIDENED);
+    const diff = diffForReconsent(V1, V2_WIDENED);
     const { t } = translatorFor('en');
     const lines = changeLines(dialog, 'What changed');
+    expect(reconsentChanges(diff).map((change) => change.item)).toEqual(diff.added);
     expect(lines).toEqual(
-      reconsentChanges(added).map((change) => {
+      reconsentChanges(diff).map((change) => {
         const text = t(change.messageKey, change.params);
         return `New: ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
       }),
@@ -394,6 +395,58 @@ describe('the update prompt (How to verify, step 3)', () => {
     expect(within(dialog).getByRole('region', { name: '更新日志' })).toBeDefined();
     expect(within(dialog).getByRole('button', { name: '暂不' })).toBeDefined();
     expect(within(dialog).getByRole('button', { name: '更新' })).toBeDefined();
+  });
+});
+
+describe('the update prompt\'s "What changed" never misleads', () => {
+  /** A binary Harness for darwin-arm64 and linux-x64. */
+  const BINARY_V1: Manifest = {
+    ...V1,
+    runtime: { kind: 'binary' },
+    entry: { 'darwin-arm64': 'bin/writer', 'linux-x64': 'bin/writer-linux' },
+  };
+  /** Drops linux-x64 and its Entry: the Entry changed, nothing was added. */
+  const BINARY_V2_DROPS_LINUX: Manifest = {
+    ...BINARY_V1,
+    version: '1.1.0',
+    platforms: ['darwin-arm64'],
+    entry: { 'darwin-arm64': 'bin/writer' },
+  };
+  /** Turns shell on and narrows the filesystem scope from the Workspace to none. */
+  const V2_SHELL_NARROWED_SCOPE: Manifest = {
+    ...V1,
+    version: '1.1.0',
+    permissions: { ...V1.permissions, filesystem: { scope: 'none' }, shell: true },
+  };
+
+  async function openPrompt(previous: Manifest, next: Manifest, locale: 'en' | 'zh-CN') {
+    await openLibrary([withUpdate(next, { manifest: previous })], locale);
+    const review = locale === 'en' ? 'Review update' : '查看更新';
+    fireEvent.click(within(card('Writer')).getByRole('button', { name: review }));
+    return screen.getByRole('dialog');
+  }
+
+  it.each([
+    ['en', 'What changed', ['No longer starts on linux-x64']],
+    ['zh-CN', '权限变化', ['不再在 linux-x64 上启动']],
+  ] as const)(
+    'explains an Entry that only lost a platform (%s)',
+    async (locale, title, expected) => {
+      expect(diffForReconsent(BINARY_V1, BINARY_V2_DROPS_LINUX)).toMatchObject({
+        required: true,
+        added: [],
+      });
+      const dialog = await openPrompt(BINARY_V1, BINARY_V2_DROPS_LINUX, locale);
+      expect(changeLines(dialog, title)).toEqual(expected);
+    },
+  );
+
+  it.each([
+    ['en', 'What changed', ['New: runs shell commands']],
+    ['zh-CN', '权限变化', ['新增：会执行命令行命令']],
+  ] as const)('shows no narrowed filesystem scope as new (%s)', async (locale, title, expected) => {
+    const dialog = await openPrompt(V1, V2_SHELL_NARROWED_SCOPE, locale);
+    expect(changeLines(dialog, title)).toEqual(expected);
   });
 });
 

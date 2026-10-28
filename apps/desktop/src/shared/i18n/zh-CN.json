@@ -346,6 +346,7 @@
   "update.change.pathsScope": "读写其列出的路径",
   "update.change.entry": "从 {entry} 启动",
   "update.change.platformEntry": "在 {platform} 上从 {entry} 启动",
+  "update.change.entryGone": "不再在 {platform} 上启动",
   "update.changelog": "更新日志",
   "update.noChangelog": "发布者没有为此版本填写更新日志。",
   "update.update": "更新",

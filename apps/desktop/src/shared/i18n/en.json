@@ -346,6 +346,7 @@
   "update.change.pathsScope": "Reads and writes the paths it lists",
   "update.change.entry": "Starts from {entry}",
   "update.change.platformEntry": "Starts from {entry} on {platform}",
+  "update.change.entryGone": "No longer starts on {platform}",
   "update.changelog": "Changelog",
   "update.noChangelog": "The Publisher wrote no changelog for this version.",
   "update.update": "Update",

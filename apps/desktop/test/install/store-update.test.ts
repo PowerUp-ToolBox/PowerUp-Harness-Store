@@ -57,7 +57,7 @@ const NOW = '2026-10-28T09:00:00.000Z';
 const TERM = 'acme/fixture-term';
 
 /** One Harness Version the fake Store has. */
-interface Release {
+interface Published {
   readonly zip: Uint8Array;
   readonly manifest: Record<string, unknown>;
   /** The SHA-256 `download` reports; default: the zip's. */
@@ -67,7 +67,7 @@ interface Release {
 let server: Server;
 let baseUrl: string;
 /** Every version the Store has of each Harness, the latest last. */
-let releases: Map<string, Release[]>;
+let published: Map<string, Published[]>;
 let downloadCalls: Record<string, unknown>[];
 let latestCalls: string[][];
 /** When set, the signed URL sends the first 64 bytes and then nothing. */
@@ -109,7 +109,7 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
       response,
       200,
       ids.map((id) => {
-        const latest = releases.get(id)?.at(-1);
+        const latest = published.get(id)?.at(-1);
         return latest === undefined
           ? { harness_id: id, store_status: 'not_found', latest_version: null, manifest: null }
           : {
@@ -125,21 +125,21 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
   if (request.method === 'POST' && url.pathname === '/functions/v1/download') {
     const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
     downloadCalls.push(body);
-    const versions = releases.get(String(body.harness_id)) ?? [];
-    const release =
+    const versions = published.get(String(body.harness_id)) ?? [];
+    const found =
       body.version === null
         ? versions.at(-1)
         : versions.find((each) => each.manifest.version === body.version);
-    if (release === undefined) {
+    if (found === undefined) {
       json(response, 404, { error: { code: 'not_found', message: 'No such version.' } });
       return;
     }
-    const version = String(release.manifest.version);
+    const version = String(found.manifest.version);
     json(response, 200, {
       url: `${baseUrl}/storage/v1/object/sign/harness-packages/${String(body.harness_id)}/${version}.zip?token=signed`,
-      sha256: release.sha256 ?? sha256(release.zip),
-      size: release.zip.length,
-      manifest: release.manifest,
+      sha256: found.sha256 ?? sha256(found.zip),
+      size: found.zip.length,
+      manifest: found.manifest,
     });
     return;
   }
@@ -147,20 +147,20 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
     url.pathname,
   );
   if (request.method === 'GET' && signed !== null) {
-    const release = releases
+    const found = published
       .get(signed[1] ?? '')
       ?.find((each) => each.manifest.version === signed[2]);
-    if (release === undefined) {
+    if (found === undefined) {
       json(response, 400, { error: 'InvalidJWT', message: 'jwt expired' });
       return;
     }
     if (beforePackage !== null) await beforePackage();
     response.writeHead(200, { 'content-type': 'application/zip' });
     if (stallPackage) {
-      response.write(release.zip.subarray(0, 64));
+      response.write(found.zip.subarray(0, 64));
       return; // Never ends: the client cancels, or the server closes it.
     }
-    response.end(release.zip);
+    response.end(found.zip);
     return;
   }
   json(response, 404, { error: { code: 'not_found', message: 'No route.' } });
@@ -192,7 +192,7 @@ const V1_PERMISSIONS = {
  * Publishes `fixture-term` at `version` in the fake Store, its Manifest changed by `changes` (with
  * {@link V1_PERMISSIONS} unless they say otherwise), its files plus `extra`.
  */
-function release(
+function publish(
   version: string,
   changes: Record<string, unknown> = {},
   options: { extra?: Zippable; sha256?: string } = {},
@@ -212,8 +212,8 @@ function release(
     ...options.extra,
     'manifest.json': new TextEncoder().encode(JSON.stringify(manifest, null, 2)),
   });
-  const versions = releases.get(TERM) ?? [];
-  releases.set(TERM, [
+  const versions = published.get(TERM) ?? [];
+  published.set(TERM, [
     ...versions,
     { zip, manifest, ...(options.sha256 === undefined ? {} : { sha256: options.sha256 }) },
   ]);
@@ -256,7 +256,7 @@ function createFakeWindows() {
 }
 
 beforeEach(async () => {
-  releases = new Map();
+  published = new Map();
   downloadCalls = [];
   latestCalls = [];
   stallPackage = false;
@@ -419,13 +419,13 @@ async function launchAndWait(): Promise<string> {
 
 describe('the update check (acceptance: a newer version shows as an update)', () => {
   it('stores a newer version of a Store install and reports it, asking about no local install', async () => {
-    release('1.0.0');
+    publish('1.0.0');
     await installFromStore();
     // A local install of another Harness: never asked about.
     await expect(
       call('installs.installFromFolder', join(FIXTURES, 'fixture-web')),
     ).resolves.toMatchObject({ ok: true });
-    release('1.1.0');
+    publish('1.1.0');
     events = [];
 
     await runtime.updates.check();
@@ -441,11 +441,11 @@ describe('the update check (acceptance: a newer version shows as an update)', ()
 
 describe('installs.update (How to verify, step 2)', () => {
   it('a v2 that only narrows a permission updates in one call, without re-consent', async () => {
-    release('1.0.0');
+    publish('1.0.0');
     await installFromStore();
     const dataDirectory = seedDataDirectory();
     const before = dataDirectory();
-    release('1.1.0', {
+    publish('1.1.0', {
       permissions: { ...V1_PERMISSIONS, network: { domains: ['api.github.com'] } },
     });
     await runtime.updates.check();
@@ -493,9 +493,9 @@ describe('installs.update (How to verify, step 2)', () => {
   });
 
   it('a v2 that turns shell on is refused without re-consent, then goes through with it', async () => {
-    release('1.0.0');
+    publish('1.0.0');
     await installFromStore();
-    release('1.1.0', { permissions: { ...V1_PERMISSIONS, shell: true } });
+    publish('1.1.0', { permissions: { ...V1_PERMISSIONS, shell: true } });
 
     await expect(update('1.1.0', false)).resolves.toMatchObject({
       ok: false,
@@ -511,10 +511,10 @@ describe('installs.update (How to verify, step 2)', () => {
   });
 
   it('a v2 whose Entry changed needs re-consent, with permissions unchanged', async () => {
-    release('1.0.0');
+    publish('1.0.0');
     await installFromStore();
     const entry = fixtureFiles()['index.mjs'] ?? new Uint8Array();
-    release('1.1.0', { entry: 'main.mjs' }, { extra: { 'main.mjs': entry } });
+    publish('1.1.0', { entry: 'main.mjs' }, { extra: { 'main.mjs': entry } });
 
     await expect(update('1.1.0', false)).resolves.toMatchObject({
       ok: false,
@@ -524,11 +524,11 @@ describe('installs.update (How to verify, step 2)', () => {
   });
 
   it('a corrupted v2 (its SHA-256 misreported) leaves v1 installed and launchable', async () => {
-    release('1.0.0');
+    publish('1.0.0');
     await installFromStore();
     const dataDirectory = seedDataDirectory();
     const before = dataDirectory();
-    release('1.1.0', {}, { sha256: 'a'.repeat(64) });
+    publish('1.1.0', {}, { sha256: 'a'.repeat(64) });
 
     await expect(update('1.1.0', false)).resolves.toMatchObject({
       ok: false,
@@ -540,9 +540,9 @@ describe('installs.update (How to verify, step 2)', () => {
   });
 
   it('Cancel during the download leaves v1 installed', async () => {
-    release('1.0.0');
+    publish('1.0.0');
     await installFromStore();
-    release('1.1.0');
+    publish('1.1.0');
     stallPackage = true;
 
     const updating = update('1.1.0', false);
@@ -563,7 +563,7 @@ describe('installs.update (How to verify, step 2)', () => {
   });
 
   it('refuses a version that is not newer, and a Harness that is not a Store install', async () => {
-    release('1.0.0');
+    publish('1.0.0');
     await installFromStore();
     for (const version of ['1.0.0', '0.9.0', 'not-a-version']) {
       await expect(update(version, true)).resolves.toMatchObject({
@@ -575,7 +575,7 @@ describe('installs.update (How to verify, step 2)', () => {
     await expect(
       call('installs.installFromFolder', join(FIXTURES, 'fixture-term')),
     ).resolves.toMatchObject({ ok: true });
-    release('1.1.0');
+    publish('1.1.0');
     await expect(update('1.1.0', true)).resolves.toMatchObject({
       ok: false,
       error: { code: 'invalid_input' },
@@ -594,10 +594,10 @@ describe('installs.update (How to verify, step 2)', () => {
 
 describe('a running Harness (How to verify, step 4)', () => {
   it('is not updated: Update is refused with a message, and nothing is downloaded', async () => {
-    release('1.0.0');
+    publish('1.0.0');
     await installFromStore();
     const launchId = await launchAndWait();
-    release('1.1.0');
+    publish('1.1.0');
     await runtime.updates.check();
     await expect(listed()).resolves.toMatchObject({ availableUpdate: { version: '1.1.0' } });
 
@@ -619,9 +619,9 @@ describe('a running Harness (How to verify, step 4)', () => {
   });
 
   it('a launch that starts during the download stops the update before the swap', async () => {
-    release('1.0.0');
+    publish('1.0.0');
     await installFromStore();
-    release('1.1.0');
+    publish('1.1.0');
     // The launch begins after Update was accepted and before the package arrives.
     beforePackage = launchAndWait;
 

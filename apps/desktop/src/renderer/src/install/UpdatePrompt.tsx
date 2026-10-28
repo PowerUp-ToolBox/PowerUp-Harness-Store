@@ -23,10 +23,12 @@ export interface UpdatePromptProps {
  * The update prompt when re-consent is required (docs/ux/screens.md, "Update prompt"; flows F4
  * step 2): an update that widens the Declared Permissions or changes the Entry or the runtime kind
  * (`diffForReconsent`) asks for the User's consent again, before anything is downloaded. It shows
- * the versions from and to, "What changed" (one "New:" line per item the diff lists as added, in
- * the permission list's words; what was removed is not listed), the version's changelog, and the
- * trust block of the new version with the standing no-sandbox sentence. Update is enabled one
- * second after it opens, as the install consent dialog's Install is; Not now and Escape close it.
+ * the versions from and to, "What changed" (`reconsentChanges`: one "New:" line per permission
+ * the version adds or widens and per Entry or runtime change, in the permission list's words; what
+ * was removed or narrowed is not listed, except a platform's lost Entry when nothing else explains
+ * the re-consent), the version's changelog, and the trust block of the new version with the
+ * standing no-sandbox sentence. Update is enabled one second after it opens, as the install
+ * consent dialog's Install is; Not now and Escape close it.
  *
  * An update that needs no consent again has no prompt: Update downloads and installs it at once.
  */
@@ -45,7 +47,7 @@ export function UpdatePrompt({ install, target, onUpdate, onClose }: UpdatePromp
     };
   }, []);
 
-  const changes = reconsentChanges(diffForReconsent(install.manifest, target).added);
+  const changes = reconsentChanges(diffForReconsent(install.manifest, target));
   /** "New: runs shell commands": in English the sentence continues the prefix. */
   const continued = (text: string) =>
     locale === 'en' ? `${text.charAt(0).toLowerCase()}${text.slice(1)}` : text;
@@ -66,7 +68,9 @@ export function UpdatePrompt({ install, target, onUpdate, onClose }: UpdatePromp
               className="update-change"
               data-severity={change.severity ?? 'fact'}
             >
-              {t('update.new', { change: continued(t(change.messageKey, change.params)) })}
+              {change.markedNew
+                ? t('update.new', { change: continued(t(change.messageKey, change.params)) })
+                : t(change.messageKey, change.params)}
             </li>
           ))}
         </ul>

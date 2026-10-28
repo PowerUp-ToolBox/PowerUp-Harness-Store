@@ -11,7 +11,7 @@
 export { validateManifest } from './validate-manifest.js';
 export { validatePackage } from './validate-package.js';
 export type { ValidatePackageOptions } from './validate-package.js';
-export { diffForReconsent } from './reconsent.js';
+export { diffForReconsent, SCOPE_LADDER } from './reconsent.js';
 export type { ReconsentDiff, ReconsentReason } from './reconsent.js';
 export { ArchiveSource } from './archive-source.js';
 export type { RandomAccessReader } from './archive-source.js';
