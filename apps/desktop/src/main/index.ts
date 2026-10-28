@@ -55,7 +55,15 @@ if (!app.requestSingleInstanceLock()) {
         app.quit();
       });
   });
-  void app.whenReady().then(start);
+  // startRuntime never rejects, so this is the last resort for a bug in the glue below: quit
+  // rather than stay running without a window while holding the single-instance lock.
+  void app
+    .whenReady()
+    .then(start)
+    .catch((error: unknown) => {
+      console.error('The app could not start', error);
+      app.quit();
+    });
 }
 
 /**

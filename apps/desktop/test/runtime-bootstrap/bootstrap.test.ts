@@ -89,6 +89,29 @@ function tables(path: string): string[] {
   }
 }
 
+const USAGE_RECORD: UsageRecord = {
+  timestamp: '2026-10-27T09:30:00.000Z',
+  harnessId: 'acme/code-reviewer',
+  harnessVersion: '1.2.0',
+  slot: 'default',
+  provider: 'ollama',
+  model: 'llama3.2',
+  promptTokens: 10,
+  completionTokens: 20,
+  durationMs: 42,
+  status: 'ok',
+};
+
+/** The rows of usage_records in the Runtime's database, read after it has shut down. */
+function usageRows(runtime: Runtime): unknown[] {
+  const db = new DatabaseSync(runtime.services.diagnostics.get().databasePath, { readOnly: true });
+  try {
+    return db.prepare('SELECT harness_id, provider, model, status FROM usage_records').all();
+  } finally {
+    db.close();
+  }
+}
+
 /** A Model Gateway factory whose `listen` rejects as a port that cannot be bound would. */
 function failingToBind(): (options: GatewayOptions) => Gateway {
   return (options) => {
@@ -162,13 +185,20 @@ describe('Runtime.shutdown', () => {
   });
 
   it('is idempotent and stops saving the window state once it began', async () => {
-    const runtime = await launch();
-    const shutdown = runtime.shutdown();
-    expect(runtime.shutdown()).toBe(shutdown);
-    expect(() => {
-      runtime.windowState.save({ x: 0, y: 0, width: 1000, height: 700, isMaximized: false });
-    }).not.toThrow();
+    const first = await launch();
+    const saved = { x: 10, y: 20, width: 1000, height: 700, isMaximized: false };
+    first.windowState.save(saved);
+    const shutdown = first.shutdown();
+    expect(first.shutdown()).toBe(shutdown);
+    // While the Gateway stops (the database is still open) and after the database has closed.
+    first.windowState.save({ x: 1, y: 2, width: 1100, height: 800, isMaximized: true });
     await shutdown;
+    expect(() => {
+      first.windowState.save({ x: 3, y: 4, width: 1200, height: 900, isMaximized: true });
+    }).not.toThrow();
+
+    const second = await launch();
+    expect(second.windowState.read()).toEqual(saved);
   });
 
   it('writes the Usage Records the Model Gateway hands over into usage_records', async () => {
@@ -179,30 +209,32 @@ describe('Runtime.shutdown', () => {
         return createGateway(options);
       },
     });
-    const record: UsageRecord = {
-      timestamp: '2026-10-27T09:30:00.000Z',
-      harnessId: 'acme/code-reviewer',
-      harnessVersion: '1.2.0',
-      slot: 'default',
-      provider: 'ollama',
-      model: 'llama3.2',
-      promptTokens: 10,
-      completionTokens: 20,
-      durationMs: 42,
-      status: 'ok',
-    };
-    await onUsage?.(record);
+    await onUsage?.(USAGE_RECORD);
     await runtime.shutdown();
-    const db = new DatabaseSync(runtime.services.diagnostics.get().databasePath);
-    try {
-      expect(
-        db.prepare('SELECT harness_id, provider, model, status FROM usage_records').all(),
-      ).toEqual([
-        { harness_id: 'acme/code-reviewer', provider: 'ollama', model: 'llama3.2', status: 'ok' },
-      ]);
-    } finally {
-      db.close();
-    }
+    expect(usageRows(runtime)).toEqual([
+      { harness_id: 'acme/code-reviewer', provider: 'ollama', model: 'llama3.2', status: 'ok' },
+    ]);
+  });
+
+  it('stops the Model Gateway before closing the database, so its last Usage Records are kept', async () => {
+    const runtime = await launch({
+      createGateway: (options) => {
+        const gateway = createGateway(options);
+        const close = gateway.close.bind(gateway);
+        // A request ended by close() hands over its Usage Record on a later turn, as the
+        // Gateway's deferred delivery does; close() resolves only once it is through onUsage.
+        gateway.close = async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          await options.onUsage(USAGE_RECORD);
+          return close();
+        };
+        return gateway;
+      },
+    });
+    await runtime.shutdown();
+    expect(usageRows(runtime)).toEqual([
+      { harness_id: 'acme/code-reviewer', provider: 'ollama', model: 'llama3.2', status: 'ok' },
+    ]);
   });
 });
 
@@ -261,6 +293,30 @@ describe('startup failures', () => {
     await expect(call(runtime, 'settings.get')).resolves.toEqual({
       ok: true,
       data: { resolvedLocale: 'zh-CN' },
+    });
+    expect(runtime.windowState.read()).toBeNull();
+  });
+
+  it('reports a current schema version with unexpected tables as a failed database step', async () => {
+    // A file whose user_version says every migration ran, but without their tables (a tampered
+    // file, or one left by a pre-release build): no migration runs, so opening it succeeds.
+    mkdirSync(dataDir, { recursive: true });
+    const path = join(dataDir, 'harness-store.sqlite');
+    const db = new DatabaseSync(path);
+    db.exec(`PRAGMA user_version = ${String(MIGRATIONS.length)}`);
+    db.close();
+    const createGatewaySpy = vi.fn(createGateway);
+
+    const runtime = await launch({ createGateway: createGatewaySpy });
+    expect(runtime.status).toMatchObject({
+      state: 'failed',
+      stage: 'database',
+      detail: expect.stringContaining('no such table') as string,
+    });
+    expect(createGatewaySpy).not.toHaveBeenCalled();
+    await expect(call(runtime, 'settings.get')).resolves.toEqual({
+      ok: true,
+      data: { resolvedLocale: 'en' },
     });
     expect(runtime.windowState.read()).toBeNull();
   });

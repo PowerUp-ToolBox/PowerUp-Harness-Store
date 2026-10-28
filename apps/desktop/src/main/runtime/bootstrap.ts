@@ -11,7 +11,7 @@ import {
   createSqliteSettingsStore,
   type SettingsStore,
 } from './settings-store.js';
-import { createUsageRecordStore } from './usage-records.js';
+import { createUsageRecordStore, type UsageRecordStore } from './usage-records.js';
 import { parseWindowState, type WindowState } from './window-state.js';
 
 export interface RuntimeOptions {
@@ -66,19 +66,26 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     return { state: 'failed', stage, detail: describeError(error) };
   };
 
+  // The stores prepare their statements here too: a database whose schema version is current but
+  // whose tables are not what this build expects (a tampered or pre-release file) fails this step
+  // instead of rejecting startRuntime later.
   let db: DatabaseSync | null = null;
+  let sqlite: { settings: SettingsStore; usageRecords: UsageRecordStore } | null = null;
   try {
     mkdirSync(options.dataDir, { recursive: true });
     db = openDatabase(databasePath);
+    sqlite = { settings: createSqliteSettingsStore(db), usageRecords: createUsageRecordStore(db) };
   } catch (error) {
+    db?.close();
+    db = null;
     status = failed('database', error);
   }
 
   let gateway: Gateway | null = null;
   /** The Model Gateway's port while it listens; null before, after a failed start and on shutdown. */
   let gatewayPort: number | null = null;
-  if (db !== null) {
-    const usageRecords = createUsageRecordStore(db);
+  if (sqlite !== null) {
+    const { usageRecords } = sqlite;
     // Slot Bindings, Connections and installed Manifests arrive with P0-03 and P0-10; until then
     // nothing resolves, so a Harness request ends in slot_unbound or provider_not_connected.
     gateway = (options.createGateway ?? createGateway)({
@@ -97,8 +104,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     }
   }
 
-  const store: SettingsStore =
-    db === null ? createMemorySettingsStore() : createSqliteSettingsStore(db);
+  const store = sqlite?.settings ?? createMemorySettingsStore();
   let stopping = false;
   let stopped: Promise<void> | undefined;
   const startupStatus = status;
@@ -117,7 +123,15 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       },
     },
     windowState: {
-      read: () => parseWindowState(store.read('window_state')),
+      read() {
+        try {
+          return parseWindowState(store.read('window_state'));
+        } catch (error) {
+          // The window opens at its default size rather than not at all.
+          logError('Could not read the window state', error);
+          return null;
+        }
+      },
       save(state) {
         if (!stopping) store.write('window_state', state);
       },
