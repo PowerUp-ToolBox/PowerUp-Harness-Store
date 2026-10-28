@@ -11,6 +11,16 @@ type MineState =
   | { readonly kind: 'error'; readonly error: IpcError }
   | { readonly kind: 'listed'; readonly harnesses: readonly OwnHarness[] };
 
+/**
+ * Refusals that mean the list on screen is out of date (the Harness or version was taken down,
+ * is gone, or is no longer this Publisher's), so the list is read again behind the dialog.
+ */
+const STALE_LIST_CODES: ReadonlySet<IpcError['code']> = new Set([
+  'harness_taken_down',
+  'not_found',
+  'forbidden',
+]);
+
 /** The version the Unpublish dialog is open for. */
 interface Unpublishing {
   readonly harness: OwnHarness;
@@ -27,8 +37,9 @@ interface Unpublishing {
  *
  * A published version of a Harness that is not taken down can be Unpublished, after a
  * confirmation (./UnpublishDialog.tsx); the list then says so and is read again, which shows the
- * version's new status and the Harness's new current version. Unpublish needs the Store: offline
- * it is off, with the reason.
+ * version's new status and the Harness's new current version. A refusal that shows the list is
+ * out of date (a Takedown since it was read, say) reads it again too, so the stale row loses its
+ * Unpublish. Unpublish needs the Store: offline it is off, with the reason.
  */
 export function MyHarnesses() {
   const { t } = useI18n();
@@ -127,6 +138,9 @@ export function MyHarnesses() {
           }}
           onUnpublished={(result) => {
             unpublished(unpublishing.harness, result);
+          }}
+          onRefused={(error) => {
+            if (STALE_LIST_CODES.has(error.code)) void load();
           }}
         />
       )}

@@ -425,7 +425,7 @@
   "error.invalid_manifest": "The Store found problems in this Harness Package.",
   "error.package_too_large": "This Harness Package, or its icon, is larger than the Store accepts.",
   "error.rate_limited": "You published too many versions in the last 24 hours. Try again later.",
-  "error.harness_taken_down": "This Harness was taken down from the Store, so it cannot be changed.",
+  "error.harness_taken_down": "A Store administrator took this Harness or version down, so it cannot be changed.",
   "error.forbidden": "The Store refused this: the Harness belongs to another Publisher.",
   "error.not_found": "The Store has no such Harness or version.",
   "error.upload_cancelled": "The upload was cancelled. Nothing was published.",

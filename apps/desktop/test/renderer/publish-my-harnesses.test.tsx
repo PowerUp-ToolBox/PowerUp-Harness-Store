@@ -111,7 +111,8 @@ describe('My Harnesses', () => {
     expect(within(rowOf('Hello Web', '1.2.0')).getByText('1,200')).toBeDefined();
     const unpublished = rowOf('Hello Web', '1.1.0');
     expect(within(unpublished).getByText('Unpublished')).toBeDefined();
-    expect(within(unpublished).getByText('Unpublished on Oct 6, 2026')).toBeDefined();
+    // The date is local time, so it is Oct 5 to Oct 7 across UTC-12 to UTC+14.
+    expect(within(unpublished).getByText(/^Unpublished on Oct [5-7], 2026$/)).toBeDefined();
     const takenDown = rowOf('Hello Web', '2.0.0');
     expect(within(takenDown).getByText('Taken down')).toBeDefined();
     expect(within(takenDown).getByText(`Administrator's note: ${NOTE}`)).toBeDefined();
@@ -219,16 +220,67 @@ describe('My Harnesses', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it("shows the Store's refusal in the dialog, translated", async () => {
+  it("shows the Store's refusal in the dialog, translated, and reads the stale list again", async () => {
     const api = signedIn();
     api.publish.unpublish.mockResolvedValue(failure('harness_taken_down'));
     await openMine();
+    // An administrator took 1.0.0 down after the list was read; the Harness stays available.
+    api.publish.myHarnesses.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          ...HELLO_WEB,
+          versions: HELLO_WEB.versions.map((row) =>
+            row.version === '1.0.0' ? { ...row, status: 'taken_down', takedownNote: NOTE } : row,
+          ),
+        },
+        HELLO_TERM,
+      ],
+    });
     fireEvent.click(within(rowOf('Hello Web', '1.0.0')).getByRole('button'));
     const dialog = screen.getByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Unpublish' }));
     expect((await within(dialog).findByRole('alert')).textContent).toBe(
-      'This Harness was taken down from the Store, so it cannot be changed.',
+      'A Store administrator took this Harness or version down, so it cannot be changed.',
     );
+    await waitFor(() => {
+      expect(api.publish.myHarnesses).toHaveBeenCalledTimes(2);
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    const row = rowOf('Hello Web', '1.0.0');
+    await waitFor(() => {
+      expect(within(row).getByText('Taken down')).toBeDefined();
+    });
+    expect(within(row).queryByRole('button')).toBeNull();
+    expect(screen.getByText('Current version in the Store: 1.2.0')).toBeDefined();
+  });
+
+  it.each(['not_found', 'forbidden'] as const)(
+    'reads the list again after a %s refusal',
+    async (code) => {
+      const api = signedIn();
+      api.publish.unpublish.mockResolvedValue(failure(code));
+      await openMine();
+      fireEvent.click(within(rowOf('Hello Web', '1.0.0')).getByRole('button'));
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Unpublish' }));
+      await within(dialog).findByRole('alert');
+      await waitFor(() => {
+        expect(api.publish.myHarnesses).toHaveBeenCalledTimes(2);
+      });
+    },
+  );
+
+  it('does not read the list again when the Store could not be reached', async () => {
+    const api = signedIn();
+    api.publish.unpublish.mockResolvedValue(failure('store_unreachable'));
+    await openMine();
+    fireEvent.click(within(rowOf('Hello Web', '1.0.0')).getByRole('button'));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unpublish' }));
+    await within(dialog).findByRole('alert');
+    expect(api.publish.myHarnesses).toHaveBeenCalledOnce();
   });
 
   it('offline: Unpublish is off, with the reason', async () => {

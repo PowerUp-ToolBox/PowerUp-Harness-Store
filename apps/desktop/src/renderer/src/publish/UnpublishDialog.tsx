@@ -12,6 +12,8 @@ export interface UnpublishDialogProps {
   readonly version: string;
   readonly onClose: () => void;
   readonly onUnpublished: (result: UnpublishedVersion) => void;
+  /** The Store refused the Unpublish; the dialog stays open and shows why. */
+  readonly onRefused?: (error: IpcError) => void;
 }
 
 /**
@@ -27,6 +29,7 @@ export function UnpublishDialog({
   version,
   onClose,
   onUnpublished,
+  onRefused,
 }: UnpublishDialogProps) {
   const { t } = useI18n();
   const offline = useConnectivity().state === 'offline';
@@ -44,7 +47,10 @@ export function UnpublishDialog({
     sending.current = false;
     setWorking(false);
     if (result.ok) onUnpublished(result.data);
-    else setError(result.error);
+    else {
+      setError(result.error);
+      onRefused?.(result.error);
+    }
   };
 
   return (

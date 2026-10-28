@@ -425,7 +425,7 @@
   "error.invalid_manifest": "商店在此 Harness Package 中发现了问题。",
   "error.package_too_large": "此 Harness Package 或其图标超出了商店允许的大小。",
   "error.rate_limited": "你在过去 24 小时内发布的版本过多，请稍后再试。",
-  "error.harness_taken_down": "此 Harness 已被商店下架，无法再更改。",
+  "error.harness_taken_down": "此 Harness 或此版本已被商店管理员下架，无法再更改。",
   "error.forbidden": "商店拒绝了此操作：该 Harness 属于其他发布者。",
   "error.not_found": "商店中没有这个 Harness 或版本。",
   "error.upload_cancelled": "已取消上传，没有发布任何内容。",
