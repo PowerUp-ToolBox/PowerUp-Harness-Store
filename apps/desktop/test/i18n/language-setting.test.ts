@@ -49,6 +49,10 @@ function launch(osLocale: string) {
     diagnostics: {
       get: () => ({ version: '1.0.0', gateway: { running: false }, databasePath: path }),
     },
+    connectivity: {
+      get: () => ({ state: 'online' }),
+      check: () => Promise.resolve({ state: 'online' }),
+    },
   };
   const dispatch = createDispatcher({
     handlers: createHandlers(services),

@@ -41,6 +41,8 @@ async function launch(options: Partial<RuntimeOptions> = {}): Promise<Runtime> {
     osLocale: () => 'en-US',
     quit: () => undefined,
     logError: () => undefined,
+    // No network in these tests: the Store connectivity check sees a refused connection.
+    fetch: () => Promise.reject(new TypeError('fetch failed')),
     ...options,
   });
   started.push(runtime);

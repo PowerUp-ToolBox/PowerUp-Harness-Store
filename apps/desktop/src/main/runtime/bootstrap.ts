@@ -2,7 +2,13 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { createGateway, type Gateway, type GatewayOptions } from '@harness-store/gateway';
-import type { StartupStage, StartupStatus } from '../../shared/ipc.js';
+import type { IpcEventName, IpcEvents, StartupStage, StartupStatus } from '../../shared/ipc.js';
+import {
+  createConnectivityService,
+  storeBaseUrlFrom,
+  type ConnectivityService,
+  type FetchLike,
+} from './connectivity.js';
 import { DATABASE_FILE_NAME, openDatabase } from './database.js';
 import type { Services } from './services.js';
 import { createSettingsService } from './settings.js';
@@ -23,6 +29,10 @@ export interface RuntimeOptions {
   readonly osLocale: () => string;
   /** Quits the app (Electron's `app.quit()`), which shuts the Runtime down first. */
   readonly quit: () => void;
+  /** Makes the Store connectivity checks (Electron's `net.fetch`, so system proxies apply). */
+  readonly fetch: FetchLike;
+  /** Pushes an event to the main window; dropped while there is none. */
+  readonly emit?: <E extends IpcEventName>(event: E, payload: IpcEvents[E]) => void;
   /** Creates the Model Gateway; tests wrap the real one to make `listen` fail. */
   readonly createGateway?: (options: GatewayOptions) => Gateway;
   /** Reports startup and shutdown failures. Default: `console.error`. */
@@ -33,6 +43,8 @@ export interface RuntimeOptions {
 export interface Runtime {
   readonly status: StartupStatus;
   readonly services: Services;
+  /** Whether the Store is reachable; the Store client (P0-09) reports failed requests to it. */
+  readonly connectivity: ConnectivityService;
   /** The main window's geometry, kept in the `window_state` setting. */
   readonly windowState: {
     read(): WindowState | null;
@@ -40,8 +52,9 @@ export interface Runtime {
     save(state: WindowState): void;
   };
   /**
-   * Stops the Model Gateway (it stops listening and hands over its last Usage Records), then
-   * closes the database. Idempotent: later calls return the first call's promise.
+   * Stops the Store connectivity checks and the Model Gateway (it stops listening and hands over
+   * its last Usage Records), then closes the database. Idempotent: later calls return the first
+   * call's promise.
    */
   shutdown(): Promise<void>;
 }
@@ -51,7 +64,8 @@ export interface Runtime {
  * the migrations on first run), then start the Model Gateway on `127.0.0.1` with a port the OS
  * picks, so it never collides with anything the User runs. Never rejects: a failed step ends the
  * startup and is reported in `status`, so the window can show an error screen instead of a broken
- * UI. Without the database, settings live in memory and the UI follows the OS locale.
+ * UI. Without the database, settings live in memory and the UI follows the OS locale. Once both
+ * steps succeeded, the first Store connectivity check starts; it is not awaited.
  */
 export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   const logError =
@@ -109,8 +123,17 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   let stopped: Promise<void> | undefined;
   const startupStatus = status;
 
+  const connectivity = createConnectivityService({
+    fetch: options.fetch,
+    storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
+    onChange: (state) => options.emit?.('connectivity.changed', state),
+  });
+  // A Runtime that failed to start shows only its error screen, which needs no Store.
+  if (startupStatus.state === 'ready') void connectivity.check();
+
   return {
     status: startupStatus,
+    connectivity,
     services: {
       app: { version: options.version, status: () => startupStatus, quit: options.quit },
       settings: createSettingsService(store, options.osLocale),
@@ -121,6 +144,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           databasePath,
         }),
       },
+      connectivity,
     },
     windowState: {
       read() {
@@ -139,6 +163,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     shutdown() {
       stopped ??= (async () => {
         stopping = true;
+        connectivity.stop();
         gatewayPort = null;
         try {
           await gateway?.close();

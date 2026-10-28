@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router';
+import { StoreGate } from './connectivity/StoreGate.js';
 import { HarnessDetailPage } from './pages/HarnessDetailPage.js';
 import { LibraryPage } from './pages/LibraryPage.js';
 import { ModelsPage } from './pages/ModelsPage.js';
@@ -13,7 +14,8 @@ import { Shell } from './shell/Shell.js';
 /**
  * The route table. Routes live in the URL hash (`#/store`), so the renderer is one page that never
  * navigates. A Harness ID contains a slash (`publisher/slug`), so the detail route is a splat.
- * The first-run wizard fills the window without the sidebar.
+ * The first-run wizard fills the window without the sidebar. Store routes show the offline panel
+ * instead of their screen while the Store is unreachable.
  */
 export function App() {
   return (
@@ -21,9 +23,11 @@ export function App() {
       <Route path="/onboarding" element={<OnboardingPage />} />
       <Route element={<Shell />}>
         <Route path="/library" element={<LibraryPage />} />
-        <Route path="/store" element={<StorePage />} />
-        <Route path="/store/h/*" element={<HarnessDetailPage />} />
-        <Route path="/store/p/:login" element={<PublisherPage />} />
+        <Route element={<StoreGate />}>
+          <Route path="/store" element={<StorePage />} />
+          <Route path="/store/h/*" element={<HarnessDetailPage />} />
+          <Route path="/store/p/:login" element={<PublisherPage />} />
+        </Route>
         <Route path="/models" element={<ModelsPage />} />
         <Route path="/publish" element={<PublishPage />} />
         <Route path="/usage" element={<UsagePage />} />

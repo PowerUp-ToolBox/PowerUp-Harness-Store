@@ -1,10 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 /**
- * The keys of the SQLite `settings` table the Runtime uses (snake_case, data-model.md). Later
- * tickets add `onboarding_done` and `store_base_url`.
+ * The keys of the SQLite `settings` table the Runtime uses (snake_case, data-model.md).
+ * `store_base_url` has no UI until P0-11. A later ticket adds `onboarding_done`.
  */
-export type SettingKey = 'locale' | 'window_state';
+export type SettingKey = 'locale' | 'store_base_url' | 'window_state';
 
 /** Key/value storage for app settings; values are anything JSON can hold. */
 export interface SettingsStore {

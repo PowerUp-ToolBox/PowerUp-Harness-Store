@@ -5,8 +5,15 @@ import type { IpcRequest } from '../src/shared/ipc.js';
 describe('buildApi (window.api)', () => {
   it('exposes one function per method, nested by domain, plus on()', () => {
     const api = buildApi(vi.fn<Invoke>(), vi.fn<Listen>());
-    expect(Object.keys(api).sort()).toEqual(['app', 'diagnostics', 'on', 'settings']);
+    expect(Object.keys(api).sort()).toEqual([
+      'app',
+      'connectivity',
+      'diagnostics',
+      'on',
+      'settings',
+    ]);
     expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit']);
+    expect(Object.keys(api.connectivity)).toEqual(['get', 'check']);
     expect(Object.keys(api.diagnostics)).toEqual(['get']);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
     expect(Object.isFrozen(api)).toBe(true);
@@ -33,6 +40,14 @@ describe('buildApi (window.api)', () => {
     expect(listen).toHaveBeenCalledWith('progress:job-1', listener);
     off();
     expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it('subscribes to connectivity.changed', () => {
+    const listen = vi.fn<Listen>(() => () => undefined);
+    const api = buildApi(vi.fn<Invoke>(), listen);
+    const listener = vi.fn();
+    api.on('connectivity.changed', listener);
+    expect(listen).toHaveBeenCalledWith('connectivity.changed', listener);
   });
 
   it('refuses an event name outside the contract', () => {

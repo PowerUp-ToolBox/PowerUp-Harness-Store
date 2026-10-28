@@ -1,4 +1,5 @@
 import type { Diagnostics, StartupStatus } from '../../shared/ipc.js';
+import type { ConnectivityService } from './connectivity.js';
 import type { SettingsService } from './settings.js';
 
 /**
@@ -19,4 +20,6 @@ export interface Services {
   readonly diagnostics: {
     readonly get: () => Diagnostics;
   };
+  /** Whether the Store is reachable. */
+  readonly connectivity: Pick<ConnectivityService, 'get' | 'check'>;
 }

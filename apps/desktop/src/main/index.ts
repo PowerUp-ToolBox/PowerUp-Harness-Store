@@ -4,8 +4,8 @@
  * unit-tested under plain Node.
  */
 import { join, resolve } from 'node:path';
-import { app, BrowserWindow, ipcMain, screen, session, shell } from 'electron';
-import { IPC_INVOKE_CHANNEL } from '../shared/ipc.js';
+import { app, BrowserWindow, ipcMain, net, screen, session, shell } from 'electron';
+import { IPC_EVENT_CHANNEL, IPC_INVOKE_CHANNEL, type IpcEventMessage } from '../shared/ipc.js';
 import { startRuntime, type Runtime } from './runtime/bootstrap.js';
 import { createDispatcher } from './runtime/dispatcher.js';
 import { createHandlers } from './runtime/handlers.js';
@@ -79,6 +79,13 @@ async function start(): Promise<void> {
     osLocale: () => app.getLocale(),
     quit: () => {
       app.quit();
+    },
+    // net.fetch goes through Chromium's network stack, so the OS proxy settings apply.
+    fetch: (url, init) => net.fetch(url, init),
+    emit: (event, payload) => {
+      if (mainWindow === null || mainWindow.isDestroyed()) return;
+      const message: IpcEventMessage = { event, payload };
+      mainWindow.webContents.send(IPC_EVENT_CHANNEL, message);
     },
   });
   const started = await runtime;

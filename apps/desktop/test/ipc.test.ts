@@ -24,6 +24,10 @@ const fakeServices: Services = {
       databasePath: '/profile/harness-store.sqlite',
     }),
   },
+  connectivity: {
+    get: () => ({ state: 'offline' }),
+    check: () => Promise.resolve({ state: 'online' }),
+  },
 };
 const en = translatorFor('en');
 
@@ -79,7 +83,23 @@ describe('IPC handlers against a fake service container', () => {
     });
   });
 
-  it.each(['app.status', 'app.quit', 'diagnostics.get'])(
+  it('connectivity.get returns what the last Store check found', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'connectivity.get' })).resolves.toEqual({
+      ok: true,
+      data: { state: 'offline' },
+    });
+  });
+
+  it('connectivity.check checks the Store now and returns the result', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'connectivity.check' })).resolves.toEqual({
+      ok: true,
+      data: { state: 'online' },
+    });
+  });
+
+  it.each(['app.status', 'app.quit', 'diagnostics.get', 'connectivity.get', 'connectivity.check'])(
     '%s rejects any input as invalid_input',
     async (method) => {
       const { dispatch } = dispatcherFor();

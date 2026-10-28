@@ -42,5 +42,13 @@ export function createHandlers(services: Services): IpcHandlers {
       if (input !== undefined) return fail('invalid_input', { method: 'diagnostics.get' });
       return ok(services.diagnostics.get());
     },
+    'connectivity.get': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'connectivity.get' });
+      return ok(services.connectivity.get());
+    },
+    'connectivity.check': async (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'connectivity.check' });
+      return ok(await services.connectivity.check());
+    },
   };
 }

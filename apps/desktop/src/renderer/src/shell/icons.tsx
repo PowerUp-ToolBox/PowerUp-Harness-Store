@@ -75,3 +75,12 @@ export function SettingsIcon() {
     </Icon>
   );
 }
+
+/** A crossed-out Wi-Fi signal, for the offline banner and panel. */
+export function OfflineIcon() {
+  return (
+    <Icon>
+      <path d="M2 8.8a15 15 0 0 1 4.2-2.6M22 8.8A15 15 0 0 0 10 5.1M5 12.9a10 10 0 0 1 5.2-2.7M19 12.9a10 10 0 0 0-2.3-1.6M8.5 16.4a5 5 0 0 1 7 0M12 20h0M2 2l20 20" />
+    </Icon>
+  );
+}

@@ -56,6 +56,13 @@ export interface IpcMethods {
   'settings.set': { input: SettingsPatch; output: Settings };
   /** Read-only facts for support and debugging, shown in Settings. */
   'diagnostics.get': { input: undefined; output: Diagnostics };
+  /** Whether the Store answered the last connectivity check. */
+  'connectivity.get': { input: undefined; output: Connectivity };
+  /**
+   * Checks the Store now (Retry) and returns the result. Joins a check already running instead
+   * of starting a second one.
+   */
+  'connectivity.check': { input: undefined; output: Connectivity };
 }
 
 /** The Runtime's startup steps, in order: open and migrate SQLite, then start the Model Gateway. */
@@ -73,6 +80,16 @@ export interface Diagnostics {
   readonly gateway: { readonly running: true; readonly port: number } | { readonly running: false };
   /** The absolute path of the local SQLite database file. */
   readonly databasePath: string;
+}
+
+/**
+ * Whether the Store answers: `unknown` until the first check ends, then `online` or `offline`.
+ * The Store being down counts as offline, since the User meets the same problem either way.
+ */
+export type ConnectivityState = 'unknown' | 'online' | 'offline';
+
+export interface Connectivity {
+  readonly state: ConnectivityState;
 }
 
 /** The app settings as the renderer sees them. */
@@ -101,6 +118,8 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'settings.get': true,
   'settings.set': true,
   'diagnostics.get': true,
+  'connectivity.get': true,
+  'connectivity.check': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */
@@ -111,7 +130,11 @@ export const IPC_METHODS = Object.freeze(Object.keys(METHOD_NAMES) as IpcMethodN
  * long-running jobs (downloads, uploads, launch readiness); its payload is defined by its first
  * producer.
  */
-export type IpcEvents = Record<`progress:${string}`, unknown>;
+export interface IpcEvents {
+  /** The Store's connectivity changed; sent on every change, never twice for the same state. */
+  'connectivity.changed': Connectivity;
+  [event: `progress:${string}`]: unknown;
+}
 
 export type IpcEventName = keyof IpcEvents;
 
@@ -131,7 +154,7 @@ export const IPC_INVOKE_CHANNEL = 'harness-store:invoke';
 export const IPC_EVENT_CHANNEL = 'harness-store:event';
 
 export function isIpcEventName(name: string): name is IpcEventName {
-  return /^progress:.+$/.test(name);
+  return name === 'connectivity.changed' || /^progress:.+$/.test(name);
 }
 
 type Domain<M extends string> = M extends `${infer D}.${string}` ? D : never;
