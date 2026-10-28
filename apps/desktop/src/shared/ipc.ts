@@ -10,7 +10,7 @@
 import type { Locale } from './i18n/locale.js';
 
 /**
- * Error codes the Runtime returns over IPC: its own five, then every Model Gateway code
+ * Error codes the Runtime returns over IPC: its own, then every Model Gateway code
  * (`GATEWAY_ERROR_STATUS` in @harness-store/gateway; a test keeps the two lists in step). Each has
  * an `error.<code>` entry in both message catalogs.
  */
@@ -28,6 +28,14 @@ export type IpcErrorCode =
    * Provider's API returns (not JSON, or not a model list): usually a wrong base URL.
    */
   | 'unexpected_response'
+  /** The Store sign-in failed: GitHub or the Store refused it, or the callback carried an error. */
+  | 'sign_in_failed'
+  /** The browser did not come back to the app within 5 minutes of `auth.signIn`. */
+  | 'sign_in_timeout'
+  /** A newer `auth.signIn`, or `auth.signOut`, replaced this sign-in before it completed. */
+  | 'sign_in_cancelled'
+  /** The Store did not answer (network error, timeout or a 5xx). */
+  | 'store_unreachable'
   | 'invalid_request'
   | 'invalid_token'
   | 'invalid_host'
@@ -135,7 +143,43 @@ export interface IpcMethods {
    * model name the Gateway would not accept, `invalid_input`.
    */
   'bindings.setGlobal': { input: GlobalBindingChange; output: readonly GlobalBinding[] };
+  /**
+   * Signs the Publisher in to the Store with GitHub: opens the User's browser (never a window of
+   * the app) on the Store's GitHub sign-in, and resolves once the browser comes back through
+   * `harnessstore://auth-callback` and the session is stored encrypted. Fails with
+   * `encryption_unavailable` (before opening the browser) when the OS offers no encryption,
+   * `sign_in_timeout` after 5 minutes, `sign_in_cancelled` when a newer sign-in or a sign-out
+   * replaced it, `sign_in_failed` or `store_unreachable`.
+   */
+  'auth.signIn': { input: undefined; output: AuthState };
+  /** Signs out: revokes the session at the Store when it answers, and deletes the stored one. */
+  'auth.signOut': { input: undefined; output: AuthState };
+  /**
+   * Who is signed in to the Store, with the profile as the Store has it now (the last one seen
+   * while the Store does not answer). A session the Store refuses is deleted, and the answer is
+   * signed out.
+   */
+  'auth.whoami': { input: undefined; output: AuthState };
 }
+
+/** Whether a Publisher is signed in to the Store, and as whom. */
+export type AuthState =
+  | { readonly signedIn: false }
+  | {
+      readonly signedIn: true;
+      /** The GitHub login, lower-cased: the publisher segment of the Publisher's Harness IDs. */
+      readonly githubLogin: string;
+      readonly displayName: string | null;
+      readonly avatarUrl: string | null;
+    };
+
+/**
+ * Why the sign-in state changed: a completed sign-in, a sign-out, or a session the Store no
+ * longer accepts (its refresh failed, or a Store call answered 401), which asks to sign in again.
+ */
+export type AuthChangeReason = 'signed_in' | 'signed_out' | 'session_expired';
+
+export type AuthChanged = AuthState & { readonly reason: AuthChangeReason };
 
 /** The Runtime's startup steps, in order: open and migrate SQLite, then start the Model Gateway. */
 export type StartupStage = 'database' | 'gateway';
@@ -399,6 +443,9 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'connections.remove': true,
   'bindings.getGlobal': true,
   'bindings.setGlobal': true,
+  'auth.signIn': true,
+  'auth.signOut': true,
+  'auth.whoami': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */
@@ -412,6 +459,8 @@ export const IPC_METHODS = Object.freeze(Object.keys(METHOD_NAMES) as IpcMethodN
 export interface IpcEvents {
   /** The Store's connectivity changed; sent on every change, never twice for the same state. */
   'connectivity.changed': Connectivity;
+  /** The Store sign-in state changed; `session_expired` asks the screen in use to sign in again. */
+  'auth.changed': AuthChanged;
   [event: `progress:${string}`]: unknown;
 }
 
@@ -433,7 +482,7 @@ export const IPC_INVOKE_CHANNEL = 'harness-store:invoke';
 export const IPC_EVENT_CHANNEL = 'harness-store:event';
 
 export function isIpcEventName(name: string): name is IpcEventName {
-  return name === 'connectivity.changed' || /^progress:.+$/.test(name);
+  return name === 'connectivity.changed' || name === 'auth.changed' || /^progress:.+$/.test(name);
 }
 
 type Domain<M extends string> = M extends `${infer D}.${string}` ? D : never;

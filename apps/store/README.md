@@ -6,10 +6,11 @@ The backend of the **Store**: a Supabase project ([ADR-0006](../../docs/adr/0006
 
 | Path                          | What                                                                                                                                                      |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `supabase/config.toml`        | Local stack settings (Supabase CLI).                                                                                                                      |
+| `supabase/config.toml`        | Local stack settings (Supabase CLI). The GitHub provider's client id, secret and URL come from the environment (`supabase/.env.example`).                 |
 | `supabase/migrations/`        | The schema: tables, enums, triggers, row-level security, Storage buckets. Migrations are the only way it changes.                                         |
 | `supabase/functions/_shared/` | Plain TypeScript modules with relative imports only, used by the Deno Edge Functions, the seed script and the unit tests (storage paths, README storage). |
 | `scripts/seed.ts`             | Seeds the local stack from the `packages/manifest` fixture packages.                                                                                      |
+| `scripts/supabase.ts`         | Runs the pinned Supabase CLI with the env(...) values of config.toml filled in (`node dist/scripts/supabase.js start`).                                   |
 | `test/`                       | Fast checks with no Docker (`pnpm test`): the shared modules and static rules every migration follows.                                                    |
 | `test-store/`                 | The Store seam: tests over HTTP against a running local stack (`pnpm test:store`).                                                                        |
 
@@ -25,7 +26,9 @@ pnpm functions:serve # build, then serve the Edge Functions
 pnpm db:stop
 ```
 
-The seed and the tests read the stack's URL and keys from `supabase status`, never from the environment, so they cannot reach a hosted project. Test Publishers are auth users created through the Auth admin API with the metadata a GitHub sign-in gives (`app_metadata.provider = github`, `user_metadata.user_name`); their session JWTs are minted with the local JWT secret, so no test reaches GitHub.
+The package scripts and CI run the CLI through `scripts/supabase.ts`, which takes each variable of `supabase/.env.example` that neither the environment nor `supabase/.env` (gitignored, read by the CLI itself) sets. Those dummy values point Auth's GitHub provider at `http://fake-github:8080`, the fake GitHub of the sign-in tests, so nothing needs configuring. To sign in with real GitHub, copy `.env.example` to `supabase/.env`, put an OAuth app's client id and secret in it (callback `http://127.0.0.1:54321/auth/v1/callback`), leave the URL empty, and restart the stack. config.toml allows `harnessstore://auth-callback`, the desktop app's sign-in callback, as a redirect.
+
+The seed and the tests read the stack's URL and keys from `supabase status`, never from the environment, so they cannot reach a hosted project. Test Publishers are auth users created through the Auth admin API with the metadata a GitHub sign-in gives (`app_metadata.provider = github`, `user_metadata.user_name`); their session JWTs are minted with the local JWT secret, so no test reaches GitHub. The sign-in test (`test-store/auth.test.ts`) instead goes through the real Auth: it starts the fake GitHub (`test-store/fake-github.ts`, a container on the stack's Docker network from the already pulled Storage image) and drives the desktop app's own auth module through the GitHub PKCE flow with a scripted browser.
 
 ### Seed catalogue
 

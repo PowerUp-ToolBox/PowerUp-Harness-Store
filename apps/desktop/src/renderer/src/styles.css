@@ -202,6 +202,25 @@ code {
   color: var(--color-text-muted);
 }
 
+/* The Publish placeholder's sign-in block (P0-07.2); P0-08.1 replaces it with the sign-in card. */
+.publish {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 720px;
+}
+
+.publish-account {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.publish-account p {
+  margin: 0;
+}
+
 .settings {
   display: flex;
   flex-direction: column;

@@ -14,6 +14,7 @@ import {
 } from './connections.js';
 import {
   createConnectivityService,
+  storeAnonKey,
   storeBaseUrlFrom,
   type ConnectivityService,
   type FetchLike,
@@ -23,12 +24,18 @@ import { createGatewayHost } from './gateway-host.js';
 import { createLocalDetector, type LocalProbeTarget } from './local-detection.js';
 import type { SecretCipher } from './secret-cipher.js';
 import type { Services } from './services.js';
+import {
+  createMemorySessionSlot,
+  createSqliteSessionSlot,
+  type SessionSlot,
+} from './session-slot.js';
 import { createSettingsService } from './settings.js';
 import {
   createMemorySettingsStore,
   createSqliteSettingsStore,
   type SettingsStore,
 } from './settings-store.js';
+import { createStoreAuth, type StoreAuth, type StoreFetch } from './store-auth.js';
 import { createUsageRecordStore, type UsageRecordStore } from './usage-records.js';
 import { parseWindowState, type WindowState } from './window-state.js';
 
@@ -44,6 +51,18 @@ export interface RuntimeOptions {
   /** Makes the Store connectivity checks (Electron's `net.fetch`, so system proxies apply). */
   readonly fetch: FetchLike;
   /**
+   * Makes the Store's Auth and PostgREST calls for the Publisher's sign-in (Electron's `net.fetch`).
+   * Default: Node's `fetch`.
+   */
+  readonly storeFetch?: StoreFetch;
+  /**
+   * Opens a URL in the User's default browser (Electron's `shell.openExternal`): the Store's
+   * GitHub sign-in. Default: fails, as nothing can open a browser.
+   */
+  readonly openExternal?: (url: string) => Promise<void>;
+  /** The Store's anon key. Default: {@link storeAnonKey}. */
+  readonly storeAnonKey?: string;
+  /**
    * Tests Connections, lists their models and detects local Providers: Node's `fetch`, the one the
    * Model Gateway's upstream calls use, so a passing test means the Gateway reaches the same place.
    * Tests pass a fake.
@@ -54,9 +73,15 @@ export interface RuntimeOptions {
    * and LM Studio in the Provider table. Tests point it at fake Providers on ports the OS picks.
    */
   readonly localProbeTargets?: readonly LocalProbeTarget[];
-  /** The clock of Connection test times and the model-list cache. Default: the system clock. */
+  /**
+   * The clock of Connection test times, the model-list cache and the Store session's expiry.
+   * Default: the system clock.
+   */
   readonly now?: () => Date;
-  /** Encrypts Connection secrets (Electron's `safeStorage`); tests pass a reversible fake. */
+  /**
+   * Encrypts Connection secrets and the Store session (Electron's `safeStorage`); tests pass a
+   * reversible fake.
+   */
   readonly secretCipher: SecretCipher;
   /** Pushes an event to the main window; dropped while there is none. */
   readonly emit?: <E extends IpcEventName>(event: E, payload: IpcEvents[E]) => void;
@@ -72,6 +97,12 @@ export interface Runtime {
   readonly services: Services;
   /** Whether the Store is reachable; the Store client (P0-09) reports failed requests to it. */
   readonly connectivity: ConnectivityService;
+  /**
+   * The Publisher's Store sign-in. The Electron entry point hands it every
+   * `harnessstore://auth-callback` URL the OS opens the app with; Store clients (P0-08) take
+   * their access token from it.
+   */
+  readonly auth: StoreAuth;
   /** The main window's geometry, kept in the `window_state` setting. */
   readonly windowState: {
     read(): WindowState | null;
@@ -115,6 +146,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     settings: SettingsStore;
     usageRecords: UsageRecordStore;
     connections: ConnectionStore;
+    session: SessionSlot;
   } | null = null;
   try {
     mkdirSync(options.dataDir, { recursive: true });
@@ -123,6 +155,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       settings: createSqliteSettingsStore(db),
       usageRecords: createUsageRecordStore(db),
       connections: createConnectionStore(db),
+      session: createSqliteSessionSlot(db),
     };
   } catch (error) {
     db?.close();
@@ -181,9 +214,22 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   // A Runtime that failed to start shows only its error screen, which needs no Store.
   if (startupStatus.state === 'ready') void connectivity.check();
 
+  const auth = createStoreAuth({
+    fetch: options.storeFetch ?? ((url, init) => globalThis.fetch(url, init)),
+    storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
+    anonKey: options.storeAnonKey ?? storeAnonKey(),
+    cipher: options.secretCipher,
+    slot: sqlite?.session ?? createMemorySessionSlot(),
+    openExternal:
+      options.openExternal ?? (() => Promise.reject(new Error('No browser can be opened.'))),
+    onChange: (change) => options.emit?.('auth.changed', change),
+    ...(options.now === undefined ? {} : { now: options.now }),
+  });
+
   return {
     status: startupStatus,
     connectivity,
+    auth,
     services: {
       app: { version: options.version, status: () => startupStatus, quit: options.quit },
       settings: createSettingsService(store, options.osLocale),
@@ -201,6 +247,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
         connectionStore === undefined
           ? createBindingsStub()
           : createBindingsService(connectionStore),
+      auth,
     },
     windowState: {
       read() {

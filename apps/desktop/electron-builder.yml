@@ -17,3 +17,10 @@ win:
   target: nsis
 linux:
   target: AppImage
+# The Store sign-in comes back from the browser as harnessstore://auth-callback (P0-07.2). macOS
+# reads this from Info.plist, Linux from the .desktop file; on Windows the app registers it at
+# runtime (app.setAsDefaultProtocolClient in src/main/index.ts).
+protocols:
+  - name: Harness Store
+    schemes:
+      - harnessstore

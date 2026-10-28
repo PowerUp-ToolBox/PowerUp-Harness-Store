@@ -55,9 +55,11 @@ describe('CI workflow', () => {
     const order = [
       'pnpm install --frozen-lockfile',
       'pnpm build',
-      'pnpm exec supabase start',
+      // The Supabase CLI through apps/store/scripts/supabase.ts, which fills in config.toml's
+      // env(...) values (the GitHub provider of the sign-in tests).
+      'node dist/scripts/supabase.js start',
       'pnpm run db:reset',
-      'pnpm exec supabase functions serve',
+      'node dist/scripts/supabase.js functions serve',
       'pnpm run test:store',
     ].map((prefix) => commands.findIndex((command) => command.includes(prefix)));
     expect(order.every((index) => index >= 0)).toBe(true);

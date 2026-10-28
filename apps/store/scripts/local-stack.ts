@@ -29,16 +29,47 @@ export function storeRoot(): string {
   return dir;
 }
 
-/** Runs the pinned Supabase CLI (the `supabase` devDependency) through its Node entry point. */
-function supabaseCli(root: string, args: string[]): string {
+/** The `KEY=value` lines of a dotenv file (no quoting or expansion); empty when it is absent. */
+function readEnvFile(path: string): Map<string, string> {
+  const entries = new Map<string, string>();
+  if (!existsSync(path)) return entries;
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(line);
+    if (match?.[1] !== undefined) entries.set(match[1], (match[2] ?? '').trim());
+  }
+  return entries;
+}
+
+/**
+ * The environment the Supabase CLI runs with: the caller's, plus each variable of
+ * supabase/.env.example that neither the environment nor supabase/.env (which the CLI reads
+ * itself) sets. So config.toml's env(...) values (the GitHub provider) always resolve, to the fake
+ * GitHub of the store tests unless the developer configured another.
+ */
+export function supabaseEnv(root: string = storeRoot()): NodeJS.ProcessEnv {
+  const configured = readEnvFile(join(root, 'supabase', '.env'));
+  const env: NodeJS.ProcessEnv = { ...process.env, SUPABASE_TELEMETRY_DISABLED: '1' };
+  for (const [key, value] of readEnvFile(join(root, 'supabase', '.env.example'))) {
+    if (env[key] === undefined && !configured.has(key)) env[key] = value;
+  }
+  return env;
+}
+
+/** The pinned Supabase CLI (the `supabase` devDependency): its Node entry point. */
+export function supabaseBin(root: string = storeRoot()): string {
   const require = createRequire(join(root, 'package.json'));
   const manifestPath = require.resolve('supabase/package.json');
   const { bin } = JSON.parse(readFileSync(manifestPath, 'utf8')) as { bin: { supabase: string } };
-  return execFileSync(process.execPath, [join(dirname(manifestPath), bin.supabase), ...args], {
+  return join(dirname(manifestPath), bin.supabase);
+}
+
+/** Runs the pinned Supabase CLI and returns its standard output. */
+function supabaseCli(root: string, args: string[]): string {
+  return execFileSync(process.execPath, [supabaseBin(root), ...args], {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, SUPABASE_TELEMETRY_DISABLED: '1' },
+    env: supabaseEnv(root),
   });
 }
 

@@ -13,6 +13,10 @@ const IPC_OWN_CODES = [
   'not_implemented',
   'encryption_unavailable',
   'unexpected_response',
+  'sign_in_failed',
+  'sign_in_timeout',
+  'sign_in_cancelled',
+  'store_unreachable',
 ] as const;
 
 describe('catalog parity (CI)', () => {

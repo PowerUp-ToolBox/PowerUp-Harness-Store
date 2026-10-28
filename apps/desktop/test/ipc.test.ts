@@ -4,6 +4,7 @@ import { createHandlers, type IpcHandlers } from '../src/main/runtime/handlers.j
 import { createConnectionsStub, providerPresets } from '../src/main/runtime/connections.js';
 import { ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
+import { StoreAuthError } from '../src/main/runtime/store-auth.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
 import { IPC_METHODS } from '../src/shared/ipc.js';
 
@@ -36,6 +37,18 @@ const fakeServices: Services = {
     getGlobal: () => [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }],
     setGlobal: (change) =>
       ok(change.target === null ? [] : [{ slot: change.slot, ...change.target }]),
+  },
+  auth: {
+    signIn: () =>
+      Promise.reject(new StoreAuthError('sign_in_timeout', 'The browser did not come back.')),
+    signOut: () => Promise.resolve({ signedIn: false }),
+    whoami: () =>
+      Promise.resolve({
+        signedIn: true,
+        githubLogin: 'octo-cat',
+        displayName: 'Octo Cat',
+        avatarUrl: null,
+      }),
   },
 };
 const en = translatorFor('en');
@@ -118,6 +131,9 @@ describe('IPC handlers against a fake service container', () => {
     'connections.detectLocal',
     'connections.list',
     'bindings.getGlobal',
+    'auth.signIn',
+    'auth.signOut',
+    'auth.whoami',
   ])('%s rejects any input as invalid_input', async (method) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input: {} })).resolves.toMatchObject({
@@ -197,6 +213,35 @@ describe('IPC handlers against a fake service container', () => {
     ).resolves.toEqual({
       ok: true,
       data: [{ slot: 'fast', connectionId: 'ollama', model: 'qwen3:8b' }],
+    });
+  });
+
+  it('auth.whoami returns the signed-in Publisher', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'auth.whoami' })).resolves.toEqual({
+      ok: true,
+      data: { signedIn: true, githubLogin: 'octo-cat', displayName: 'Octo Cat', avatarUrl: null },
+    });
+  });
+
+  it('auth.signIn answers a failed sign-in with its error code', async () => {
+    const { dispatch, onHandlerError } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'auth.signIn' })).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'sign_in_timeout',
+        messageKey: 'error.sign_in_timeout',
+        message: en.t('error.sign_in_timeout'),
+      },
+    });
+    expect(onHandlerError).not.toHaveBeenCalled();
+  });
+
+  it('auth.signOut returns signed out', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'auth.signOut' })).resolves.toEqual({
+      ok: true,
+      data: { signedIn: false },
     });
   });
 

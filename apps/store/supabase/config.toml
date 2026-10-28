@@ -168,7 +168,9 @@ site_url = "http://127.0.0.1:3000"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+# `harnessstore://auth-callback` is the desktop app's custom URL scheme: the GitHub sign-in (PKCE)
+# ends there, and the app exchanges the code for a session.
+additional_redirect_urls = ["harnessstore://auth-callback"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -329,6 +331,20 @@ max_frequency = "5s"
 # Use an external OAuth provider. The full list of providers are: `apple`, `azure`, `bitbucket`,
 # `discord`, `facebook`, `github`, `gitlab`, `google`, `keycloak`, `linkedin_oidc`, `notion`, `twitch`,
 # `twitter`, `x`, `slack`, `spotify`, `workos`, `zoom`.
+# GitHub is the only sign-in (Publishers only). The client id, secret and URL come from the
+# environment, never from this file: `pnpm db:start` fills any that are unset from
+# supabase/.env.example, whose values point at the fake GitHub the store tests run
+# (test-store/fake-github.ts). Put a real OAuth app's values in supabase/.env (gitignored) to sign
+# in with real GitHub, and leave `url` empty there.
+[auth.external.github]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET)"
+redirect_uri = ""
+# Overrides github.com and its API (`<url>/login/oauth/...`, `<url>/api/v3/...`, as for GitHub
+# Enterprise). Empty: real GitHub.
+url = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_URL)"
+
 [auth.external.apple]
 enabled = false
 client_id = ""

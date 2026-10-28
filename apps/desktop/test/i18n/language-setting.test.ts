@@ -58,6 +58,11 @@ function launch(osLocale: string) {
     providers: { list: () => providerPresets() },
     connections: createConnectionsStub(),
     bindings: createBindingsStub(),
+    auth: {
+      signIn: () => Promise.resolve({ signedIn: false }),
+      signOut: () => Promise.resolve({ signedIn: false }),
+      whoami: () => Promise.resolve({ signedIn: false }),
+    },
   };
   const dispatch = createDispatcher({
     handlers: createHandlers(services),

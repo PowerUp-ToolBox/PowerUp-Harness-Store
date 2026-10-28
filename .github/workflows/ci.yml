@@ -74,15 +74,17 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      # The seed and the store tests import @harness-store/manifest from its dist/.
+      # The seed and the store tests import @harness-store/manifest from its dist/, and the CLI
+      # wrapper (scripts/supabase.ts) runs from apps/store/dist/.
       - name: Build
         working-directory: .
         run: pnpm build
 
       # Applies every migration to an empty database; any SQL error fails the step. Only the
-      # services the Store uses are started.
+      # services the Store uses are started. The wrapper gives the GitHub provider the dummy
+      # values of supabase/.env.example, which point it at the fake GitHub the sign-in tests run.
       - name: Start the local Supabase stack
-        run: pnpm exec supabase start -x studio,imgproxy,postgres-meta,mailpit,logflare,vector,supavisor
+        run: node dist/scripts/supabase.js start -x studio,imgproxy,postgres-meta,mailpit,logflare,vector,supavisor
 
       # Applies the migrations from empty once more, then runs the seed script.
       - name: Reset and seed the database
@@ -90,7 +92,7 @@ jobs:
 
       - name: Serve the Edge Functions
         run: |
-          nohup pnpm exec supabase functions serve > "$RUNNER_TEMP/functions.log" 2>&1 &
+          nohup node dist/scripts/supabase.js functions serve > "$RUNNER_TEMP/functions.log" 2>&1 &
           for _ in $(seq 120); do
             grep -q 'Serving functions on' "$RUNNER_TEMP/functions.log" && exit 0
             sleep 1
@@ -107,4 +109,4 @@ jobs:
 
       - name: Stop the local Supabase stack
         if: always()
-        run: pnpm exec supabase stop --no-backup
+        run: node dist/scripts/supabase.js stop --no-backup

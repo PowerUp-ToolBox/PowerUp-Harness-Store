@@ -6,6 +6,20 @@ import type { Connectivity, ConnectivityState } from '../../shared/ipc.js';
  */
 export const DEFAULT_STORE_BASE_URL = 'http://127.0.0.1:54321';
 
+/**
+ * The anon key of the Supabase local stack: the same on every machine, and public by design (it
+ * only identifies the project; RLS decides what it may do). A build for another Store sets
+ * `HARNESS_STORE_ANON_KEY`, which electron.vite.config.ts writes into the main bundle.
+ */
+export const LOCAL_STORE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0';
+
+/** The Store's anon key: the build's `HARNESS_STORE_ANON_KEY`, else {@link LOCAL_STORE_ANON_KEY}. */
+export function storeAnonKey(): string {
+  const configured = process.env.HARNESS_STORE_ANON_KEY;
+  return configured === undefined || configured === '' ? LOCAL_STORE_ANON_KEY : configured;
+}
+
 /** A check that has no answer after this long counts as offline. */
 export const CHECK_TIMEOUT_MS = 5_000;
 
