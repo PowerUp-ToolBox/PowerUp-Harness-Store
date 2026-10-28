@@ -20,7 +20,7 @@ A Report dialog reachable from the detail page and the Library card menu (flow F
 
 1. As a User, I want a Report link on every detail page, so that I can flag a Harness where I found it.
 2. As a User, I want to report from the Library card menu too, so that I can flag a Harness that misbehaved after install.
-3. As a User, I want to choose a reason (malicious behaviour, bypasses the Model Gateway, misleading listing, broken, inappropriate, spam, other), so that reviewers can prioritise.
+3. As a User, I want to choose a reason (malicious behaviour, bypasses the Model Gateway, broken, inappropriate, spam, other), so that reviewers can prioritise.
 4. As a User, I want a free-text details field with a sensible limit, so that I can describe what happened.
 5. As a User, I want to submit without an account, so that reporting has no barrier.
 6. As a User, I want the report to include the Harness version and my platform and app version automatically, so that I do not have to look them up.
