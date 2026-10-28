@@ -1,9 +1,10 @@
 /**
  * hello-term is installable and publishable: the Harness folder `pnpm build` writes to out/, and
  * the zip `pnpm run pack` makes of it, pass `validatePackage` and the `harness-manifest validate`
- * CLI with no problems and no warnings, and the bundled Entry runs with no node_modules around it,
- * answering every line of piped stdin before it quits. The model round trip (install, launch in a pty, chat, /model, /quit, one Usage Record) is proven
- * through the Runtime in apps/desktop/test/launch/reference-harnesses.test.ts.
+ * CLI with no problems and no warnings, neither carries the strays the Publish flow leaves out, and
+ * the bundled Entry runs with no node_modules around it, answering every line of piped stdin before
+ * it quits. The model round trip (install, launch in a pty, chat, /model, /quit, one Usage Record)
+ * is proven through the Runtime in apps/desktop/test/launch/reference-harnesses.test.ts.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import {
@@ -14,6 +15,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -78,6 +80,28 @@ describe('the Harness folder out/', () => {
     ]);
     for (const file of ['manifest.json', 'README.md', 'assets/icon.png']) {
       expect(readFileSync(join(out, file)), file).toEqual(readFileSync(join(root, file)));
+    }
+  });
+
+  it('leaves out of it the strays the Publish flow leaves out, such as a Finder .DS_Store', () => {
+    // Builds a copy of the source folder whose assets/ holds strays, so the real out/ that the
+    // Runtime's tests read meanwhile is never rebuilt. node_modules links back to this package's.
+    const scratch = mkdtempSync(join(tmpdir(), 'hello-term-build-'));
+    try {
+      for (const file of ['manifest.json', 'README.md', 'assets', 'scripts', 'src']) {
+        cpSync(join(root, file), join(scratch, file), { recursive: true });
+      }
+      symlinkSync(join(root, 'node_modules'), join(scratch, 'node_modules'), 'junction');
+      const strays = ['assets/.DS_Store', 'assets/Thumbs.db', 'assets/.icon.png.swp', '.DS_Store'];
+      for (const stray of strays) writeFileSync(join(scratch, stray), 'stray');
+      const built = spawnSync(process.execPath, [join(scratch, 'scripts', 'build.mjs')], {
+        cwd: scratch,
+        encoding: 'utf8',
+      });
+      expect(built.status, built.stderr).toBe(0);
+      expect(listFiles(join(scratch, 'out'))).toEqual(listFiles(out));
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 
