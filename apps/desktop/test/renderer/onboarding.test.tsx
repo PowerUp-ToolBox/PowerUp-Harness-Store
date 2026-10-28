@@ -416,6 +416,81 @@ describe('Remote Provider', () => {
     expect(heading()).toBe(DEFAULT_MODEL);
   });
 
+  it('shows a key with a space inside under the key field, without calling the Runtime', async () => {
+    const api = await openCloudStep();
+    const key = screen.getByLabelText<HTMLInputElement>('API key');
+    fireEvent.change(key, { target: { value: 'sk-ant 1' } });
+    await click('Test connection');
+    expect(api.connections.add).not.toHaveBeenCalled();
+    expect(screen.queryByRole('group', { name: 'Connection failed' })).toBeNull();
+    expect(screen.getByText('An API key has no spaces or line breaks.')).toBeDefined();
+    expect(key.getAttribute('aria-invalid')).toBe('true');
+    expect(document.getElementById(key.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
+      'An API key has no spaces or line breaks.',
+    );
+    expect(document.activeElement).toBe(key);
+
+    await click('Continue');
+    expect(heading()).toBe(CLOUD);
+    expect(api.connections.add).not.toHaveBeenCalled();
+
+    // Fixing the key clears the message.
+    fireEvent.change(key, { target: { value: 'sk-ant-1' } });
+    expect(screen.queryByText('An API key has no spaces or line breaks.')).toBeNull();
+    expect(key.getAttribute('aria-invalid')).toBe('false');
+  });
+
+  it('asks the custom endpoint for a base URL with its scheme, without calling the Runtime', async () => {
+    const api = await openCloudStep();
+    fireEvent.change(screen.getByLabelText('Provider'), {
+      target: { value: 'openai-compatible' },
+    });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'vLLM' } });
+    const url = screen.getByLabelText<HTMLInputElement>('Base URL');
+    fireEvent.change(url, { target: { value: 'localhost:8000/v1' } });
+    await click('Test connection');
+    expect(api.connections.add).not.toHaveBeenCalled();
+    expect(screen.queryByRole('group', { name: 'Connection failed' })).toBeNull();
+    expect(screen.getByText('Enter a URL that starts with http:// or https://.')).toBeDefined();
+    expect(url.getAttribute('aria-invalid')).toBe('true');
+    expect(document.activeElement).toBe(url);
+
+    fireEvent.change(url, { target: { value: 'http://localhost:8000/v1' } });
+    await click('Test connection');
+    expect(api.connections.add).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'openai-compatible',
+      displayName: 'vLLM',
+      baseUrl: 'http://localhost:8000/v1',
+    });
+  });
+
+  it('refuses a custom endpoint name a saved Connection already has, ignoring letter case', async () => {
+    const api = await openCloudStep();
+    api.connections.list.mockResolvedValue({
+      ok: true,
+      data: [
+        connectionSummary({
+          id: 'openai-compatible:vllm',
+          displayName: 'vLLM',
+          baseUrl: 'http://10.0.0.2:8000/v1',
+        }),
+      ],
+    });
+    fireEvent.change(screen.getByLabelText('Provider'), {
+      target: { value: 'openai-compatible' },
+    });
+    const name = screen.getByLabelText<HTMLInputElement>('Name');
+    fireEvent.change(name, { target: { value: ' VLLM ' } });
+    fireEvent.change(screen.getByLabelText('Base URL'), {
+      target: { value: 'http://10.0.0.3:8000/v1' },
+    });
+    await click('Test connection');
+    expect(api.connections.add).not.toHaveBeenCalled();
+    expect(screen.getByText('Another Connection already has this name.')).toBeDefined();
+    expect(name.getAttribute('aria-invalid')).toBe('true');
+    expect(document.activeElement).toBe(name);
+  });
+
   it('Continue with an untested key tests it first, and moves on only when it is added', async () => {
     const api = await openCloudStep();
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-ant-1' } });
