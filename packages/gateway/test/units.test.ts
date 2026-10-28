@@ -303,6 +303,17 @@ describe('usage and finish reasons', () => {
     expect(toUsage(usage(undefined, 4))).toBeUndefined();
   });
 
+  it('leaves out usage when the Provider’s own usage object lacks a count the adapter filled in', () => {
+    // The OpenAI-style adapters turn `usage: { prompt_tokens: 9 }` into 9 input and 0 output tokens.
+    expect(toUsage({ ...usage(9, 0), raw: { prompt_tokens: 9 } })).toBeUndefined();
+    expect(toUsage({ ...usage(0, 0), raw: {} })).toBeUndefined();
+    expect(toUsage({ ...usage(9, 2), raw: { prompt_tokens: 9, completion_tokens: 2 } })).toEqual({
+      prompt_tokens: 9,
+      completion_tokens: 2,
+      total_tokens: 11,
+    });
+  });
+
   it('includes cached prompt tokens when there are some', () => {
     expect(toUsage(usage(10, 1, 6))).toEqual({
       prompt_tokens: 10,

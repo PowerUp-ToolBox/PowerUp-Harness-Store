@@ -11,7 +11,7 @@ import type { FakeProvider } from '../src/testing/fake-provider.js';
 import { usageRecord } from '../src/usage.js';
 import type { Binding, Gateway, GatewayOptions, Logger, UsageRecord } from '../src/index.js';
 import { claims, manifestWith, startGateway } from './support/gateway.js';
-import { startScriptedUpstream } from './support/scripted-upstream.js';
+import { chunk, startScriptedUpstream } from './support/scripted-upstream.js';
 import { readSse, readUntil } from './support/sse.js';
 
 /** The Provider id the fake stands in for. */
@@ -223,6 +223,67 @@ describe('successful requests', () => {
       status: 'ok',
     });
   });
+
+  it.each([
+    [false, { prompt_tokens: 9 }, 9, null],
+    [true, { prompt_tokens: 9 }, 9, null],
+    [false, { completion_tokens: 2 }, null, 2],
+    [true, { completion_tokens: 2 }, null, 2],
+    [false, {}, null, null],
+    [true, {}, null, null],
+  ])(
+    'records a count the Provider left out of its usage as null, never 0 (stream: %s, usage: %j)',
+    async (stream, providerUsage, promptTokens, completionTokens) => {
+      const upstream = await startScriptedUpstream(() =>
+        stream
+          ? {
+              sse: [
+                chunk({ role: 'assistant', content: 'hi' }),
+                chunk({}, 'stop'),
+                { ...chunk({}), choices: [], usage: providerUsage },
+              ],
+            }
+          : {
+              json: {
+                id: 'chatcmpl-scripted',
+                object: 'chat.completion',
+                created: 0,
+                model: 'm',
+                choices: [
+                  {
+                    index: 0,
+                    message: { role: 'assistant', content: 'hi' },
+                    finish_reason: 'stop',
+                  },
+                ],
+                usage: providerUsage,
+              },
+            },
+      );
+      upstreams.push(upstream);
+      const { url, token, records } = await start({
+        getConnection: () => Promise.resolve({ baseUrl: upstream.url, apiKey: API_KEY }),
+      });
+      const response = await complete(url, token, {
+        model: `${SCRIPTED}/m`,
+        messages: hello,
+        stream,
+        ...(stream && { stream_options: { include_usage: true } }),
+      });
+      expect(response.status).toBe(200);
+      if (stream) {
+        const body = await readSse(response);
+        expect(body.done).toBe(true);
+        expect(body.chunks.some((sent) => 'usage' in sent)).toBe(false);
+      } else {
+        expect(await response.json()).not.toHaveProperty('usage');
+      }
+      const [record] = await recorded(records, 1);
+      expect(record).toEqual(
+        recordOf('m', { provider: SCRIPTED, promptTokens, completionTokens, status: 'ok' }),
+      );
+    },
+  );
 
   it('records the Model Slot a request named', async () => {
     const { url, token, records } = await start();
@@ -698,6 +759,12 @@ describe('usageRecord', () => {
     const partial = usageRecord(context, 'ok', usage(7, undefined, 0), 1001);
     expect(partial).toMatchObject({ promptTokens: 7, completionTokens: null });
     expect(partial).not.toHaveProperty('cachedPromptTokens');
+    expect(
+      usageRecord(context, 'ok', { ...usage(7, 0), raw: { input_tokens: 7 } }, 1001),
+    ).toMatchObject({ promptTokens: 7, completionTokens: null });
+    expect(
+      usageRecord(context, 'ok', { ...usage(0, 3), raw: { candidatesTokenCount: 3 } }, 1001),
+    ).toMatchObject({ promptTokens: null, completionTokens: 3 });
     expect(usageRecord(context, 'aborted', undefined, 1001)).toMatchObject({
       promptTokens: null,
       completionTokens: null,

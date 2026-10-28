@@ -17,6 +17,7 @@ import type {
   ToolSet,
   UserModelMessage,
 } from 'ai';
+import { reportedTokens } from '../usage.js';
 import type { ChatCompletionRequest, ChatMessage } from './request.js';
 
 /** The AI SDK call settings one Chat Completions request translates to. */
@@ -280,18 +281,18 @@ export interface OpenAiUsage {
 
 /**
  * OpenAI usage from the Provider's report; `undefined` unless the Provider reported both input
- * and output tokens. Nothing is ever estimated. Cached prompt tokens appear only when there were
- * some: the `openai-compatible` adapter reports 0 when the Provider said nothing.
+ * and output tokens (see `reportedTokens`). Nothing is ever estimated.
  */
 export function toUsage(usage: LanguageModelUsage): OpenAiUsage | undefined {
-  const { inputTokens, outputTokens } = usage;
-  if (inputTokens === undefined || outputTokens === undefined) return undefined;
-  const cached = usage.inputTokenDetails.cacheReadTokens;
+  const { promptTokens, completionTokens, cachedPromptTokens } = reportedTokens(usage);
+  if (promptTokens === null || completionTokens === null) return undefined;
   return {
-    prompt_tokens: inputTokens,
-    completion_tokens: outputTokens,
-    total_tokens: inputTokens + outputTokens,
-    ...(cached !== undefined && cached > 0 && { prompt_tokens_details: { cached_tokens: cached } }),
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: promptTokens + completionTokens,
+    ...(cachedPromptTokens !== undefined && {
+      prompt_tokens_details: { cached_tokens: cachedPromptTokens },
+    }),
   };
 }
 

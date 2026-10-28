@@ -34,10 +34,53 @@ export interface UsageContext {
   readonly model: string;
 }
 
+/** The token counts a Provider reported, as both a Usage Record and wire `usage` carry them. */
+export interface ReportedTokens {
+  /** `null` when the Provider did not report it. */
+  readonly promptTokens: number | null;
+  /** `null` when the Provider did not report it. */
+  readonly completionTokens: number | null;
+  /** Present only when the Provider reported some. */
+  readonly cachedPromptTokens?: number;
+}
+
 /**
- * The Usage Record of a request that ended at `endMark` (`performance.now()`). Each token count
- * is the Provider's or `null`; cached prompt tokens appear only when there were some, as on the
- * wire (the `openai-compatible` adapter reports 0 when the Provider said nothing).
+ * The fields of the Provider's own usage object (`LanguageModelUsage.raw`) each count is read
+ * from: OpenAI-style (`openai`, `openai-compatible`, `openrouter`), Anthropic, then Google.
+ */
+const RAW_PROMPT_FIELDS = ['prompt_tokens', 'input_tokens', 'promptTokenCount'];
+const RAW_COMPLETION_FIELDS = [
+  'completion_tokens',
+  'output_tokens',
+  'candidatesTokenCount',
+  'thoughtsTokenCount',
+];
+
+/**
+ * The counts the Provider actually reported in `usage`. The adapters fill a count missing from a
+ * usage object the Provider did send with 0 (`usage: { prompt_tokens: 9 }` comes back with 0
+ * output tokens), so when the raw usage object is known a count is kept only if one of its own
+ * fields is a number. Cached prompt tokens are kept only when there were some, for the same reason.
+ */
+export function reportedTokens(usage: LanguageModelUsage | undefined): ReportedTokens {
+  if (usage === undefined) return { promptTokens: null, completionTokens: null };
+  const raw = usage.raw;
+  const reported = (count: number | undefined, fields: readonly string[]): number | null => {
+    if (count === undefined) return null;
+    if (raw === undefined) return count;
+    return fields.some((field) => typeof raw[field] === 'number') ? count : null;
+  };
+  const cached = usage.inputTokenDetails.cacheReadTokens;
+  return {
+    promptTokens: reported(usage.inputTokens, RAW_PROMPT_FIELDS),
+    completionTokens: reported(usage.outputTokens, RAW_COMPLETION_FIELDS),
+    ...(cached !== undefined && cached > 0 && { cachedPromptTokens: cached }),
+  };
+}
+
+/**
+ * The Usage Record of a request that ended at `endMark` (`performance.now()`), with the token
+ * counts of `reportedTokens`.
  */
 export function usageRecord(
   context: UsageContext,
@@ -45,7 +88,6 @@ export function usageRecord(
   usage: LanguageModelUsage | undefined,
   endMark: number,
 ): UsageRecord {
-  const cached = usage?.inputTokenDetails.cacheReadTokens;
   return {
     timestamp: new Date(context.receivedAt.time).toISOString(),
     harnessId: context.harnessId,
@@ -53,9 +95,7 @@ export function usageRecord(
     slot: context.slot,
     provider: context.provider,
     model: context.model,
-    promptTokens: usage?.inputTokens ?? null,
-    completionTokens: usage?.outputTokens ?? null,
-    ...(cached !== undefined && cached > 0 && { cachedPromptTokens: cached }),
+    ...reportedTokens(usage),
     durationMs: Math.max(1, Math.round(endMark - context.receivedAt.mark)),
     status,
   };
