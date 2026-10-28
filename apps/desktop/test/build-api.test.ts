@@ -51,6 +51,7 @@ describe('buildApi (window.api)', () => {
       'install',
       'confirm',
       'cancel',
+      'update',
       'list',
     ]);
     expect(Object.keys(api.launch)).toEqual([

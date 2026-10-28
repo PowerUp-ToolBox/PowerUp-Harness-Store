@@ -38,6 +38,7 @@ const IPC_OWN_CODES = [
   'integrity_error',
   'download_cancelled',
   'platform_not_supported',
+  'reconsent_required',
 ] as const;
 
 describe('catalog parity (CI)', () => {

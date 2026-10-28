@@ -10,6 +10,7 @@ import {
   type StoreHomeRequest,
   type StoreInstallRequest,
   type StoreSearchRequest,
+  type StoreUpdateRequest,
   type UnpublishRequest,
 } from '../../shared/ipc.js';
 import { isTag } from '../../shared/tags.js';
@@ -216,6 +217,11 @@ export function createHandlers(services: Services): IpcHandlers {
       await services.installs.cancel(input);
       return ok(null);
     },
+    'installs.update': (input) => {
+      const request = parseStoreUpdateRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'installs.update' });
+      return services.installs.update(request);
+    },
     'installs.list': async (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'installs.list' });
       return ok(await services.installs.list());
@@ -345,6 +351,21 @@ function parseStoreInstallRequest(input: unknown): StoreInstallRequest | null {
     return null;
   }
   return harnessId.includes('/') ? { harnessId, jobId } : null;
+}
+
+/**
+ * `{ harnessId, version, jobId, reconsented }`, a `<publisher>/<slug>` ID, a version string, a job
+ * ID and a boolean, nothing else.
+ */
+function parseStoreUpdateRequest(input: unknown): StoreUpdateRequest | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { harnessId, version, jobId, reconsented, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0 || !isHarnessIdInput(harnessId) || !isJobId(jobId)) {
+    return null;
+  }
+  if (!harnessId.includes('/') || typeof reconsented !== 'boolean') return null;
+  if (typeof version !== 'string' || version === '' || version.length > 256) return null;
+  return { harnessId, version, jobId, reconsented };
 }
 
 /** `{ archiveId, jobId }`, both IDs, nothing else. */

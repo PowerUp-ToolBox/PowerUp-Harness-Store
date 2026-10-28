@@ -99,6 +99,8 @@ const INSTALLED: InstalledHarness = {
   lastLaunchedAt: null,
   iconDataUrl: null,
   platformSupported: true,
+  storeStatus: null,
+  availableUpdate: null,
 };
 
 function error(code: IpcError['code'], message: string): IpcError {

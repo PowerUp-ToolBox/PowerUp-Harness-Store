@@ -1,4 +1,4 @@
-import type { Manifest } from '@harness-store/manifest';
+import { diffForReconsent, type Manifest } from '@harness-store/manifest';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import type {
@@ -15,7 +15,7 @@ import { useLaunchStatus } from '../library/LaunchAction.js';
 import { ListingDetail, type SlotUse } from '../listing/ListingDetail.js';
 import { connectionName } from '../models/names.js';
 import { BackButton } from '../store/BackButton.js';
-import { DetailAction } from '../store/DetailAction.js';
+import { ActionError, DetailAction } from '../store/DetailAction.js';
 import { primaryActionState } from '../store/primary-action.js';
 
 type DetailState =
@@ -37,7 +37,10 @@ const UNANSWERED: IpcError = {
  * button of {@link primaryActionState}. Each Model Slot says what it would use on this machine,
  * from `bindings.resolveManifest`. Install runs the Store install of {@link useInstallJobs}
  * (flows F2): its progress and Cancel on the button, "Review and install" while its consent
- * dialog waits, and its error under the button when it failed.
+ * dialog waits, and its error under the button when it failed. Update (or "Review update", when
+ * the latest version needs the User's consent again) updates to the latest version the page shows
+ * (flows F4), the same way; an update refused because the Harness runs says "Close the Harness to
+ * update".
  *
  * A Harness the Store no longer offers (taken down, Unpublished-only, unknown) is the "no longer
  * available" page when it is not installed; an installed one keeps its page, built from its
@@ -119,6 +122,10 @@ export function HarnessDetailPage() {
 
   const { detail: loaded } = state;
   const actionState = primaryActionState({
+    updateNeedsConsent:
+      install !== null &&
+      harness !== null &&
+      diffForReconsent(install.manifest, harness.manifest).required,
     storeStatus: loaded.storeStatus,
     latestVersion: harness?.manifest.version ?? null,
     latestPlatforms: harness?.manifest.platforms ?? [],
@@ -152,12 +159,17 @@ export function HarnessDetailPage() {
         onReview={() => {
           installJobs.review(harnessId);
         }}
+        onUpdate={() => {
+          if (install === null || harness === null) return;
+          setError(null);
+          installJobs.update(install, harness.manifest);
+        }}
         onError={setError}
       />
       {install !== null && harness === null ? (
         <p className="hint">{t('store.detail.notInStore')}</p>
       ) : null}
-      {shownError === null ? null : <ErrorMessage error={shownError} />}
+      {shownError === null ? null : <ActionError error={shownError} />}
     </>
   );
 

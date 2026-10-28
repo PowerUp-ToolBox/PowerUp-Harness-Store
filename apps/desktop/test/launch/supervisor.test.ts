@@ -34,8 +34,10 @@ function setup() {
     lastLaunchedAt: null,
     lastWorkspace: null,
     consentedPermissions: manifest.permissions,
-    availableVersion: null,
     source: 'local',
+    storeStatus: null,
+    availableVersion: null,
+    availableManifest: null,
   };
   const emitted: LaunchStatus[] = [];
   const opened: string[] = [];

@@ -455,6 +455,16 @@ describe('IPC handlers against a fake service container', () => {
     ['installs.confirm', undefined],
     ['installs.confirm', { jobId: 'job-1' }],
     ['installs.cancel', 42],
+    ['installs.update', { harnessId: 'acme/hello', version: '2.0.0', jobId: 'job-1' }],
+    [
+      'installs.update',
+      { harnessId: 'acme/hello', version: '2.0.0', jobId: 'job-1', reconsented: 'yes' },
+    ],
+    ['installs.update', { harnessId: 'acme', version: '2.0.0', jobId: 'job-1', reconsented: true }],
+    [
+      'installs.update',
+      { harnessId: 'acme/hello', version: '', jobId: 'job-1', reconsented: true },
+    ],
     ['launch.start', undefined],
     ['launch.start', 'acme/hello'],
     ['launch.start', { harnessId: '' }],

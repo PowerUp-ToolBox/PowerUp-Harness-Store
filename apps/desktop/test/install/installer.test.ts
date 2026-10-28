@@ -157,7 +157,9 @@ describe('createInstaller', () => {
       // The launch history stays; a local install never has a Store update.
       lastLaunchedAt: '2026-02-01T00:00:00.000Z',
       lastWorkspace: '/w',
+      storeStatus: null,
       availableVersion: null,
+      availableManifest: null,
     });
     expect(existsSync(storeInstall)).toBe(false);
   });

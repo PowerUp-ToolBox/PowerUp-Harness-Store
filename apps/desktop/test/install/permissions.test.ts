@@ -1,7 +1,8 @@
-import type { DeclaredPermissions } from '@harness-store/manifest';
+import { diffForReconsent, type DeclaredPermissions, type Manifest } from '@harness-store/manifest';
 import { describe, expect, it } from 'vitest';
 import { translatorFor } from '../../src/shared/i18n/translate.js';
-import { harnessFacts, permissionItems } from '../../src/shared/permissions.js';
+import { harnessFacts, permissionItems, reconsentChanges } from '../../src/shared/permissions.js';
+import { manifestWith } from '../support/manifest.js';
 
 /**
  * The consent dialog's sentences for Declared Permissions and launch facts
@@ -193,5 +194,68 @@ describe('harnessFacts', () => {
         en.t(key),
       ),
     ).toContain('Can use a folder you choose');
+  });
+});
+
+describe('reconsentChanges (the update prompt\'s "What changed")', () => {
+  /** Each line as "<severity> <sentence>" in `locale`; a fact has no severity. */
+  const lines = (added: readonly string[], locale: 'en' | 'zh-CN' = 'en') => {
+    const { t } = translatorFor(locale);
+    return reconsentChanges(added).map(
+      (change) => `${change.severity ?? 'fact'} ${t(change.messageKey, change.params)}`,
+    );
+  };
+
+  it('gives every kind of item diffForReconsent adds one line, in its order', () => {
+    expect(
+      lines([
+        'permissions.filesystem.scope:none',
+        'permissions.filesystem.scope:workspace',
+        'permissions.filesystem.scope:home',
+        'permissions.filesystem.scope:paths',
+        'permissions.filesystem.paths:~/notes',
+        'permissions.shell',
+        'permissions.network.any',
+        'permissions.network.domains:api.github.com',
+        'entry:dist/main.js',
+        'entry.linux-x64:bin/tool',
+        'runtime.kind:binary',
+        'runtime.kind:node',
+      ]),
+    ).toEqual([
+      'low Uses only its own data directory',
+      'medium Reads and writes files in the folder you choose',
+      'high Accesses your home folder',
+      'high Reads and writes the paths it lists',
+      'high Reads and writes these paths: ~/notes',
+      'high Runs shell commands',
+      'high Connects to the internet (any site)',
+      'medium Connects to: api.github.com',
+      'fact Starts from dist/main.js',
+      'fact Starts from bin/tool on linux-x64',
+      'fact Native executable',
+      'fact Runs on the bundled Node runtime',
+    ]);
+  });
+
+  it('keeps the item each line shows, so the prompt matches the diff exactly', () => {
+    const previous = manifestWith({ default: {} });
+    const next: Manifest = {
+      ...previous,
+      entry: 'dist/main.js',
+      permissions: {
+        filesystem: { scope: 'home' },
+        shell: true,
+        network: { domains: ['api.github.com'] },
+      },
+    };
+    const { added } = diffForReconsent(previous, next);
+    expect(reconsentChanges(added).map((change) => change.item)).toEqual(added);
+    expect(lines(added, 'zh-CN')).toEqual([
+      'high 访问你的用户主目录',
+      'high 会执行命令行命令',
+      'medium 访问以下网站：api.github.com',
+      'fact 从 dist/main.js 启动',
+    ]);
   });
 });

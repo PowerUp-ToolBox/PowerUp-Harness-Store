@@ -16,12 +16,14 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { isDeepStrictEqual } from 'node:util';
 import {
+  diffForReconsent,
   PackageReadError,
   validatePackage,
   type Manifest,
   type Platform,
 } from '@harness-store/manifest';
 import { DirectorySource, openArchiveFile } from '@harness-store/manifest/node';
+import semver from 'semver';
 import type {
   DownloadProgress,
   FolderInspection,
@@ -31,11 +33,12 @@ import type {
   IpcResult,
   ManifestSummary,
   StoreInstallRequest,
+  StoreUpdateRequest,
 } from '../../shared/ipc.js';
 import { entryFor, harnessPaths, isInside, type HarnessPaths } from './harness-paths.js';
 import type { InstallRow, InstallStore } from './install-store.js';
 import { fail, ok } from './ipc-result.js';
-import type { StoreDownloader } from './store-download.js';
+import type { PackageTicket, StoreDownloader } from './store-download.js';
 
 /**
  * The `downloads/` entries of an install: its copy of the Harness files, the folder it replaces,
@@ -60,6 +63,12 @@ export interface InstallsService {
   install(request: StoreInstallRequest): Promise<IpcResult<ManifestSummary>>;
   /** Installs the package of a job waiting for consent: the User consented. */
   confirm(jobId: string): Promise<IpcResult<InstalledVersion>>;
+  /**
+   * Updates a Store install to the version the update prompt showed: downloads and verifies it,
+   * refuses it without `reconsented` when it needs the User's consent again, then puts it in
+   * place of the installed version.
+   */
+  update(request: StoreUpdateRequest): Promise<IpcResult<InstalledVersion>>;
   /** Cancels a job that downloads or waits for consent; nothing for any other. */
   cancel(jobId: string): Promise<void>;
   /**
@@ -127,7 +136,16 @@ export interface InstallerOptions {
  *   each read whole so its CRC-32 is checked; `cancel` discards the download. A failed or
  *   cancelled Store install deletes its row and its download, so nothing is left behind.
  *
- * Then, alike for both:
+ * A Store install is updated (flows F4) by `update`, with the same download and checks for the
+ * version the update prompt showed. Its row stays `installed` throughout, so the installed version
+ * stays launchable until the new one is in place: a failed or cancelled update deletes its
+ * download and changes nothing else. Before unpacking, the new Manifest is compared with the
+ * installed one (`diffForReconsent`, the one definition of "widened"): an update that widens the
+ * Declared Permissions or changes the Entry or the runtime kind needs `reconsented`, else it is
+ * refused with `reconsent_required`. The installed Manifest is the one the User consented to, as
+ * every install records its permissions as consented.
+ *
+ * Then, alike for all three:
  *
  * 1. Binary Entries of every declared platform are made executable (macOS and Linux).
  * 2. The files are renamed from their folder under `downloads/` to
@@ -172,7 +190,7 @@ export function createInstaller(options: InstallerOptions): InstallsService {
   const icons = new Map<string, string | null>();
   /** The Harnesses whose install is past its checks and not done yet. */
   const installing = new Set<string>();
-  /** The Store installs under way, by job ID. */
+  /** The Store installs and updates under way, by job ID. */
   const jobs = new Map<string, StoreJob>();
   const recovered = recoverInterruptedInstalls(paths, store, logError);
   let queue: Promise<unknown> = recovered;
@@ -196,7 +214,9 @@ export function createInstaller(options: InstallerOptions): InstallsService {
     }
   };
 
-  /** Whether a Store install of the Harness is under way: a job, or a transient row. */
+  /**
+   * Whether a Store install or update of the Harness is under way: a job, or a transient row.
+   */
   const storeInstallUnderWay = (harnessId: string) =>
     [...jobs.values()].some((job) => job.harnessId === harnessId) ||
     (store.stateOf(harnessId) ?? 'installed') !== 'installed';
@@ -289,6 +309,25 @@ export function createInstaller(options: InstallerOptions): InstallsService {
     return result;
   };
 
+  /**
+   * Streams the ticket's package into the job's download, reporting progress, and checks its size
+   * and SHA-256 against the ticket's.
+   */
+  const transfer = async (
+    downloader: StoreDownloader,
+    jobId: string,
+    job: StoreJob,
+    ticket: PackageTicket,
+  ): Promise<IpcResult<null>> => {
+    await mkdir(paths.downloads, { recursive: true });
+    return reported(
+      await downloader.fetchPackage(ticket, job.file, {
+        signal: job.controller.signal,
+        onProgress: (received) => options.onProgress?.(jobId, { received, total: ticket.size }),
+      }),
+    );
+  };
+
   /** The download and checks of a Store install, up to `awaiting_consent`. */
   const download = async (
     downloader: StoreDownloader,
@@ -303,7 +342,7 @@ export function createInstaller(options: InstallerOptions): InstallsService {
     );
     if (!ticket.ok) return ticket;
     if (cancelled()) return fail('download_cancelled');
-    const { manifest, size } = ticket.data;
+    const { manifest } = ticket.data;
     // A folder install of the Harness may have begun meanwhile.
     if (installing.has(harnessId) || store.stateOf(harnessId) !== undefined) {
       return fail(
@@ -320,13 +359,7 @@ export function createInstaller(options: InstallerOptions): InstallsService {
       consentedPermissions: manifest.permissions,
       source: 'store',
     });
-    await mkdir(paths.downloads, { recursive: true });
-    const fetched = reported(
-      await downloader.fetchPackage(ticket.data, job.file, {
-        signal: controller.signal,
-        onProgress: (received) => options.onProgress?.(jobId, { received, total: size }),
-      }),
-    );
+    const fetched = await transfer(downloader, jobId, job, ticket.data);
     if (!fetched.ok) return fetched;
     store.setState(harnessId, 'verifying');
     if (!(await holdsManifest(job.file, manifest))) return fail('integrity_error');
@@ -336,6 +369,53 @@ export function createInstaller(options: InstallerOptions): InstallsService {
     job.phase = 'awaiting_consent';
     job.manifest = manifest;
     return ok(summarize(manifest, platform));
+  };
+
+  /**
+   * The download, checks and swap of an update (see {@link createInstaller}): `installed` is the
+   * row when the update began, and is still the installed version when the swap begins.
+   */
+  const updateTo = async (
+    downloader: StoreDownloader,
+    machine: Platform,
+    request: StoreUpdateRequest,
+    installed: InstallRow,
+    job: StoreJob,
+  ): Promise<IpcResult<InstalledVersion>> => {
+    const { harnessId, version, jobId } = request;
+    const cancelled = () => job.controller.signal.aborted;
+    const ticket = reported(
+      await downloader.ticket({ harnessId, version, platform: machine }, job.controller.signal),
+    );
+    if (!ticket.ok) return ticket;
+    if (cancelled()) return fail('download_cancelled');
+    const fetched = await transfer(downloader, jobId, job, ticket.data);
+    if (!fetched.ok) return fetched;
+    const { manifest } = ticket.data;
+    if (!(await holdsManifest(job.file, manifest))) return fail('integrity_error');
+    if (cancelled()) return fail('download_cancelled');
+    if (diffForReconsent(installed.manifest, manifest).required && !request.reconsented) {
+      return fail('reconsent_required');
+    }
+    job.phase = 'unpacking';
+    return oneAtATime(async () => {
+      // No await between these checks and marking the install in progress (see installFromFolder).
+      const current = store.get(harnessId);
+      if (current === undefined) return fail('not_installed');
+      if (current.version !== installed.version || current.source !== 'store') {
+        // Another install of it came first: what was compared is no longer what is installed.
+        return fail('invalid_input', { method: 'installs.update' });
+      }
+      if (options.isRunning?.(harnessId) === true) return fail('harness_running');
+      installing.add(harnessId);
+      try {
+        return await placeAndRecord(harnessId, manifest, 'store', (staging) =>
+          unpackArchive(job.file, staging),
+        );
+      } finally {
+        installing.delete(harnessId);
+      }
+    });
   };
 
   /** `cancel`: a job being unpacked is past consent and finishes on its own. */
@@ -468,6 +548,48 @@ export function createInstaller(options: InstallerOptions): InstallsService {
       }
     },
 
+    async update(request) {
+      await recovered;
+      const { harnessId, version, jobId } = request;
+      if (jobs.has(jobId)) return fail('invalid_input', { method: 'installs.update' });
+      const installed = store.get(harnessId);
+      if (storeInstallUnderWay(harnessId) || installing.has(harnessId)) {
+        return fail('harness_installing');
+      }
+      if (installed === undefined) return fail('not_installed');
+      // Only a newer version of a Store install: a local install never gets Store updates.
+      if (
+        installed.source !== 'store' ||
+        semver.valid(version) === null ||
+        !semver.gt(version, installed.version)
+      ) {
+        return fail('invalid_input', { method: 'installs.update' });
+      }
+      // Refused at once while it runs; a launch may start during the download, so the swap checks
+      // again.
+      if (options.isRunning?.(harnessId) === true) return fail('harness_running');
+      const { downloader } = options;
+      if (downloader === undefined) {
+        return fail('not_implemented', { method: 'installs.update' });
+      }
+      if (platform === null) return fail('platform_not_supported');
+      const job: StoreJob = {
+        harnessId,
+        controller: new AbortController(),
+        file: join(paths.downloads, `${DOWNLOAD_PREFIX}${jobId}.zip`),
+        phase: 'downloading',
+        manifest: null,
+      };
+      jobs.set(jobId, job);
+      try {
+        return await updateTo(downloader, platform, request, installed, job);
+      } finally {
+        // Updated, failed or cancelled: the download is done with, and the row was never
+        // transient, so it is kept.
+        await discard(jobId, job);
+      }
+    },
+
     cancel,
 
     async cancelAll() {
@@ -496,6 +618,11 @@ export function createInstaller(options: InstallerOptions): InstallsService {
             lastLaunchedAt: row.lastLaunchedAt,
             iconDataUrl: icon,
             platformSupported: entryFor(row.manifest, platform) !== null,
+            storeStatus: row.storeStatus,
+            availableUpdate:
+              row.availableVersion === null || row.availableManifest === null
+                ? null
+                : { version: row.availableVersion, manifest: row.availableManifest },
           };
         }),
       );
@@ -505,7 +632,7 @@ export function createInstaller(options: InstallerOptions): InstallsService {
   };
 }
 
-/** A Store install under way. */
+/** A Store install or update under way; an update is never `awaiting_consent`. */
 interface StoreJob {
   readonly harnessId: string;
   /** Aborted by `cancel`. */
@@ -530,6 +657,7 @@ export function createInstallsStub(): InstallsService {
       Promise.resolve(fail('not_implemented', { method: 'installs.installFromFolder' })),
     install: () => Promise.resolve(fail('not_implemented', { method: 'installs.install' })),
     confirm: () => Promise.resolve(fail('not_implemented', { method: 'installs.confirm' })),
+    update: () => Promise.resolve(fail('not_implemented', { method: 'installs.update' })),
     cancel: () => Promise.resolve(),
     cancelAll: () => Promise.resolve(),
     list: () => Promise.resolve([]),

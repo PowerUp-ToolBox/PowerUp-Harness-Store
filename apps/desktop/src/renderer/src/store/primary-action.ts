@@ -5,11 +5,19 @@ import type { HarnessStoreStatus, InstalledHarness } from '../../../shared/ipc.j
 /**
  * The primary button of a Store detail page (P0-09.3; docs/ux/design-principles.md §3): "Removed
  * from Store" (disabled), "Not available for your platform" (disabled), Install, Launch
- * (secondary: Uninstall), Update (secondary: Launch), a download's progress with Cancel, and
- * "Review and install" for a download that waits for the User's consent (P0-10).
+ * (secondary: Uninstall), Update (secondary: Launch), "Review update" for an update that needs
+ * the User's consent again (secondary: Launch), a download's progress with Cancel, and "Review
+ * and install" for a download that waits for the User's consent (P0-10).
  */
 export type PrimaryActionState =
-  'removed' | 'unsupported' | 'install' | 'launch' | 'update' | 'downloading' | 'review';
+  | 'removed'
+  | 'unsupported'
+  | 'install'
+  | 'launch'
+  | 'update'
+  | 'reviewUpdate'
+  | 'downloading'
+  | 'review';
 
 export interface PrimaryActionInput {
   /** The Harness's status in the Store. */
@@ -26,6 +34,11 @@ export interface PrimaryActionInput {
   readonly downloading: boolean;
   /** Its download is done and waits for the User's consent (P0-10). */
   readonly awaitingConsent?: boolean;
+  /**
+   * Updating to the latest version needs the User's consent again: `diffForReconsent` of the
+   * installed and the latest Manifest is `required` (P0-10.2).
+   */
+  readonly updateNeedsConsent?: boolean;
 }
 
 /**
@@ -34,8 +47,10 @@ export interface PrimaryActionInput {
  * - A download in progress shows its progress, whatever else is true; one that waits for consent
  *   shows "Review and install", which opens the consent dialog again.
  * - An installed Harness is judged by its install, as the Library judges it: not runnable here
- *   ("Not available for your platform"), else Update when the Store's latest version is greater
- *   (semver) than the installed one of a Store install, else Launch. A Harness the Store no longer
+ *   ("Not available for your platform"), else Update (or "Review update" when it needs consent
+ *   again) when the Store's latest version is greater (semver) than the installed one of a Store
+ *   install and declares this machine's platform (the Store has no package for another), else
+ *   Launch. A Harness the Store no longer
  *   offers (taken down, Unpublished-only, unknown) stays launchable and is never updated
  *   (docs/ux/flows.md F4 step 4); a local install is never updated from the Store.
  * - A Harness that is not installed is "Removed from Store" when the Store does not offer it,
@@ -52,9 +67,11 @@ export function primaryActionState(input: PrimaryActionInput): PrimaryActionStat
       input.storeStatus === 'available' &&
       install.source === 'store' &&
       input.latestVersion !== null &&
-      semver.lt(install.version, input.latestVersion)
+      semver.lt(install.version, input.latestVersion) &&
+      input.platform !== null &&
+      input.latestPlatforms.includes(input.platform)
     ) {
-      return 'update';
+      return input.updateNeedsConsent === true ? 'reviewUpdate' : 'update';
     }
     return 'launch';
   }

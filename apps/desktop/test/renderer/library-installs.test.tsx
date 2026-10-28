@@ -44,6 +44,8 @@ function installed(overrides: Partial<InstalledHarness> & Pick<InstalledHarness,
     lastLaunchedAt: null,
     iconDataUrl: ICON,
     platformSupported: true,
+    storeStatus: null,
+    availableUpdate: null,
     ...overrides,
   } satisfies InstalledHarness;
 }

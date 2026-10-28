@@ -90,6 +90,11 @@ export type IpcErrorCode =
   /** The Store has no package of this Harness Version for this machine's platform. */
   | 'platform_not_supported'
   /**
+   * An update widens the Declared Permissions, or changes the Entry or the runtime kind, and the
+   * User did not consent to it again (`installs.update` without `reconsented`). Nothing changed.
+   */
+  | 'reconsent_required'
+  /**
    * A Harness folder is not (or no longer) a valid Harness Package: it cannot be read, fails
    * validation, or its Manifest changed since `installs.inspectFolder` showed it. The problems
    * themselves come from `installs.inspectFolder`, never in the error.
@@ -361,6 +366,22 @@ export interface IpcMethods {
    */
   'installs.cancel': { input: string; output: null };
   /**
+   * Updates a Store install to `version` (docs/ux/flows.md F4), the one the update prompt showed:
+   * calls the Store's `download` function for that version, streams it as `installs.install` does
+   * (`progress:<jobId>`, cancelled by `installs.cancel`), checks its size, SHA-256 and Manifest,
+   * then compares that Manifest with the installed one (`diffForReconsent`): when it widens the
+   * Declared Permissions or changes the Entry or the runtime kind and `reconsented` is false, it
+   * answers `reconsent_required` before unpacking anything. Otherwise it unpacks the new version
+   * next to the old one, switches the `installs` row to it (`installs.changed`), then deletes the
+   * old version's folder; the Data Directory is never touched. Until the switch, the old version
+   * stays installed and launchable, whatever fails. `not_installed`; `invalid_input` for a local
+   * install, a version not greater than the installed one or a job ID in use;
+   * `harness_installing` while it is being installed or updated; `harness_running` while it runs
+   * (checked when asked, and again just before the switch); and the download's errors of
+   * `installs.install`.
+   */
+  'installs.update': { input: StoreUpdateRequest; output: InstalledVersion };
+  /**
    * Every installed Harness: the most recently launched first, then the never-launched ones, by
    * name.
    */
@@ -601,6 +622,17 @@ export interface StoreInstallRequest {
   readonly jobId: string;
 }
 
+/** Which Store install to update, to which version, and the job its progress events are named after. */
+export interface StoreUpdateRequest {
+  readonly harnessId: string;
+  /** The version the update prompt showed: its Manifest is the one compared and installed. */
+  readonly version: string;
+  /** Chosen by the renderer (a UUID): the events are `progress:<jobId>`. */
+  readonly jobId: string;
+  /** The User consented to what the update changes (the re-consent prompt's Update). */
+  readonly reconsented: boolean;
+}
+
 /**
  * The payload of `progress:<jobId>` for a download: bytes of the Harness Package received so far,
  * of the size the Store reported.
@@ -710,6 +742,29 @@ export interface InstalledHarness {
   readonly iconDataUrl: string | null;
   /** Whether it can run on this platform: listed in `platforms`, with an Entry. */
   readonly platformSupported: boolean;
+  /**
+   * What the last update check said of it in the Store; null before the first check, and always
+   * for a local install, which is never checked.
+   */
+  readonly storeStatus: InstallStoreStatus | null;
+  /**
+   * The newer version the Store offers, which runs on this platform; null when there is none (a
+   * local install, a Harness the Store no longer offers, or no check yet).
+   */
+  readonly availableUpdate: AvailableUpdate | null;
+}
+
+/**
+ * A Store install's status as the update check stores it: `latest_versions`' `store_status`, its
+ * `not_found` (a Harness the Store no longer has) kept as `unpublished`.
+ */
+export type InstallStoreStatus = 'available' | 'unpublished' | 'taken_down';
+
+/** A newer Harness Version the Store offers for an installed Harness. */
+export interface AvailableUpdate {
+  readonly version: string;
+  /** Its full Manifest: the changelog, and what `diffForReconsent` compares. */
+  readonly manifest: Manifest;
 }
 
 /** Which installed Harness changed: installed, replaced by another version, or removed. */
@@ -1212,6 +1267,7 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'installs.install': true,
   'installs.confirm': true,
   'installs.cancel': true,
+  'installs.update': true,
   'installs.list': true,
   'launch.start': true,
   'launch.chooseWorkspace': true,
@@ -1233,15 +1289,18 @@ export const IPC_METHODS = Object.freeze(Object.keys(METHOD_NAMES) as IpcMethodN
 /**
  * Events main pushes to the renderer: name → payload. `progress:<jobId>` is reserved for
  * long-running jobs (downloads, uploads, launch readiness); its payload is defined by its
- * producer: `publish.publish`'s is {@link UploadProgress}, `installs.install`'s
- * {@link DownloadProgress}.
+ * producer: `publish.publish`'s is {@link UploadProgress}, `installs.install`'s and
+ * `installs.update`'s {@link DownloadProgress}.
  */
 export interface IpcEvents {
   /** The Store's connectivity changed; sent on every change, never twice for the same state. */
   'connectivity.changed': Connectivity;
   /** The Store sign-in state changed; `session_expired` asks the screen in use to sign in again. */
   'auth.changed': AuthChanged;
-  /** An installed Harness was installed, replaced or removed; lists read `installs.list` again. */
+  /**
+   * An installed Harness was installed, replaced or removed, or the update check changed what it
+   * says of it; lists read `installs.list` again.
+   */
   'installs.changed': InstallsChanged;
   /** A launch changed state; sent on every change, `launch.status` lists the latest ones. */
   'launch.state': LaunchStatus;

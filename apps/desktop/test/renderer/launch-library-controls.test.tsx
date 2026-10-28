@@ -46,6 +46,8 @@ const INSTALLED: InstalledHarness = {
   lastLaunchedAt: null,
   iconDataUrl: null,
   platformSupported: true,
+  storeStatus: null,
+  availableUpdate: null,
 };
 
 /** Launch ids are unique per test: a dismissed error line stays dismissed while the app runs. */

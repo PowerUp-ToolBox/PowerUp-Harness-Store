@@ -52,6 +52,7 @@ import {
   type NodeCommand,
   type Supervisor,
 } from './supervisor.js';
+import { createUpdateChecker, type UpdateChecker } from './update-check.js';
 import { createUsageRecordStore, type UsageRecordStore } from './usage-records.js';
 import { parseWindowState, type WindowState } from './window-state.js';
 
@@ -145,6 +146,11 @@ export interface RuntimeOptions {
    * recorded. Default: `console.error`.
    */
   readonly logError?: (message: string, error: unknown) => void;
+  /**
+   * When the background update check runs: first after `firstDelayMs` (default 10 s), then every
+   * `intervalMs` (default 6 hours).
+   */
+  readonly updateCheck?: { readonly firstDelayMs?: number; readonly intervalMs?: number };
 }
 
 /** The started Runtime: its IPC services and what the Electron entry point needs around them. */
@@ -169,6 +175,11 @@ export interface Runtime {
    * launch (`window`).
    */
   readonly supervisor: Supervisor;
+  /**
+   * The background update check of the Store installs (P0-10.2), already scheduled; `check` runs
+   * one now.
+   */
+  readonly updates: Pick<UpdateChecker, 'check'>;
   /** The main window's geometry, kept in the `window_state` setting. */
   readonly windowState: {
     read(): WindowState | null;
@@ -177,7 +188,7 @@ export interface Runtime {
   };
   /**
    * Stops every running Harness (the shutdown sequence, at most 10 s in all), the Publish flow's
-   * folder watcher and uploads, the Store connectivity checks and the Model Gateway (it stops
+   * folder watcher and uploads, the update and Store connectivity checks and the Model Gateway (it stops
    * listening and hands over its last Usage Records), then closes the database. Idempotent: later calls return the first call's promise.
    */
   shutdown(): Promise<void>;
@@ -189,7 +200,8 @@ export interface Runtime {
  * picks, so it never collides with anything the User runs. Never rejects: a failed step ends the
  * startup and is reported in `status`, so the window can show an error screen instead of a broken
  * UI. Without the database, settings live in memory and the UI follows the OS locale. Once both
- * steps succeeded, the first Store connectivity check starts; it is not awaited.
+ * steps succeeded, the first Store connectivity check starts (it is not awaited) and the update
+ * check is scheduled.
  */
 export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   const logError =
@@ -360,6 +372,23 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   // A Runtime that failed to start shows only its error screen, which needs no Store.
   if (startupStatus.state === 'ready') void connectivity.check();
 
+  const installStore = sqlite?.installs;
+  const updates: UpdateChecker | null =
+    installStore === undefined
+      ? null
+      : createUpdateChecker({
+          store: installStore,
+          installs: () => installs.list(),
+          fetch: options.storeFetch ?? ((url, init) => globalThis.fetch(url, init)),
+          storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
+          anonKey: options.storeAnonKey ?? storeAnonKey(),
+          platform,
+          connectivity,
+          onChanged: (harnessId) => options.emit?.('installs.changed', { harnessId }),
+          ...options.updateCheck,
+        });
+  if (startupStatus.state === 'ready') updates?.start();
+
   const auth = createStoreAuth({
     fetch: options.storeFetch ?? ((url, init) => globalThis.fetch(url, init)),
     storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
@@ -400,6 +429,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
     auth,
     supervisor,
+    updates: { check: () => updates?.check() ?? Promise.resolve() },
     services: {
       app: { version: options.version, status: () => startupStatus, quit: options.quit },
       settings,
@@ -444,6 +474,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
         // and the database are still there.
         await supervisor.stopAll();
         publish.close();
+        updates?.stop();
         connectivity.stop();
         gatewayPort = null;
         try {

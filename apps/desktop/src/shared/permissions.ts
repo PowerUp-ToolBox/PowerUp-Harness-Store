@@ -1,7 +1,8 @@
 /**
  * What a Harness's Declared Permissions and launch facts mean, in the words the User reads: the
- * consent dialog's list and facts row (P0-05 local installs; P0-10 Store installs and re-consent;
- * P0-09's trust block on the detail page). Pure, so every screen and its tests share one answer.
+ * consent dialog's list and facts row (P0-05 local installs; P0-10 Store installs, and the update
+ * prompt's "What changed"; P0-09's trust block on the detail page). Pure, so every screen and its
+ * tests share one answer.
  *
  * The severity scale follows docs/ux/design-principles.md §4: low (green) for no access or the
  * Data Directory only, medium (yellow) for the Workspace or listed domains, high (red) for the
@@ -116,4 +117,81 @@ export function harnessFacts(summary: Omit<TrustFacts, 'permissions'>): MessageK
         ? 'harness.workspace.optional'
         : 'harness.workspace.none',
   ];
+}
+
+/** One "New:" line of the update prompt: a catalog key with its arguments. */
+export interface ReconsentChange {
+  /** The `diffForReconsent` item it shows, such as `permissions.shell` or `entry:dist/main.js`. */
+  readonly item: string;
+  /** How serious a permission is; null for the Entry and the runtime kind, which are facts. */
+  readonly severity: PermissionSeverity | null;
+  readonly messageKey: MessageKey;
+  readonly params?: Readonly<Record<string, string>>;
+}
+
+/**
+ * The "What changed" list of the update prompt (docs/ux/screens.md, "Update prompt"): one line per
+ * item `diffForReconsent` lists as `added`, in its order, in the words of the permission list and
+ * the facts row. Only what is new is shown, never what was removed.
+ */
+export function reconsentChanges(added: readonly string[]): ReconsentChange[] {
+  return added.map((item): ReconsentChange => {
+    const colon = item.indexOf(':');
+    const path = colon < 0 ? item : item.slice(0, colon);
+    const value = colon < 0 ? '' : item.slice(colon + 1);
+    switch (path) {
+      case 'permissions.filesystem.scope':
+        switch (value) {
+          case 'none':
+            return { item, severity: 'low', messageKey: 'permission.filesystem.none' };
+          case 'workspace':
+            return { item, severity: 'medium', messageKey: 'permission.filesystem.workspace' };
+          case 'home':
+            return { item, severity: 'high', messageKey: 'permission.filesystem.home' };
+          default:
+            return { item, severity: 'high', messageKey: 'update.change.pathsScope' };
+        }
+      case 'permissions.filesystem.paths':
+        return {
+          item,
+          severity: 'high',
+          messageKey: 'permission.filesystem.paths',
+          params: { paths: value },
+        };
+      case 'permissions.shell':
+        return { item, severity: 'high', messageKey: 'permission.shell' };
+      case 'permissions.network.any':
+        return { item, severity: 'high', messageKey: 'permission.network.any' };
+      case 'permissions.network.domains':
+        return {
+          item,
+          severity: 'medium',
+          messageKey: 'permission.network.domains',
+          params: { domains: value },
+        };
+      case 'runtime.kind':
+        return {
+          item,
+          severity: null,
+          messageKey: value === 'binary' ? 'harness.runtime.binary' : 'harness.runtime.node',
+        };
+      case 'entry':
+        return {
+          item,
+          severity: null,
+          messageKey: 'update.change.entry',
+          params: { entry: value },
+        };
+      default: {
+        // `entry.<platform>`, the Entry of one platform of a binary Harness.
+        const platform = path.slice('entry.'.length);
+        return {
+          item,
+          severity: null,
+          messageKey: 'update.change.platformEntry',
+          params: { entry: value, platform },
+        };
+      }
+    }
+  });
 }

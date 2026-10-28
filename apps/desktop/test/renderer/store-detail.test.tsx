@@ -136,6 +136,8 @@ function installed(version: string, fields: Partial<InstalledHarness> = {}): Ins
     lastLaunchedAt: null,
     iconDataUrl: null,
     platformSupported: true,
+    storeStatus: null,
+    availableUpdate: null,
     ...fields,
   };
 }

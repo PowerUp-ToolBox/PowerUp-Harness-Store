@@ -1,3 +1,4 @@
+import { diffForReconsent } from '@harness-store/manifest';
 import { useEffect, useReducer, useRef, useState, type KeyboardEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type {
@@ -9,8 +10,10 @@ import type {
 } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
+import { downloadPercent, useInstallJobs } from '../install/InstallJobsProvider.js';
 import { LaunchAction, useLaunch } from '../library/LaunchAction.js';
 import { LibraryIcon, MoreIcon } from '../shell/icons.js';
+import { ActionError, DownloadAction, UpdateButton } from '../store/DetailAction.js';
 
 /**
  * The Library (docs/ux/screens.md): one card per installed Harness, the most recently launched
@@ -19,7 +22,7 @@ import { LibraryIcon, MoreIcon } from '../shell/icons.js';
  * Harness's state live, without polling. P0-05 builds the basic card (icon, name, Publisher,
  * version, the Local badge, the primary button with its launch states, the error line of a failed
  * launch) and its overflow menu's Model Overrides, Show logs and Open data folder; P0-09.3 adds
- * View in Store; P0-10 adds sort and filter, the menu's other items and update states.
+ * View in Store; P0-10.2 the update states; P0-10 adds sort and filter and the menu's other items.
  */
 export function LibraryPage() {
   const { t } = useI18n();
@@ -105,6 +108,15 @@ function shownFailure(launch: LaunchStatus | undefined): ShownFailure | null {
  */
 const dismissedFailures = new Set<string>();
 
+/** The launch states in which the Harness has a process, or is about to: it cannot be updated. */
+const ACTIVE_STATES: ReadonlySet<LaunchStatus['state']> = new Set([
+  'preparing',
+  'spawning',
+  'waiting-ready',
+  'ready',
+  'stopping',
+]);
+
 /**
  * One installed Harness: icon, name, Publisher, version, the Local badge, the primary button
  * ({@link LaunchAction}, shared with the Store detail page) and its overflow menu. A launch that
@@ -112,6 +124,13 @@ const dismissedFailures = new Set<string>();
  * logs and Dismiss, and Launch retries; the paths Show logs and Open data folder open are computed
  * in main. View in Store opens the Harness's Store detail page, which says so when the Store no
  * longer has it.
+ *
+ * An update the update check found (flows F4) leads the button: Update, or "Review update" when
+ * it needs the User's consent again, with Launch as the secondary link; its download shows its
+ * progress and Cancel in place of the button, and its failure under it. While the Harness runs
+ * the button is the launch's, and the card says "Close the Harness to update". A Harness the
+ * Store no longer offers (Unpublished or taken down) has the note "No longer available in the
+ * Store" and no Update.
  */
 function HarnessCard({
   install,
@@ -125,7 +144,12 @@ function HarnessCard({
   const [error, setError] = useState<IpcError | null>(null);
   const controls = useLaunch(install, setError);
   const [, dismissed] = useReducer((count: number) => count + 1, 0);
-  const { harnessId } = install;
+  const installJobs = useInstallJobs();
+  const { harnessId, availableUpdate } = install;
+  const job = installJobs.jobs.get(harnessId);
+  const running = launch !== undefined && ACTIVE_STATES.has(launch.state);
+  const noLongerInStore =
+    install.storeStatus === 'unpublished' || install.storeStatus === 'taken_down';
   const failure =
     launch === undefined || dismissedFailures.has(launch.launchId) ? null : shownFailure(launch);
 
@@ -202,8 +226,39 @@ function HarnessCard({
         </div>
       )}
       <div className="harness-card-actions">
-        <LaunchAction install={install} state={launch?.state} controls={controls} />
+        {job?.kind === 'downloading' ? (
+          <DownloadAction
+            percent={downloadPercent(job)}
+            onCancel={() => {
+              installJobs.cancel(harnessId);
+            }}
+          />
+        ) : (
+          <LaunchAction
+            install={install}
+            state={launch?.state}
+            controls={controls}
+            lead={
+              availableUpdate === null ? undefined : (
+                <UpdateButton
+                  reviewUpdate={
+                    diffForReconsent(install.manifest, availableUpdate.manifest).required
+                  }
+                  onUpdate={() => {
+                    setError(null);
+                    installJobs.update(install, availableUpdate.manifest);
+                  }}
+                />
+              )
+            }
+          />
+        )}
       </div>
+      {noLongerInStore ? <p className="hint">{t('store.detail.notInStore')}</p> : null}
+      {availableUpdate !== null && running && job?.kind !== 'failed' ? (
+        <p className="hint">{t('library.closeToUpdate')}</p>
+      ) : null}
+      {job?.kind === 'failed' ? <ActionError error={job.error} /> : null}
       {error === null ? null : <ErrorMessage error={error} />}
       {controls.sheet}
     </article>
