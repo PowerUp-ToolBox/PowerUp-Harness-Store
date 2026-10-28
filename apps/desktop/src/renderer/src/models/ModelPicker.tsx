@@ -21,10 +21,19 @@ type TypedProblem = 'format' | 'connection';
 export interface ModelPickerProps {
   /** The select's id, for an outside `<label htmlFor>`. */
   readonly id: string;
+  /** The select's accessible name, where no `<label>` names it. */
+  readonly label?: string;
   /** The Connections whose models it offers; disabled ones are left out. */
   readonly connections: readonly ConnectionSummary[];
   readonly value: ModelChoice | null;
   readonly onChange: (value: ModelChoice) => void;
+  /**
+   * Offers a "Not set" choice, which calls this: for a binding the User may clear. Without it, an
+   * empty picker only asks to choose a model.
+   */
+  readonly onClear?: () => void;
+  /** While the choice is being saved: the controls wait. */
+  readonly disabled?: boolean;
 }
 
 /**
@@ -36,9 +45,19 @@ export interface ModelPickerProps {
  *
  * "Type a model name" always offers a free-text `provider/model` entry (split at the first `/`,
  * like the Gateway's explicit ids), for models a Provider does not list. A typed model has unknown
- * capabilities, and stays in its Connection's group, marked as typed.
+ * capabilities, and stays in its Connection's group, marked as typed. A value on a disabled
+ * Connection (a saved binding the User paused) is still shown, in that Connection's group, but no
+ * other model of it is offered.
  */
-export function ModelPicker({ id, connections, value, onChange }: ModelPickerProps) {
+export function ModelPicker({
+  id,
+  label,
+  connections,
+  value,
+  onChange,
+  onClear,
+  disabled = false,
+}: ModelPickerProps) {
   const i18n = useI18n();
   const { t } = i18n;
   const ids = useId();
@@ -99,6 +118,11 @@ export function ModelPicker({ id, connections, value, onChange }: ModelPickerPro
   };
 
   const selected = value === null ? '' : choiceValue(value);
+  /** The Connection of a value that no enabled Connection offers. */
+  const pausedConnection =
+    value === null || enabled.some((connection) => connection.id === value.connectionId)
+      ? undefined
+      : connections.find((connection) => connection.id === value.connectionId);
   const failed = enabled.filter((connection) => listings[connection.id]?.state === 'failed');
   const loading = enabled.some((connection) => listings[connection.id]?.state === 'loading');
   const typedId = `${ids}-typed`;
@@ -110,17 +134,30 @@ export function ModelPicker({ id, connections, value, onChange }: ModelPickerPro
         <select
           id={id}
           value={selected}
+          aria-label={label}
           aria-busy={loading}
+          disabled={disabled}
           onChange={(event) => {
+            if (event.target.value === '') {
+              onClear?.();
+              return;
+            }
             const choice = parseChoice(event.target.value);
             if (choice !== null) onChange(choice);
           }}
         >
-          {value === null ? (
+          {onClear !== undefined ? (
+            <option value="">{t('models.picker.not_set')}</option>
+          ) : value === null ? (
             <option value="" disabled>
               {loading ? t('models.picker.loading') : t('models.picker.choose')}
             </option>
           ) : null}
+          {pausedConnection === undefined || value === null ? null : (
+            <optgroup label={connectionName(t, pausedConnection)}>
+              <option value={selected}>{value.model}</option>
+            </optgroup>
+          )}
           {enabled.map((connection) => {
             const models = modelsOf(connection);
             const typedHere =
@@ -155,6 +192,7 @@ export function ModelPicker({ id, connections, value, onChange }: ModelPickerPro
         <button
           type="button"
           className="button-link"
+          disabled={disabled}
           aria-expanded={typing}
           aria-controls={typing ? typedId : undefined}
           onClick={() => {
@@ -187,7 +225,12 @@ export function ModelPicker({ id, connections, value, onChange }: ModelPickerPro
               }
             }}
           />
-          <button type="button" className="button-secondary" onClick={applyTyped}>
+          <button
+            type="button"
+            className="button-secondary"
+            disabled={disabled}
+            onClick={applyTyped}
+          >
             {t('models.picker.use')}
           </button>
           {typedProblem === null ? null : (

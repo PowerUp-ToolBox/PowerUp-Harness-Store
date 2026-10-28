@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { ConnectionTestFailure, GlobalBinding } from '../../shared/ipc.js';
+import type { BindingTarget, ConnectionTestFailure, GlobalBinding } from '../../shared/ipc.js';
 import { transaction } from './database.js';
 
 /** One row of the `connections` table, camel-cased. */
@@ -44,6 +44,8 @@ export interface ConnectionStore {
   remove(id: string): void;
   /** The global Slot Bindings: `default` first, then by Slot name. */
   globalBindings(): GlobalBinding[];
+  /** Sets the global Slot Binding of `slot` to `target`, or deletes it when `target` is null. */
+  setGlobalBinding(slot: string, target: BindingTarget | null): void;
 }
 
 interface SqlConnectionRow {
@@ -113,6 +115,14 @@ export function createConnectionStore(
     `SELECT slot, provider_id, model FROM slot_bindings WHERE scope = 'global'
      ORDER BY slot <> 'default', slot`,
   );
+  const upsertGlobalBinding = db.prepare(
+    `INSERT INTO slot_bindings (scope, slot, provider_id, model) VALUES ('global', ?, ?, ?)
+     ON CONFLICT (scope, slot) DO UPDATE SET
+       provider_id = excluded.provider_id, model = excluded.model`,
+  );
+  const deleteGlobalBinding = db.prepare(
+    "DELETE FROM slot_bindings WHERE scope = 'global' AND slot = ?",
+  );
 
   return {
     all: () => (selectAll.all() as unknown as SqlConnectionRow[]).map(fromSql),
@@ -156,5 +166,9 @@ export function createConnectionStore(
       (selectGlobalBindings.all() as { slot: string; provider_id: string; model: string }[]).map(
         (row) => ({ slot: row.slot, connectionId: row.provider_id, model: row.model }),
       ),
+    setGlobalBinding(slot, target) {
+      if (target === null) deleteGlobalBinding.run(slot);
+      else upsertGlobalBinding.run(slot, target.connectionId, target.model);
+    },
   };
 }

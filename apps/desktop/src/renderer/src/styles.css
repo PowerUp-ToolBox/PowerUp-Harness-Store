@@ -1158,6 +1158,64 @@ input[aria-invalid='true'] {
   gap: 2px;
 }
 
+/* The Default Models: one row per Slot name, its name beside its model picker. */
+.default-model-list {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  list-style: none;
+}
+
+.default-model-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.default-model-row:last-child {
+  border-bottom: none;
+}
+
+.default-model-slot {
+  flex: 0 0 110px;
+  padding-top: 8px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.default-model-body {
+  display: flex;
+  flex: 1 1 300px;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* A Default Model whose Connection is disabled: requests skip it. */
+.default-model-warning {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  font-size: 12px;
+}
+
+.status-chip[data-status='warning'] {
+  border: 1px solid var(--color-warning-border);
+  background: transparent;
+  color: var(--color-warning-text);
+}
+
 /* A passed Connection test, next to its Test button. */
 .test-passed {
   color: var(--color-success);

@@ -2,6 +2,7 @@ import type { GatewayOptions } from '@harness-store/gateway';
 import type { ConnectionStore } from './connection-store.js';
 import { decryptSecret } from './connections.js';
 import type { SecretCipher } from './secret-cipher.js';
+import { resolveSlotBinding } from './slot-resolver.js';
 
 /** The Model Gateway's callbacks that read the User's local data. */
 export type GatewayHost = Pick<GatewayOptions, 'resolveBinding' | 'getConnection' | 'getManifest'>;
@@ -23,14 +24,31 @@ export interface GatewayHostOptions {
  * null when there is none or it is disabled (403 `provider_not_connected`). A key that cannot be
  * decrypted rejects, which the Gateway answers with 500 `internal_error`.
  *
- * `resolveBinding` resolves nothing until the resolver arrives (P0-03.4), and `getManifest` knows
- * no Harness until installs do, so a Slot name ends in `unknown_slot`; explicit `provider/model`
- * ids already reach the User's Connections.
+ * `resolveBinding` runs the normative order ({@link resolveSlotBinding}) over the global Slot
+ * Bindings and the enabled Connections as they are now, so a Default Model set, changed or
+ * cleared, or a Connection disabled or removed, applies to the next request. Model Overrides and
+ * Recommended Models join it in P0-03.5; until then they are absent. `getManifest` knows no
+ * Harness until installs do (P0-05), so in the app a Slot name still ends in `unknown_slot`;
+ * explicit `provider/model` ids already reach the User's Connections.
  */
 export function createGatewayHost(options: GatewayHostOptions): GatewayHost {
   const { store, cipher } = options;
   return {
-    resolveBinding: () => Promise.resolve(null),
+    resolveBinding: ({ slot }) =>
+      Promise.resolve(
+        resolveSlotBinding({
+          slot,
+          override: null,
+          recommended: [],
+          global: store.globalBindings(),
+          enabledConnections: new Set(
+            store
+              .all()
+              .filter((row) => row.enabled)
+              .map((row) => row.id),
+          ),
+        }),
+      ),
     async getConnection(providerId) {
       const row = store.get(providerId);
       if (!row?.enabled) return null;

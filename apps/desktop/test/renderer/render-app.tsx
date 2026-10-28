@@ -13,6 +13,7 @@ import type {
   ConnectivityState,
   Diagnostics,
   GlobalBinding,
+  GlobalBindingChange,
   IpcEventName,
   IpcEvents,
   IpcResult,
@@ -140,7 +141,8 @@ export interface FakeApiOptions {
  * fine, the Store is online, there are no Connections or Slot Bindings, detection finds nothing,
  * `connections.add`, `update`, `remove` and `test` (of a saved Connection) answer
  * `not_implemented`, `connections.testDraft` passes finding no models and `connections.models`
- * lists none; a test changes `app.status`,
+ * lists none; `bindings.setGlobal` sets or clears a Default Model that `bindings.getGlobal` then
+ * lists, without checking its Connection; a test changes `app.status`,
  * `diagnostics.get`, the `connectivity`, `connections` or `bindings` methods before rendering to
  * say otherwise, and pushes events with `emit`.
  */
@@ -151,6 +153,7 @@ export function installFakeApi(
 ) {
   let locale = override;
   let onboardingDone = options.onboardingDone ?? true;
+  let bindings: readonly GlobalBinding[] = [];
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   const current = (): Settings =>
     locale === undefined
@@ -218,7 +221,16 @@ export function installFakeApi(
     },
     bindings: {
       getGlobal: vi.fn((): Promise<IpcResult<readonly GlobalBinding[]>> =>
-        Promise.resolve({ ok: true, data: [] }),
+        Promise.resolve({ ok: true, data: bindings }),
+      ),
+      setGlobal: vi.fn(
+        (change: GlobalBindingChange): Promise<IpcResult<readonly GlobalBinding[]>> => {
+          const others = bindings.filter((binding) => binding.slot !== change.slot);
+          bindings = sortBindings(
+            change.target === null ? others : [...others, { slot: change.slot, ...change.target }],
+          );
+          return Promise.resolve({ ok: true, data: bindings });
+        },
       ),
     },
     on: vi.fn((event: string, listener: (payload: unknown) => void) => {
@@ -236,6 +248,15 @@ export function installFakeApi(
   };
   Object.defineProperty(window, 'api', { value: api, configurable: true });
   return api;
+}
+
+/** As the Runtime lists them: `default` first, then by Slot name. */
+function sortBindings(bindings: readonly GlobalBinding[]): readonly GlobalBinding[] {
+  return [...bindings].sort(
+    (a, b) =>
+      Number(a.slot !== 'default') - Number(b.slot !== 'default') ||
+      (a.slot < b.slot ? -1 : a.slot > b.slot ? 1 : 0),
+  );
 }
 
 function notImplemented(method: string, subject: string) {

@@ -1,9 +1,5 @@
-import type {
-  Diagnostics,
-  GlobalBinding,
-  ProviderPreset,
-  StartupStatus,
-} from '../../shared/ipc.js';
+import type { Diagnostics, ProviderPreset, StartupStatus } from '../../shared/ipc.js';
+import type { BindingsService } from './bindings.js';
 import type { ConnectionsService } from './connections.js';
 import type { ConnectivityService } from './connectivity.js';
 import type { SettingsService } from './settings.js';
@@ -34,8 +30,6 @@ export interface Services {
   };
   /** The User's Connections, with their encrypted secrets, and local Provider detection. */
   readonly connections: ConnectionsService;
-  readonly bindings: {
-    /** The global Slot Bindings (Default Models). */
-    readonly getGlobal: () => readonly GlobalBinding[];
-  };
+  /** The User's Slot Bindings: the Default Models. */
+  readonly bindings: BindingsService;
 }

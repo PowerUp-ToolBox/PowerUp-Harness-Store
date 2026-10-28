@@ -3,6 +3,7 @@ import type { ConnectionSummary, IpcError, ProviderPreset } from '../../../share
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { ConnectionDialog } from '../models/ConnectionDialog.js';
+import { DefaultModelsSection } from '../models/DefaultModelsSection.js';
 import { LocalProvidersPanel } from '../models/LocalProvidersPanel.js';
 import { connectionName, connectionStatus, CUSTOM_PROVIDER_ID, monogram } from '../models/names.js';
 import { RemoveConnectionDialog } from '../models/RemoveConnectionDialog.js';
@@ -13,11 +14,20 @@ type Dialog =
   | { readonly kind: 'edit'; readonly connection: ConnectionSummary }
   | { readonly kind: 'remove'; readonly connection: ConnectionSummary };
 
-// Connections arrive here in P0-03.1; Default Models in P0-03.4, Model Overrides in P0-03.5.
+/**
+ * The Models page: the Connections, then the Default Models. Model Overrides per installed Harness
+ * arrive with P0-03.5. After every change to the Connections, the Default Models read them again,
+ * since a disabled or removed Connection changes what their rows show.
+ */
 export function ModelsPage() {
+  const [revision, setRevision] = useState(0);
+  const connectionsChanged = useCallback(() => {
+    setRevision((current) => current + 1);
+  }, []);
   return (
     <div className="models">
-      <ConnectionsSection />
+      <ConnectionsSection onChanged={connectionsChanged} />
+      <DefaultModelsSection revision={revision} />
     </div>
   );
 }
@@ -35,7 +45,7 @@ export function ModelsPage() {
  * read from the Runtime when the page opens and again after every change made here. Below it,
  * {@link LocalProvidersPanel} offers the local Providers found running.
  */
-function ConnectionsSection() {
+function ConnectionsSection({ onChanged }: { readonly onChanged: () => void }) {
   const { t } = useI18n();
   const [presets, setPresets] = useState<readonly ProviderPreset[] | null>(null);
   const [connections, setConnections] = useState<readonly ConnectionSummary[] | null>(null);
@@ -46,11 +56,13 @@ function ConnectionsSection() {
   /** The Connections whose test is running. */
   const [testing, setTesting] = useState<ReadonlySet<string>>(new Set());
 
+  /** Reads the Connections again after a change made here, and tells the page. */
   const load = useCallback(async () => {
+    onChanged();
     const result = await window.api.connections.list();
     if (result.ok) setConnections(result.data);
     else setError(result.error);
-  }, []);
+  }, [onChanged]);
 
   useEffect(() => {
     let current = true;

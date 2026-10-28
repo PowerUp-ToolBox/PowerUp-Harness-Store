@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { createGateway, type Gateway, type GatewayOptions } from '@harness-store/gateway';
 import type { IpcEventName, IpcEvents, StartupStage, StartupStatus } from '../../shared/ipc.js';
+import { createBindingsService, createBindingsStub } from './bindings.js';
 import { createConnectionStore, type ConnectionStore } from './connection-store.js';
 import {
   createConnectionsService,
@@ -134,8 +135,9 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   let gatewayPort: number | null = null;
   if (sqlite !== null) {
     const { usageRecords } = sqlite;
-    // Connections are read from SQLite on every request. The resolver arrives in P0-03.4 and
-    // installed Manifests with P0-05, so until then only explicit provider/model ids resolve.
+    // Connections and Slot Bindings are read from SQLite on every request. Installed Manifests
+    // arrive with P0-05, so until then no Slot name is declared and only explicit provider/model
+    // ids resolve.
     gateway = (options.createGateway ?? createGateway)({
       ...createGatewayHost({ store: sqlite.connections, cipher: options.secretCipher }),
       onUsage: (record) => {
@@ -195,7 +197,10 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       connectivity,
       providers: { list: () => providerPresets() },
       connections,
-      bindings: { getGlobal: () => connectionStore?.globalBindings() ?? [] },
+      bindings:
+        connectionStore === undefined
+          ? createBindingsStub()
+          : createBindingsService(connectionStore),
     },
     windowState: {
       read() {

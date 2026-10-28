@@ -759,8 +759,71 @@ describe('the Default Model picker', () => {
 });
 
 describe('Default model and Done', () => {
+  /** The wizard at its Default Model step, with a detected Ollama added on the way. */
+  async function openWithOllama() {
+    const api = installFreshProfile();
+    api.connections.detectLocal.mockResolvedValue({ ok: true, data: [OLLAMA] });
+    api.connections.add.mockImplementation(
+      connectionFor('ollama', 'Ollama', ['qwen3:8b', 'llama3.2:3b']),
+    );
+    await renderApp('');
+    await click('Continue');
+    await click('Continue');
+    await click('Skip');
+    expect(heading()).toBe(DEFAULT_MODEL);
+    return api;
+  }
+
+  it('Continue saves the picked model as the global `default` Slot Binding, then shows it', async () => {
+    const api = await openWithOllama();
+    fireEvent.change(screen.getByLabelText('Default Model'), {
+      target: { value: 'ollama/llama3.2:3b' },
+    });
+    await click('Continue');
+    expect(api.bindings.setGlobal).toHaveBeenCalledExactlyOnceWith({
+      slot: 'default',
+      target: { connectionId: 'ollama', model: 'llama3.2:3b' },
+    });
+    expect(heading()).toBe(DONE);
+    expect(screen.getByText('llama3.2:3b on Ollama')).toBeDefined();
+    await expect(api.bindings.getGlobal()).resolves.toEqual({
+      ok: true,
+      data: [{ slot: 'default', connectionId: 'ollama', model: 'llama3.2:3b' }],
+    });
+  });
+
+  it('stays on the step with the error when the Default Model cannot be saved', async () => {
+    const api = await openWithOllama();
+    api.bindings.setGlobal.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'provider_not_connected',
+        messageKey: 'error.provider_not_connected',
+        message: 'There is no Connection for this Provider. Add one on the Models page.',
+      },
+    });
+    await click('Continue');
+    expect(heading()).toBe(DEFAULT_MODEL);
+    expect(screen.getByRole('alert').textContent).toBe(
+      'There is no Connection for this Provider. Add one on the Models page.',
+    );
+    await click('Continue');
+    expect(api.bindings.setGlobal).toHaveBeenCalledTimes(2);
+    expect(heading()).toBe(DONE);
+    expect(screen.getByText('qwen3:8b on Ollama')).toBeDefined();
+  });
+
+  it('Skip sets no Default Model, keeping any set before', async () => {
+    const api = await openWithOllama();
+    await click('Skip');
+    expect(heading()).toBe(DONE);
+    expect(api.bindings.setGlobal).not.toHaveBeenCalled();
+    const [, defaultModel] = screen.getAllByRole('definition');
+    expect(defaultModel?.textContent).toBe('None');
+  });
+
   it('says the Default Model can be set later when no Connection was added, and the summary lists nothing', async () => {
-    installFreshProfile();
+    const api = installFreshProfile();
     await renderApp('');
     await click('Continue');
     await click('Continue');
@@ -770,6 +833,7 @@ describe('Default model and Done', () => {
     await click('Continue');
     expect(screen.getAllByText('None')).toHaveLength(2);
     expect(screen.getByText(/^No Connection yet\./)).toBeDefined();
+    expect(api.bindings.setGlobal).not.toHaveBeenCalled();
   });
 
   it('shows the error when onboardingDone cannot be saved, and Open Store still works', async () => {

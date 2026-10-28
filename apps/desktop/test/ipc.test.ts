@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createDispatcher, UntrustedSenderError } from '../src/main/runtime/dispatcher.js';
 import { createHandlers, type IpcHandlers } from '../src/main/runtime/handlers.js';
 import { createConnectionsStub, providerPresets } from '../src/main/runtime/connections.js';
+import { ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
 import { IPC_METHODS } from '../src/shared/ipc.js';
@@ -31,7 +32,11 @@ const fakeServices: Services = {
   },
   providers: { list: () => providerPresets() },
   connections: createConnectionsStub(),
-  bindings: { getGlobal: () => [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }] },
+  bindings: {
+    getGlobal: () => [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }],
+    setGlobal: (change) =>
+      ok(change.target === null ? [] : [{ slot: change.slot, ...change.target }]),
+  },
 };
 const en = translatorFor('en');
 
@@ -163,6 +168,9 @@ describe('IPC handlers against a fake service container', () => {
     ['connections.testDraft', { providerId: 'anthropic', displayName: 'x' }],
     ['connections.models', undefined],
     ['connections.models', { id: 'anthropic' }],
+    ['bindings.setGlobal', undefined],
+    ['bindings.setGlobal', { slot: 'default' }],
+    ['bindings.setGlobal', { slot: 'default', target: 'ollama/qwen3:8b' }],
   ])('%s rejects %j as invalid_input', async (method, input) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
@@ -176,6 +184,19 @@ describe('IPC handlers against a fake service container', () => {
     await expect(dispatch(MAIN_WINDOW, { method: 'bindings.getGlobal' })).resolves.toEqual({
       ok: true,
       data: [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }],
+    });
+  });
+
+  it('bindings.setGlobal hands a well-formed change to the service', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'bindings.setGlobal',
+        input: { slot: 'fast', target: { connectionId: 'ollama', model: 'qwen3:8b' } },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      data: [{ slot: 'fast', connectionId: 'ollama', model: 'qwen3:8b' }],
     });
   });
 

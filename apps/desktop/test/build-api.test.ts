@@ -16,7 +16,7 @@ describe('buildApi (window.api)', () => {
       'settings',
     ]);
     expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit']);
-    expect(Object.keys(api.bindings)).toEqual(['getGlobal']);
+    expect(Object.keys(api.bindings)).toEqual(['getGlobal', 'setGlobal']);
     expect(Object.keys(api.connections)).toEqual([
       'detectLocal',
       'list',

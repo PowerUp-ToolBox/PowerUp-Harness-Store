@@ -234,7 +234,14 @@ describe('Connections and the Model Gateway', () => {
     expect(fake.requests).toHaveLength(0);
   });
 
-  it('a Slot name resolves to nothing yet: no Harness is installed (P0-05) and no resolver (P0-03.4)', async () => {
+  it('in the app a Slot name is not declared yet, even with a Default Model: no Harness can be installed (P0-05)', async () => {
+    await call('connections.add', { providerId: 'ollama', baseUrl: keyless.url });
+    await expect(
+      call('bindings.setGlobal', {
+        slot: 'default',
+        target: { connectionId: 'ollama', model: 'fake/echo' },
+      }),
+    ).resolves.toMatchObject({ ok: true });
     const response = await complete('default');
     expect(response.status).toBe(404);
     expect(errorCode(response.body)).toBe('unknown_slot');

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createBindingsStub } from '../../src/main/runtime/bindings.js';
 import { openDatabase } from '../../src/main/runtime/database.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
@@ -56,7 +57,7 @@ function launch(osLocale: string) {
     },
     providers: { list: () => providerPresets() },
     connections: createConnectionsStub(),
-    bindings: { getGlobal: () => [] },
+    bindings: createBindingsStub(),
   };
   const dispatch = createDispatcher({
     handlers: createHandlers(services),

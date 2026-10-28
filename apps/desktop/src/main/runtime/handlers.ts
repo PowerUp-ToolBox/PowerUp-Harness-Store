@@ -1,4 +1,5 @@
 import type { IpcMethodName, IpcOutput, IpcResult } from '../../shared/ipc.js';
+import { parseGlobalBindingChange } from './bindings.js';
 import {
   parseConnectionDraft,
   parseConnectionTestDraft,
@@ -99,6 +100,11 @@ export function createHandlers(services: Services): IpcHandlers {
     'bindings.getGlobal': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'bindings.getGlobal' });
       return ok(services.bindings.getGlobal());
+    },
+    'bindings.setGlobal': (input) => {
+      const change = parseGlobalBindingChange(input);
+      if (change === null) return fail('invalid_input', { method: 'bindings.setGlobal' });
+      return services.bindings.setGlobal(change);
     },
   };
 }

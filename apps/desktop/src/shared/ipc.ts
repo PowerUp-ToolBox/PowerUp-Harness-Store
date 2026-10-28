@@ -128,6 +128,13 @@ export interface IpcMethods {
   'connections.remove': { input: string; output: null };
   /** The global Slot Bindings (the Default Models), `default` first, then by Slot name. */
   'bindings.getGlobal': { input: undefined; output: readonly GlobalBinding[] };
+  /**
+   * Sets the Default Model of one Slot name, or clears it (`target: null`), and returns the global
+   * Slot Bindings as they now are. The Model Gateway uses the change from its next request on. A
+   * Connection that does not exist or is disabled answers `provider_not_connected`; a Slot name or
+   * model name the Gateway would not accept, `invalid_input`.
+   */
+  'bindings.setGlobal': { input: GlobalBindingChange; output: readonly GlobalBinding[] };
 }
 
 /** The Runtime's startup steps, in order: open and migrate SQLite, then start the Model Gateway. */
@@ -351,6 +358,21 @@ export interface GlobalBinding {
   readonly model: string;
 }
 
+/** Where a Slot Binding points: one Connection and a model at its Provider. */
+export interface BindingTarget {
+  readonly connectionId: string;
+  /** The model name at that Connection's Provider, without the Provider prefix. */
+  readonly model: string;
+}
+
+/** A change to the Default Model of one Slot name. */
+export interface GlobalBindingChange {
+  /** The Model Slot name, as a Manifest declares it (`default`, `fast`, …). */
+  readonly slot: string;
+  /** The model to bind; null clears the Default Model of this Slot name. */
+  readonly target: BindingTarget | null;
+}
+
 export type IpcMethodName = keyof IpcMethods;
 export type IpcInput<M extends IpcMethodName> = IpcMethods[M]['input'];
 export type IpcOutput<M extends IpcMethodName> = IpcMethods[M]['output'];
@@ -376,6 +398,7 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'connections.models': true,
   'connections.remove': true,
   'bindings.getGlobal': true,
+  'bindings.setGlobal': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */
