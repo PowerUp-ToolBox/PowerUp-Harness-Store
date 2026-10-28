@@ -3,7 +3,7 @@
  * src/main/index.ts serves from the Store's public `harness-assets` bucket only.
  */
 import { describe, expect, it } from 'vitest';
-import { storeAssetSource, storeAssetUrl } from '../../src/main/runtime/store-assets.js';
+import { storeAssetSource, storeAssetUrl } from '../../src/shared/store-assets.js';
 
 const STORE = 'http://127.0.0.1:54321';
 const BUCKET = `${STORE}/storage/v1/object/public/harness-assets`;

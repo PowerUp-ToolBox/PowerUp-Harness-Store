@@ -7,8 +7,10 @@ function sidebar() {
   return screen.getByRole('navigation', { name: 'Main' });
 }
 
+let api: ReturnType<typeof installFakeApi>;
+
 beforeEach(() => {
-  installFakeApi();
+  api = installFakeApi();
 });
 
 afterEach(() => {
@@ -49,7 +51,7 @@ describe('main window shell', () => {
 
   it('reads a Harness ID with its slash from the detail route, under the Store section', async () => {
     await renderAt('#/store/h/acme/code-reviewer');
-    expect(screen.getByText(/\bacme\/code-reviewer\b/)).toBeDefined();
+    expect(api.store.detail).toHaveBeenCalledWith('acme/code-reviewer');
     expect(
       within(sidebar()).getByRole('link', { name: 'Store' }).getAttribute('aria-current'),
     ).toBe('page');

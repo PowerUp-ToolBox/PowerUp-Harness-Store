@@ -61,6 +61,7 @@ function launch(osLocale: string) {
     store: {
       home: () => Promise.resolve(fail('not_implemented')),
       search: () => Promise.resolve(fail('not_implemented')),
+      detail: () => Promise.resolve(fail('not_implemented')),
     },
     providers: { list: () => providerPresets() },
     connections: createConnectionsStub(),

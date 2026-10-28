@@ -136,7 +136,7 @@ describe('reads of the seed catalogue', () => {
     >(
       'anon',
       'GET',
-      'harnesses?harness_id=eq.alice/hello-web&select=*,profiles(github_login,display_name,avatar_url),harness_versions(version,changelog,published_at,platforms,status,download_count)',
+      `harnesses?harness_id=eq.alice/hello-web&select=id,harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at,status,profiles(github_login,display_name,avatar_url),harness_versions(version,changelog,published_at,platforms,status,download_count,permissions)&harness_versions.order=published_at.desc`,
     );
     expect(reply.status).toBe(200);
     expect(reply.body).toMatchObject([

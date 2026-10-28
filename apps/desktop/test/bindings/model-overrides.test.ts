@@ -379,3 +379,65 @@ describe('bindings.setOverride, clearOverride, getForHarness and resolveAll', ()
     });
   });
 });
+
+describe('bindings.resolveManifest (the Store detail page, P0-09.3)', () => {
+  /** A Store Manifest's `models` that is not installed: `default` needs tools, `vision` asks more. */
+  const STORE_MODELS = {
+    slots: {
+      default: { requirements: { tools: true }, recommended: ['ollama/model-b'] },
+      vision: { requirements: { vision: true }, recommended: ['anthropic/claude-x'] },
+    },
+  };
+
+  async function resolveManifest(harnessId: string, models: unknown) {
+    const result = await call('bindings.resolveManifest', { harnessId, models });
+    if (!result.ok) throw new Error(result.error.message);
+    return result.data;
+  }
+
+  it('resolves a Harness that is not installed, Slot by Slot, as the Gateway would', async () => {
+    // Nothing can fill either Slot yet.
+    await expect(resolveManifest('bob/not-installed', STORE_MODELS)).resolves.toEqual([
+      { slot: 'default', binding: null },
+      { slot: 'vision', binding: null },
+    ]);
+    await addOllama();
+    // `default` by its Recommended Model; `vision` recommends an Anthropic model no Connection
+    // serves, and no Default Model is set: not reachable. Model Requirements are not checked.
+    await expect(resolveManifest('bob/not-installed', STORE_MODELS)).resolves.toEqual([
+      {
+        slot: 'default',
+        binding: { connectionId: 'ollama', model: 'model-b', source: 'recommended' },
+      },
+      { slot: 'vision', binding: null },
+    ]);
+    await addFake();
+    await call('bindings.setGlobal', {
+      slot: 'default',
+      target: { connectionId: FAKE, model: 'model-a' },
+    });
+    await expect(resolveManifest('bob/not-installed', STORE_MODELS)).resolves.toEqual([
+      {
+        slot: 'default',
+        binding: { connectionId: 'ollama', model: 'model-b', source: 'recommended' },
+      },
+      { slot: 'vision', binding: { connectionId: FAKE, model: 'model-a', source: 'default' } },
+    ]);
+  });
+
+  it("counts the Harness's Model Overrides when it has some, exactly as resolveAll does", async () => {
+    await addOllama();
+    await addFake();
+    await override('default', FAKE, 'model-c');
+    const installed = await call('bindings.resolveAll', HARNESS_ID);
+    if (!installed.ok) throw new Error(installed.error.message);
+    const { models } = JSON.parse(readFileSync(join(folder, 'manifest.json'), 'utf8')) as {
+      models: unknown;
+    };
+    await expect(resolveManifest(HARNESS_ID, models)).resolves.toEqual(installed.data);
+    expect(installed.data).toContainEqual({
+      slot: 'default',
+      binding: { connectionId: FAKE, model: 'model-c', source: 'override' },
+    });
+  });
+});

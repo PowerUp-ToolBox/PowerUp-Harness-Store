@@ -15,6 +15,7 @@ import { isTag } from '../../shared/tags.js';
 import {
   isHarnessIdInput,
   parseGlobalBindingChange,
+  parseManifestSlotsRequest,
   parseModelOverrideChange,
   parseModelOverrideClear,
 } from './bindings.js';
@@ -86,6 +87,12 @@ export function createHandlers(services: Services): IpcHandlers {
       if (request === null) return fail('invalid_input', { method: 'store.search' });
       return services.store.search(request);
     },
+    'store.detail': (input) => {
+      if (!isHarnessIdInput(input) || !input.includes('/')) {
+        return fail('invalid_input', { method: 'store.detail' });
+      }
+      return services.store.detail(input);
+    },
     'providers.list': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'providers.list' });
       return ok(services.providers.list());
@@ -154,6 +161,13 @@ export function createHandlers(services: Services): IpcHandlers {
     'bindings.resolveAll': (input) => {
       if (!isHarnessIdInput(input)) return fail('invalid_input', { method: 'bindings.resolveAll' });
       return services.bindings.resolveAll(input);
+    },
+    'bindings.resolveManifest': (input) => {
+      const request = parseManifestSlotsRequest(input);
+      if (request === null) {
+        return fail('invalid_input', { method: 'bindings.resolveManifest' });
+      }
+      return services.bindings.resolveManifest(request);
     },
     'auth.signIn': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'auth.signIn' });

@@ -72,7 +72,9 @@ describe('terminalWindowOptions', () => {
 describe('isAllowedExternalUrl', () => {
   it.each([
     ['https://ollama.com/download', true],
-    ['http://example.com', false],
+    ['http://example.com', true],
+    ['mailto:someone@example.com', false],
+    ['harnessstore://auth-callback', false],
     ['file:///etc/passwd', false],
     ['javascript:alert(1)', false],
     ['not a url', false],

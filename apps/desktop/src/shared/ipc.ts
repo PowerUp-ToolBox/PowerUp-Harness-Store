@@ -170,6 +170,15 @@ export interface IpcMethods {
    * something else.
    */
   'store.search': { input: StoreSearchRequest; output: StoreSearchPage };
+  /**
+   * A Harness's Store detail page (P0-09.3), by Harness ID: api.md's detail read (published
+   * versions only, newest first), then its latest version's Manifest, README and screenshots,
+   * read anonymously and never kept in memory. A Harness the Store does not show answers its
+   * status from `latest_versions` and no page. `store_unreachable` when the Store did not answer
+   * (connectivity is checked again), `store_error` when it answered with something else, a
+   * Manifest that does not validate included.
+   */
+  'store.detail': { input: string; output: StoreDetail };
   /** Every Provider of the Gateway's table, in its order, local ones (Ollama, LM Studio) included. */
   'providers.list': { input: undefined; output: readonly ProviderPreset[] };
   /**
@@ -258,6 +267,13 @@ export interface IpcMethods {
    * for a Harness that is not installed.
    */
   'bindings.resolveAll': { input: string; output: readonly ResolvedSlot[] };
+  /**
+   * What every Model Slot of a Manifest would resolve to right now, installed or not (the Store
+   * detail page's "Will use"): the same resolution as `bindings.resolveAll`, over the Slots and
+   * Recommended Models given, with the Harness's Model Overrides when it has some. `default`
+   * first, then in the given order. Model Requirements are not checked: they only warn.
+   */
+  'bindings.resolveManifest': { input: ManifestSlotsRequest; output: readonly ResolvedSlot[] };
   /**
    * Signs the Publisher in to the Store with GitHub: opens the User's browser (never a window of
    * the app) on the Store's GitHub sign-in, and resolves once the browser comes back through
@@ -752,6 +768,68 @@ export interface StoreListing {
   readonly platforms: readonly Platform[];
 }
 
+/** A Harness's Store detail page, or why there is none (`store.detail`). */
+export interface StoreDetail {
+  /** This machine's platform, as in {@link StoreHome}. */
+  readonly platform: Platform | null;
+  /** The Harness's status in the Store; only an `available` one has a page. */
+  readonly storeStatus: HarnessStoreStatus;
+  /** Everything the page shows; null unless `available`. */
+  readonly harness: StoreHarness | null;
+}
+
+/** A Harness as its Store detail page shows it: its latest published version, and its history. */
+export interface StoreHarness {
+  readonly harnessId: string;
+  readonly publisher: StorePublisher;
+  /** A `store-asset:` URL of the icon in the Store's asset bucket; null for the monogram. */
+  readonly iconUrl: string | null;
+  /** The downloads of all its versions. */
+  readonly downloadCount: number;
+  /** The Manifest of the latest published version, as the Store keeps it. */
+  readonly manifest: Manifest;
+  /** That version's README.md (Markdown); null when it has none. */
+  readonly readme: string | null;
+  /** `store-asset:` URLs of that version's screenshots, at most five, in order. */
+  readonly screenshotUrls: readonly string[];
+  /** Every published version, newest first. */
+  readonly versions: readonly StoreVersion[];
+}
+
+/** The Publisher of a Harness, as their Store profile names them. */
+export interface StorePublisher {
+  /** The GitHub login: the publisher segment of the Harness ID. */
+  readonly login: string;
+  readonly displayName: string | null;
+  /** Their GitHub avatar (https); null without one. */
+  readonly avatarUrl: string | null;
+}
+
+/** One published Harness Version in a detail page's version history. */
+export interface StoreVersion {
+  readonly version: string;
+  /** ISO-8601. */
+  readonly publishedAt: string;
+  /** The Manifest's changelog of that version (Markdown); null without one. */
+  readonly changelog: string | null;
+  /**
+   * Its Declared Permissions differ from those of the next older published version; false for
+   * the oldest one.
+   */
+  readonly permissionsChanged: boolean;
+}
+
+/**
+ * What the Model Slots of a Manifest that is not installed would resolve to on this machine
+ * (`bindings.resolveManifest`): the Store detail page's "Will use" note per Slot.
+ */
+export interface ManifestSlotsRequest {
+  /** The Harness's ID: its Model Overrides count when it has some. */
+  readonly harnessId: string;
+  /** The Manifest's `models`: its Slots and their Recommended Models. */
+  readonly models: Manifest['models'];
+}
+
 /** The app settings as the renderer sees them. */
 export interface Settings {
   /** The User's language override; absent means "System" (follow the OS locale). */
@@ -1024,6 +1102,7 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'connectivity.check': true,
   'store.home': true,
   'store.search': true,
+  'store.detail': true,
   'providers.list': true,
   'connections.detectLocal': true,
   'connections.list': true,
@@ -1039,6 +1118,7 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'bindings.setOverride': true,
   'bindings.clearOverride': true,
   'bindings.resolveAll': true,
+  'bindings.resolveManifest': true,
   'auth.signIn': true,
   'auth.signOut': true,
   'auth.whoami': true,

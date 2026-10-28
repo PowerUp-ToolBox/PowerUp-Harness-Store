@@ -33,7 +33,7 @@ import { createHandlers } from './runtime/handlers.js';
 import { createHarnessWindowHandlers } from './runtime/harness-window-handlers.js';
 import { isAllowedExternalUrl, mainWindowOptions } from './runtime/main-window.js';
 import { createSafeStorageCipher } from './runtime/secret-cipher.js';
-import { STORE_ASSET_SCHEME, storeAssetSource } from './runtime/store-assets.js';
+import { STORE_ASSET_SCHEME, storeAssetSource } from '../shared/store-assets.js';
 import { AUTH_SCHEME } from './runtime/store-auth.js';
 import { initialWindowBounds } from './runtime/window-state.js';
 
@@ -50,7 +50,7 @@ const harnessWindows = createHarnessWindows();
 /** Quitting: 'idle', then 'stopping' while the Runtime shuts down, then 'stopped'. */
 let quitState: 'idle' | 'stopping' | 'stopped' = 'idle';
 
-// The Store's images (./runtime/store-assets.ts): a standard, secure scheme, so an <img> of the
+// The Store's images (src/shared/store-assets.ts): a standard, secure scheme, so an <img> of the
 // main window loads it like https. Must be registered before `ready`.
 protocol.registerSchemesAsPrivileged([
   { scheme: STORE_ASSET_SCHEME, privileges: { standard: true, secure: true } },
@@ -283,7 +283,7 @@ function createMainWindow(started: Runtime, route?: string): BrowserWindow {
   });
 
   // The renderer is a single page with hash routes: it never navigates away, and every new
-  // window is refused. https links open in the User's browser instead.
+  // window is refused. http(s) links (README, homepage, source) open in the User's browser instead.
   window.webContents.on('will-navigate', (event) => {
     event.preventDefault();
   });

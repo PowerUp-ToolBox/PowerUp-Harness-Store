@@ -68,7 +68,7 @@ async function detail(harnessId: string) {
   const reply = await rest<{ latest_version: string; harness_versions: { version: string }[] }[]>(
     'anon',
     'GET',
-    `harnesses?harness_id=eq.${encodeURIComponent(harnessId)}&select=*,profiles(github_login,display_name,avatar_url),harness_versions(version,changelog,published_at,platforms,status,download_count)`,
+    `harnesses?harness_id=eq.${encodeURIComponent(harnessId)}&select=id,harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at,status,profiles(github_login,display_name,avatar_url),harness_versions(version,changelog,published_at,platforms,status,download_count,permissions)&harness_versions.order=published_at.desc`,
   );
   expect(reply.status).toBe(200);
   return reply.body[0];

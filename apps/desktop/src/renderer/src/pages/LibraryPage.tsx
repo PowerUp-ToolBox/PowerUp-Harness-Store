@@ -9,7 +9,7 @@ import type {
 } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
-import { WorkspaceSheet } from '../library/WorkspaceSheet.js';
+import { LaunchAction, useLauncher } from '../library/LaunchAction.js';
 import { LibraryIcon, MoreIcon } from '../shell/icons.js';
 
 /**
@@ -18,8 +18,8 @@ import { LibraryIcon, MoreIcon } from '../shell/icons.js';
  * follows each Harness's launch with `launch.status` and `launch.state`, so every card shows its
  * Harness's state live, without polling. P0-05 builds the basic card (icon, name, Publisher,
  * version, the Local badge, the primary button with its launch states, the error line of a failed
- * launch) and its overflow menu's Model Overrides, Show logs and Open data folder; P0-10 adds
- * sort and filter, the menu's other items and update states.
+ * launch) and its overflow menu's Model Overrides, Show logs and Open data folder; P0-09.3 adds
+ * View in Store; P0-10 adds sort and filter, the menu's other items and update states.
  */
 export function LibraryPage() {
   const { t } = useI18n();
@@ -106,17 +106,12 @@ function shownFailure(launch: LaunchStatus | undefined): ShownFailure | null {
 const dismissedFailures = new Set<string>();
 
 /**
- * One installed Harness. Its primary button follows docs/ux/design-principles.md §3: Launch;
- * "Starting…" while it starts; "Running…" with "Show window" while it runs (both bring its
- * window to the front, as a second launch would); "Stopping…" after its window closed; "Set up a
- * model first", which opens the Models page at this Harness, when nothing can fill its `default`
- * Model Slot; "Not available for your platform", disabled. Launch first opens the Workspace sheet
- * for a Harness whose Manifest asks for a Workspace (docs/ux/flows.md F3). There is no Stop:
- * closing the Harness's window stops it with the shutdown sequence (flows.md F3 step 7).
- *
- * A launch that failed shows why ("Exited with an error", "Did not start in time", "Could not
- * start") with Show logs and Dismiss, and Launch retries; the paths Show logs and Open data
- * folder open are computed in main.
+ * One installed Harness: icon, name, Publisher, version, the Local badge, the primary button
+ * ({@link LaunchAction}, shared with the Store detail page) and its overflow menu. A launch that
+ * failed shows why ("Exited with an error", "Did not start in time", "Could not start") with Show
+ * logs and Dismiss, and Launch retries; the paths Show logs and Open data folder open are computed
+ * in main. View in Store opens the Harness's Store detail page, which says so when the Store no
+ * longer has it.
  */
 function HarnessCard({
   install,
@@ -127,47 +122,13 @@ function HarnessCard({
 }) {
   const { t } = useI18n();
   const navigate = useNavigate();
-  const [needsModel, setNeedsModel] = useState(false);
   const [error, setError] = useState<IpcError | null>(null);
-  const [choosingWorkspace, setChoosingWorkspace] = useState(false);
+  const launcher = useLauncher(install, setError);
   const [, dismissed] = useReducer((count: number) => count + 1, 0);
   const { harnessId } = install;
   const failure =
     launch === undefined || dismissedFailures.has(launch.launchId) ? null : shownFailure(launch);
 
-  useEffect(() => {
-    let current = true;
-    void window.api.bindings.resolveAll(harnessId).then((result) => {
-      if (!current || !result.ok) return;
-      const slot = result.data.find((each) => each.slot === 'default');
-      setNeedsModel(slot?.binding === null);
-    });
-    return () => {
-      current = false;
-    };
-  }, [harnessId]);
-
-  /** Launches it, or focuses it while it runs; resolves the error to show, if any. */
-  const start = async (workspace?: string | null): Promise<IpcError | null> => {
-    const result = await window.api.launch.start(
-      workspace === undefined ? { harnessId } : { harnessId, workspace },
-    );
-    if (result.ok) return null;
-    if (result.error.code !== 'slot_unbound') return result.error;
-    setNeedsModel(true);
-    return null;
-  };
-  const startHere = () => {
-    setError(null);
-    void start().then(setError);
-  };
-  const launchFromCard = () => {
-    if ((install.manifest.workspace ?? 'none') === 'none') startHere();
-    else setChoosingWorkspace(true);
-  };
-  const openModels = () => {
-    void navigate(`/models?harness=${encodeURIComponent(harnessId)}`);
-  };
   /** Runs an "open in the OS" call, showing its error, if any, on the card. */
   const reveal = (call: (harnessId: string) => Promise<IpcResult<null>>) => {
     setError(null);
@@ -207,7 +168,13 @@ function HarnessCard({
         <CardMenu
           name={install.name}
           items={[
-            { label: t('library.menu.overrides'), onSelect: openModels },
+            {
+              label: t('library.menu.viewInStore'),
+              onSelect: () => {
+                void navigate(`/store/h/${harnessId}`);
+              },
+            },
+            { label: t('library.menu.overrides'), onSelect: launcher.openModels },
             { label: t('library.showLogs'), onSelect: showLogs },
             {
               label: t('library.menu.openDataFolder'),
@@ -230,94 +197,12 @@ function HarnessCard({
         </div>
       )}
       <div className="harness-card-actions">
-        <PrimaryAction
-          install={install}
-          state={launch?.state}
-          needsModel={needsModel}
-          onLaunch={launchFromCard}
-          onFocus={startHere}
-          onOpenModels={openModels}
-        />
+        <LaunchAction install={install} state={launch?.state} launcher={launcher} />
       </div>
       {error === null ? null : <ErrorMessage error={error} />}
-      {choosingWorkspace ? (
-        <WorkspaceSheet
-          install={install}
-          onLaunch={(workspace) => {
-            setError(null);
-            return start(workspace);
-          }}
-          onClose={() => {
-            setChoosingWorkspace(false);
-          }}
-        />
-      ) : null}
+      {launcher.sheet}
     </article>
   );
-}
-
-function PrimaryAction({
-  install,
-  state,
-  needsModel,
-  onLaunch,
-  onFocus,
-  onOpenModels,
-}: {
-  readonly install: InstalledHarness;
-  readonly state: LaunchStatus['state'] | undefined;
-  readonly needsModel: boolean;
-  /** Launch: through the Workspace sheet when the Harness asks for a Workspace. */
-  readonly onLaunch: () => void;
-  /** Running… and Show window: a launch while it runs brings its window to the front. */
-  readonly onFocus: () => void;
-  readonly onOpenModels: () => void;
-}) {
-  const { t } = useI18n();
-  if (!install.platformSupported) {
-    return (
-      <button type="button" className="button-primary" disabled>
-        {t('library.unsupported')}
-      </button>
-    );
-  }
-  switch (state) {
-    case 'preparing':
-    case 'spawning':
-    case 'waiting-ready':
-      return (
-        <button type="button" className="button-primary" disabled>
-          {t('library.starting')}
-        </button>
-      );
-    case 'ready':
-      return (
-        <>
-          <button type="button" className="button-primary" onClick={onFocus}>
-            {t('library.running')}
-          </button>
-          <button type="button" className="button-link" onClick={onFocus}>
-            {t('library.showWindow')}
-          </button>
-        </>
-      );
-    case 'stopping':
-      return (
-        <button type="button" className="button-primary" disabled>
-          {t('library.stopping')}
-        </button>
-      );
-    default:
-      return needsModel ? (
-        <button type="button" className="button-primary" onClick={onOpenModels}>
-          {t('library.needsModel')}
-        </button>
-      ) : (
-        <button type="button" className="button-primary" onClick={onLaunch}>
-          {t('library.launch')}
-        </button>
-      );
-  }
 }
 
 interface CardMenuItem {

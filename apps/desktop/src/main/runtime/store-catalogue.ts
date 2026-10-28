@@ -1,15 +1,20 @@
-import { manifestSchema, type Platform, type Tag } from '@harness-store/manifest';
+import { manifestSchema, validateManifest, type Platform, type Tag } from '@harness-store/manifest';
+import { isDeepStrictEqual } from 'node:util';
 import {
   STORE_SEARCH_PAGE_SIZE,
+  type HarnessStoreStatus,
   type IpcResult,
+  type StoreDetail,
+  type StoreHarness,
   type StoreHome,
   type StoreHomeRequest,
   type StoreListing,
   type StoreSearchPage,
   type StoreSearchRequest,
+  type StoreVersion,
 } from '../../shared/ipc.js';
 import { fail, ok } from './ipc-result.js';
-import { storeAssetUrl } from './store-assets.js';
+import { storeAssetUrl } from '../../shared/store-assets.js';
 import type { StoreFetch } from './store-auth.js';
 
 /** A Store read gives up after this long. */
@@ -31,6 +36,26 @@ const HOME_READS = {
   mostDownloaded: `harnesses?order=download_count.desc,harness_id&limit=12&select=${LIST_COLUMNS}`,
   newest: `harnesses?order=latest_published_at.desc,harness_id&limit=12&select=${LIST_COLUMNS}`,
 } as const;
+
+/**
+ * api.md's Harness detail read, without the Harness ID: the list columns but the embedded
+ * versions, the Harness's `id` (for the version read) and `status`, its Publisher, and every
+ * published version with what the version history shows, newest first (no `search` vector).
+ */
+const DETAIL_COLUMNS =
+  'id,harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at,status,' +
+  'profiles(github_login,display_name,avatar_url),' +
+  'harness_versions(version,changelog,published_at,platforms,status,download_count,permissions)';
+
+/** How many screenshots a detail page shows, as the Store keeps at most that many. */
+const MAX_SCREENSHOTS = 5;
+
+const STORE_STATUSES: ReadonlySet<string> = new Set<HarnessStoreStatus>([
+  'available',
+  'unpublished',
+  'taken_down',
+  'not_found',
+]);
 
 const PLATFORMS: ReadonlySet<string> = new Set(
   (manifestSchema.$defs as { platform: { enum: readonly string[] } }).platform.enum,
@@ -62,6 +87,8 @@ export interface StoreCatalogue {
   home(request?: StoreHomeRequest): Promise<IpcResult<StoreHome>>;
   /** One page of a search (`store.search`). */
   search(request: StoreSearchRequest): Promise<IpcResult<StoreSearchPage>>;
+  /** A Harness's detail page (`store.detail`). */
+  detail(harnessId: string): Promise<IpcResult<StoreDetail>>;
 }
 
 /**
@@ -110,6 +137,50 @@ export function createStoreCatalogue(options: StoreCatalogueOptions): StoreCatal
       return fail('store_error');
     }
     return Array.isArray(rows) ? ok(rows) : fail('store_error');
+  };
+
+  /**
+   * api.md's detail read, then the latest version's Manifest, README and screenshots ("Version
+   * manifest"). A Harness the detail read does not show (taken down, Unpublished-only or unknown)
+   * gets its status from `latest_versions` instead, and no page.
+   */
+  const readDetail = async (harnessId: string): Promise<IpcResult<StoreDetail>> => {
+    const rows = await read(
+      `harnesses?harness_id=eq.${encodeURIComponent(harnessId)}&select=${DETAIL_COLUMNS}` +
+        '&harness_versions.order=published_at.desc',
+    );
+    if (!rows.ok) return rows;
+    const row = rows.data[0];
+    if (row === undefined) {
+      const status = await read('rpc/latest_versions?select=harness_id,store_status', {
+        harness_ids: [harnessId],
+      });
+      if (!status.ok) return status;
+      const storeStatus = (status.data[0] as Record<string, unknown> | undefined)?.store_status;
+      if (typeof storeStatus !== 'string' || !STORE_STATUSES.has(storeStatus)) {
+        return fail('store_error');
+      }
+      return ok({
+        platform: options.platform,
+        // The detail read would have shown an available Harness: it went away in between.
+        storeStatus:
+          storeStatus === 'available' ? 'not_found' : (storeStatus as HarnessStoreStatus),
+        harness: null,
+      });
+    }
+    if (!isRecord(row) || typeof row.id !== 'string' || typeof row.latest_version !== 'string') {
+      return fail('store_error');
+    }
+    const latest = await read(
+      `harness_versions?harness_id=eq.${encodeURIComponent(row.id)}` +
+        `&version=eq.${encodeURIComponent(row.latest_version)}` +
+        '&select=manifest,readme,screenshot_paths',
+    );
+    if (!latest.ok) return latest;
+    const harness = harnessOf(harnessId, row, latest.data[0]);
+    return harness === null
+      ? fail('store_error')
+      : ok({ platform: options.platform, storeStatus: 'available', harness });
   };
 
   return {
@@ -168,7 +239,86 @@ export function createStoreCatalogue(options: StoreCatalogueOptions): StoreCatal
         hasMore: result.data.length >= STORE_SEARCH_PAGE_SIZE,
       });
     },
+
+    async detail(harnessId) {
+      const answer = await readDetail(harnessId);
+      if (!answer.ok && answer.error.code === 'store_unreachable') options.onStoreUnreachable?.();
+      return answer;
+    },
   };
+}
+
+/**
+ * The detail page of the detail read's `row` and its latest version's `latest` row, or null when
+ * either is not what api.md says it is: another Harness, a Manifest that does not validate, or not
+ * the latest version's.
+ */
+function harnessOf(
+  harnessId: string,
+  row: Record<string, unknown>,
+  latest: unknown,
+): StoreHarness | null {
+  if (row.harness_id !== harnessId || !isRecord(latest)) return null;
+  const validation = validateManifest(latest.manifest);
+  if (!validation.ok) return null;
+  const { manifest } = validation;
+  if (manifest.id !== harnessId || manifest.version !== row.latest_version) return null;
+  const profile = isRecord(row.profiles) ? row.profiles : {};
+  const login = harnessId.slice(0, harnessId.indexOf('/'));
+  const screenshots = Array.isArray(latest.screenshot_paths) ? latest.screenshot_paths : [];
+  return {
+    harnessId,
+    publisher: {
+      login,
+      displayName: typeof profile.display_name === 'string' ? profile.display_name : null,
+      avatarUrl: isHttpsUrl(profile.avatar_url) ? profile.avatar_url : null,
+    },
+    iconUrl: typeof row.icon_path === 'string' ? storeAssetUrl(row.icon_path) : null,
+    downloadCount: typeof row.download_count === 'number' ? row.download_count : 0,
+    manifest,
+    readme: typeof latest.readme === 'string' && latest.readme.trim() !== '' ? latest.readme : null,
+    screenshotUrls: screenshots
+      .map((path) => (typeof path === 'string' ? storeAssetUrl(path) : null))
+      .filter((url) => url !== null)
+      .slice(0, MAX_SCREENSHOTS),
+    versions: versionsOf(row.harness_versions),
+  };
+}
+
+/**
+ * The version history: the published versions, newest first as the read orders them, each marked
+ * when its Declared Permissions are not those of the next older one. A row that is not a version
+ * is skipped.
+ */
+function versionsOf(rows: unknown): StoreVersion[] {
+  const published = (Array.isArray(rows) ? rows : []).filter(
+    (row): row is Record<string, unknown> =>
+      isRecord(row) &&
+      typeof row.version === 'string' &&
+      typeof row.published_at === 'string' &&
+      // Row-level security shows anon the published ones only.
+      row.status === 'published',
+  );
+  return published.map((row, index) => {
+    const older = published[index + 1];
+    return {
+      version: row.version as string,
+      publishedAt: row.published_at as string,
+      changelog: typeof row.changelog === 'string' && row.changelog !== '' ? row.changelog : null,
+      permissionsChanged:
+        older !== undefined && !isDeepStrictEqual(row.permissions, older.permissions),
+    };
+  });
+}
+
+/** An absolute https URL, such as a GitHub avatar. */
+function isHttpsUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 /** The cards of a list read's rows; a row that is not one (no ID, name or version) is skipped. */

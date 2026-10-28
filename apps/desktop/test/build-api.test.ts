@@ -30,6 +30,7 @@ describe('buildApi (window.api)', () => {
       'setOverride',
       'clearOverride',
       'resolveAll',
+      'resolveManifest',
     ]);
     expect(Object.keys(api.connections)).toEqual([
       'detectLocal',
@@ -67,7 +68,7 @@ describe('buildApi (window.api)', () => {
       'unpublish',
     ]);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
-    expect(Object.keys(api.store)).toEqual(['home', 'search']);
+    expect(Object.keys(api.store)).toEqual(['home', 'search', 'detail']);
     expect(Object.isFrozen(api)).toBe(true);
     expect(Object.isFrozen(api.app)).toBe(true);
     expect(Object.isFrozen(api.settings)).toBe(true);

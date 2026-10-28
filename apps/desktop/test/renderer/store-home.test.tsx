@@ -156,7 +156,7 @@ describe('Store home', () => {
   });
 
   it('opens the detail page from a card’s name', async () => {
-    const { answer } = installPendingHome();
+    const { api, answer } = installPendingHome();
     await renderApp('#/store');
     await answer({ ok: true, data: HOME });
 
@@ -167,7 +167,7 @@ describe('Store home', () => {
       await Promise.resolve();
     });
     expect(window.location.hash).toBe('#/store/h/alice/writer');
-    expect(screen.getByText('Details of the Harness alice/writer appear here.')).toBeDefined();
+    expect(api.store.detail).toHaveBeenCalledWith('alice/writer');
   });
 
   it('opens the Publisher page from a card’s login', async () => {

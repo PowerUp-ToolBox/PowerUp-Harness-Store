@@ -154,10 +154,15 @@ export function harnessFrameNavigation(
   return navigation.isMainFrame ? harnessNavigation(navigation.url, origin) : 'inside';
 }
 
-/** Links the renderer may hand to the OS browser (`shell.openExternal`): https only. */
+/**
+ * Links the renderer may hand to the OS browser (`shell.openExternal`): http and https only, as a
+ * Manifest's `homepage` and `sourceRepo` and a README's links may be either. Never `file:`,
+ * `javascript:` or an app's own scheme.
+ */
 export function isAllowedExternalUrl(url: string): boolean {
   try {
-    return new URL(url).protocol === 'https:';
+    const { protocol } = new URL(url);
+    return protocol === 'https:' || protocol === 'http:';
   } catch {
     return false;
   }

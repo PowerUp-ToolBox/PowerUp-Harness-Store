@@ -23,6 +23,38 @@ export function storeAssetUrl(path: string): string | null {
   return `${STORE_ASSET_SCHEME}://${BUCKET}/${segments.map(encodeURIComponent).join('/')}`;
 }
 
+/** The path of the bucket's public objects on a Store, after its origin. */
+const PUBLIC_BUCKET_PATH = `/storage/v1/object/public/${BUCKET}/`;
+
+/**
+ * The `store-asset:` URL of an image a README names in the `harness-assets` bucket: a
+ * `store-asset:` URL itself, or the bucket's public URL on any http(s) origin, which only names
+ * the path (the image is always fetched from the Store at `store_base_url`, never from that
+ * origin). Null for any other URL, and for one with a query, fragment, credentials or a path that
+ * could leave the bucket.
+ */
+export function storeAssetUrlOf(url: string): string | null {
+  if (url.startsWith(`${STORE_ASSET_SCHEME}:`)) {
+    return storeAssetSource(url, 'https://store.invalid') === null ? null : url;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+  if (parsed.username !== '' || parsed.password !== '') return null;
+  if (parsed.search !== '' || parsed.hash !== '') return null;
+  if (!parsed.pathname.startsWith(PUBLIC_BUCKET_PATH)) return null;
+  // `new URL` resolves dot segments: a path it changed had some, and is refused.
+  const raw = /^[^:]+:\/\/[^/?#]*([^?#]*)/.exec(url)?.[1];
+  if (raw !== parsed.pathname) return null;
+  const segments = parsed.pathname.slice(PUBLIC_BUCKET_PATH.length).split('/').map(decodeSegment);
+  if (!segments.every((segment) => segment !== null)) return null;
+  return storeAssetUrl(segments.join('/'));
+}
+
 /**
  * Where a `store-asset:` URL's image is fetched from: the bucket's public URL on the Store at
  * `storeBaseUrl`. Null for anything else: another scheme or host, a query or fragment, a path

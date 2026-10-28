@@ -7,7 +7,13 @@ import { fail, ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { StoreAuthError } from '../src/main/runtime/store-auth.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
-import { IPC_METHODS, type StoreHomeRequest, type StoreSearchRequest } from '../src/shared/ipc.js';
+import {
+  IPC_METHODS,
+  type IpcResult,
+  type StoreDetail,
+  type StoreHomeRequest,
+  type StoreSearchRequest,
+} from '../src/shared/ipc.js';
 
 const MAIN_WINDOW = { id: 'main window webContents' };
 const quit = vi.fn();
@@ -27,6 +33,10 @@ const search = vi.fn((request: StoreSearchRequest) =>
       : ok({ platform: 'darwin-arm64' as const, listings: [], hasMore: false }),
   ),
 );
+const detail = vi.fn<(harnessId: string) => Promise<IpcResult<StoreDetail>>>(() =>
+  Promise.resolve(ok({ platform: 'darwin-arm64', storeStatus: 'not_found', harness: null })),
+);
+const resolveManifest = vi.fn(() => ok([{ slot: 'default', binding: null }]));
 const fakeServices: Services = {
   app: {
     version: '1.2.3',
@@ -48,7 +58,7 @@ const fakeServices: Services = {
     get: () => ({ state: 'offline' }),
     check: () => Promise.resolve({ state: 'online' }),
   },
-  store: { home, search },
+  store: { home, search, detail },
   providers: { list: () => providerPresets() },
   connections: createConnectionsStub(),
   bindings: {
@@ -59,6 +69,7 @@ const fakeServices: Services = {
     setOverride: (change) => ok([{ slot: change.slot, ...change.target }]),
     clearOverride: () => ok([]),
     resolveAll: () => ok([{ slot: 'default', binding: null }]),
+    resolveManifest,
   },
   auth: {
     signIn: () =>
@@ -249,6 +260,29 @@ describe('IPC handlers against a fake service container', () => {
     expect(search).not.toHaveBeenCalled();
   });
 
+  it('store.detail reads the detail page of a Harness ID', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'store.detail', input: 'alice/writer' }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { platform: 'darwin-arm64', storeStatus: 'not_found', harness: null },
+    });
+    expect(detail).toHaveBeenLastCalledWith('alice/writer');
+  });
+
+  it.each([undefined, '', 'writer', 42, { harnessId: 'alice/writer' }, `a/${'x'.repeat(256)}`])(
+    'store.detail rejects %j as invalid_input',
+    async (input) => {
+      const { dispatch } = dispatcherFor();
+      detail.mockClear();
+      await expect(dispatch(MAIN_WINDOW, { method: 'store.detail', input })).resolves.toMatchObject(
+        { ok: false, error: { code: 'invalid_input', params: { method: 'store.detail' } } },
+      );
+      expect(detail).not.toHaveBeenCalled();
+    },
+  );
+
   it('store.search takes 200 characters of text', async () => {
     const { dispatch } = dispatcherFor();
     const input = { ...SEARCH, q: 'x'.repeat(200) };
@@ -354,6 +388,36 @@ describe('IPC handlers against a fake service container', () => {
     ['bindings.clearOverride', { harnessId: 'acme/hello', slot: 'default', target: null }],
     ['bindings.resolveAll', undefined],
     ['bindings.resolveAll', { harnessId: 'acme/hello' }],
+    ['bindings.resolveManifest', undefined],
+    ['bindings.resolveManifest', 'acme/hello'],
+    ['bindings.resolveManifest', { harnessId: 'acme/hello' }],
+    ['bindings.resolveManifest', { harnessId: 'acme/hello', models: { slots: {} } }],
+    ['bindings.resolveManifest', { harnessId: 'acme/hello', models: { slots: { fast: {} } } }],
+    [
+      'bindings.resolveManifest',
+      { harnessId: 'acme/hello', models: { slots: { default: {}, Fast: {} } } },
+    ],
+    [
+      'bindings.resolveManifest',
+      { harnessId: 'acme/hello', models: { slots: { default: { recommended: 'ollama/m' } } } },
+    ],
+    [
+      'bindings.resolveManifest',
+      { harnessId: 'acme/hello', models: { slots: { default: { recommended: [42] } } } },
+    ],
+    [
+      'bindings.resolveManifest',
+      {
+        harnessId: 'acme/hello',
+        models: {
+          slots: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`s${String(i)}`, {}])),
+        },
+      },
+    ],
+    [
+      'bindings.resolveManifest',
+      { harnessId: 'acme/hello', models: { slots: { default: {} } }, extra: 1 },
+    ],
     ['installs.inspectFolder', undefined],
     ['installs.inspectFolder', 'relative/folder'],
     ['installs.inspectFolder', '/folder\u0000'],
@@ -552,6 +616,29 @@ describe('IPC handlers against a fake service container', () => {
     await expect(
       dispatch(MAIN_WINDOW, { method: 'bindings.resolveAll', input: 'acme/hello' }),
     ).resolves.toEqual({ ok: true, data: [{ slot: 'default', binding: null }] });
+  });
+
+  it('bindings.resolveManifest hands the Slots and their Recommended Models to the service', async () => {
+    const { dispatch } = dispatcherFor();
+    const slots = {
+      default: {
+        description: 'Writes.',
+        requirements: { tools: true },
+        recommended: ['ollama/qwen3:8b'],
+      },
+      fast: {},
+    };
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'bindings.resolveManifest',
+        input: { harnessId: 'acme/hello', models: { slots } },
+      }),
+    ).resolves.toEqual({ ok: true, data: [{ slot: 'default', binding: null }] });
+    // Only what resolution reads reaches it.
+    expect(resolveManifest).toHaveBeenLastCalledWith({
+      harnessId: 'acme/hello',
+      models: { slots: { default: { recommended: ['ollama/qwen3:8b'] }, fast: {} } },
+    });
   });
 
   it('installs.chooseFolder returns the folder the picker chose', async () => {
