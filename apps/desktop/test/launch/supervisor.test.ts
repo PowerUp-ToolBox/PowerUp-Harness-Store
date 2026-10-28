@@ -90,7 +90,7 @@ describe('createSupervisor', () => {
   it('launches nothing while an install of the Harness puts its files in place', async () => {
     const { supervisor, emitted, opened, installDone } = setup();
 
-    expect(supervisor.start('acme/hello')).toMatchObject({
+    await expect(supervisor.start('acme/hello')).resolves.toMatchObject({
       ok: false,
       error: { code: 'harness_installing', messageKey: 'error.harness_installing' },
     });
@@ -100,7 +100,7 @@ describe('createSupervisor', () => {
 
     installDone();
     const started = supervisor.start('acme/hello');
-    expect(started).toMatchObject({ ok: true, data: { outcome: 'started' } });
+    await expect(started).resolves.toMatchObject({ ok: true, data: { outcome: 'started' } });
     await expect.poll(() => emitted.at(-1)?.state).toBe('failed');
   });
 });

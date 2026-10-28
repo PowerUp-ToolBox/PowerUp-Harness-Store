@@ -322,11 +322,39 @@ describe('a Harness that requires a Workspace', () => {
     });
     await call('launch.chooseWorkspace', harnessId);
     expect(pickerOpenedAt).toEqual([null]);
-    // A folder that is gone is refused before anything starts.
+    // A folder that is gone is refused before anything starts, and so is Relaunch with it.
     await expect(call('launch.start', { harnessId, workspace: project })).resolves.toMatchObject({
       ok: false,
       error: { code: 'invalid_input', params: { method: 'launch.start' } },
     });
+    await expect(windowCall(launchId, 'window.relaunch')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input', params: { method: 'launch.start' } },
+    });
+    expect(spawned).toHaveLength(1);
+  });
+
+  it('runs once when two launches with a folder arrive together: the second focuses it', async () => {
+    const harnessId = await install('required');
+    const results = await Promise.all([
+      call('launch.start', { harnessId, workspace: project }),
+      call('launch.start', { harnessId, workspace: project }),
+    ]);
+    const [first, second] = results as IpcResult<{ outcome: string; launchId: string }>[];
+    if (!first?.ok || !second?.ok) throw new Error('A launch was refused');
+    expect([first.data.outcome, second.data.outcome].sort()).toEqual(['focused', 'started']);
+    expect(second.data.launchId).toBe(first.data.launchId);
+    await report(first.data.launchId);
+    expect(spawned).toHaveLength(1);
+  });
+
+  it('while it runs, is focused even when the folder it was sent is gone', async () => {
+    const harnessId = await install('required');
+    const launchId = await launch(harnessId, project);
+    await report(launchId);
+    await expect(
+      call('launch.start', { harnessId, workspace: join(root, 'gone') }),
+    ).resolves.toEqual({ ok: true, data: { outcome: 'focused', launchId } });
     expect(spawned).toHaveLength(1);
   });
 });
@@ -378,6 +406,15 @@ describe('a Harness without a Workspace', () => {
       ok: true,
       data: null,
     });
+  });
+
+  it('ignores a folder sent for it without checking it: one that is gone still launches', async () => {
+    const harnessId = await install('none');
+    const launchId = await launch(harnessId, join(root, 'gone'));
+    const reported = await report(launchId);
+    expect(reported).toMatchObject({ hasWorkspace: false, workspace: null });
+    expect(realpathSync(reported.cwd)).toBe(realpathSync(dataDir(harnessId)));
+    expect(spawned[0]?.env).not.toHaveProperty('HARNESS_WORKSPACE');
   });
 });
 

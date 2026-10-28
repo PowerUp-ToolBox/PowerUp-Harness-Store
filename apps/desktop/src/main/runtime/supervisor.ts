@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { statSync } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { Gateway } from '@harness-store/gateway';
@@ -157,11 +156,12 @@ export interface SupervisorOptions {
 export interface Supervisor {
   /**
    * `launch.start`, with the Workspace the User chose in the main window's sheet: null or absent
-   * when they chose none, which fails a Harness that requires one (`workspace_cancelled`). A
-   * folder that is not an existing absolute directory answers `invalid_input`; a Harness that
-   * declares no Workspace never gets one.
+   * when they chose none, which fails a Harness that requires one (`workspace_cancelled`). For a
+   * Harness that takes a Workspace, a folder that is not an existing absolute directory answers
+   * `invalid_input`; a Harness that declares no Workspace never gets one, and a folder sent for it
+   * is ignored, not checked.
    */
-  start(harnessId: string, workspace?: string | null): IpcResult<LaunchStarted>;
+  start(harnessId: string, workspace?: string | null): Promise<IpcResult<LaunchStarted>>;
   /**
    * `launch.chooseWorkspace`: the OS folder picker, opened at the Harness's last Workspace while
    * that folder exists; the chosen folder, or null when the User cancelled.
@@ -195,7 +195,7 @@ export interface LaunchWindow {
    * Launches the Harness again once this launch has ended, with this launch's Workspace (the User
    * is not asked again); while it runs, focuses it.
    */
-  relaunch(): IpcResult<LaunchStarted>;
+  relaunch(): Promise<IpcResult<LaunchStarted>>;
   /** Closes the window, which stops the Harness while it runs. */
   close(): void;
   /** Reloads a ready web Harness's page in place. */
@@ -638,7 +638,31 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     return launch.ended;
   };
 
-  const start = (harnessId: string, chosen: string | null = null): IpcResult<LaunchStarted> => {
+  const start = async (
+    harnessId: string,
+    chosen: string | null = null,
+  ): Promise<IpcResult<LaunchStarted>> => {
+    const install = installs.get(harnessId);
+    if (install === undefined) return fail('not_installed');
+    // A Harness that declares no Workspace never gets one: a folder sent for it is not checked.
+    const folder = (install.manifest.workspace ?? 'none') === 'none' ? null : chosen;
+    // The folder the User chose in the main window, checked again here: it may have gone since.
+    // The check is async, so a folder on a network share that no longer answers never blocks the
+    // main process; one that runs already is only focused, and is not checked.
+    const running = byHarness.get(harnessId)?.finished === null;
+    if (folder !== null && !running && !(await isAbsoluteDirectory(folder))) {
+      return fail('invalid_input', { method: 'launch.start' });
+    }
+    // Synchronous from here: whether it runs already, and what it launches with, are decided in
+    // one step, after anything that happened while the folder was checked.
+    return launchNow(harnessId, folder);
+  };
+
+  /**
+   * {@link start} once its Workspace has been checked: `folder` is null or an existing folder,
+   * unless the Harness runs, which is then only focused.
+   */
+  const launchNow = (harnessId: string, folder: string | null): IpcResult<LaunchStarted> => {
     const install = installs.get(harnessId);
     if (install === undefined) return fail('not_installed');
     const current = byHarness.get(harnessId);
@@ -654,12 +678,9 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       return fail('not_implemented', { method: 'launch.start' });
     }
     if (!options.defaultSlotBound(harnessId)) return fail('slot_unbound', { slot: 'default' });
-    // The folder the User chose in the main window, checked again here: it may have gone since.
-    if (chosen !== null && !isDirectorySync(chosen)) {
-      return fail('invalid_input', { method: 'launch.start' });
-    }
+    // A reinstall while the folder was checked may have changed what the Manifest declares.
     const workspace =
-      chosen === null || (install.manifest.workspace ?? 'none') === 'none' ? null : resolve(chosen);
+      folder === null || (install.manifest.workspace ?? 'none') === 'none' ? null : resolve(folder);
 
     // The window of the previous launch, still open on its exit code, makes way for the new one.
     if (current !== undefined) {
@@ -847,17 +868,10 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
-/**
- * Whether `path` is an absolute path to an existing folder. Synchronous, so `launch.start` decides
- * in one step whether the Harness already runs and what it launches with.
- */
-function isDirectorySync(path: string): boolean {
+/** Whether `path` is an absolute path to an existing folder. */
+async function isAbsoluteDirectory(path: string): Promise<boolean> {
   if (!isAbsolute(path) || path.includes('\0')) return false;
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
+  return isDirectory(path);
 }
 
 function messageOf(error: unknown): string {
@@ -871,7 +885,7 @@ function messageOf(error: unknown): string {
  */
 export function createSupervisorStub(): Supervisor {
   return {
-    start: () => fail('not_implemented', { method: 'launch.start' }),
+    start: () => Promise.resolve(fail('not_implemented', { method: 'launch.start' })),
     chooseWorkspace: () =>
       Promise.resolve(fail('not_implemented', { method: 'launch.chooseWorkspace' })),
     lastWorkspace: () =>

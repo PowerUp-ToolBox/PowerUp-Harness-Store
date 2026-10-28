@@ -206,6 +206,39 @@ describe('the Workspace sheet', () => {
     expect(screen.getByRole('dialog')).toBeDefined();
   });
 
+  it.each(['required', 'optional'] as const)(
+    'never opens while a Harness whose workspace is %s runs: Running… and Show window focus it',
+    async (workspace) => {
+      const api = setup(workspace);
+      api.launch.status.mockResolvedValue({
+        ok: true,
+        data: [
+          {
+            harnessId: HARNESS_ID,
+            launchId: 'launch-1',
+            state: 'ready',
+            startedAt: '2026-10-28T09:00:00.000Z',
+          },
+        ],
+      });
+      api.launch.start.mockResolvedValue({
+        ok: true,
+        data: { outcome: 'focused', launchId: 'launch-1' },
+      });
+      await renderApp('#/library');
+      const card = within(await screen.findByRole('article', { name: 'Code Reviewer' }));
+      fireEvent.click(await card.findByRole('button', { name: 'Running…' }));
+      fireEvent.click(card.getByRole('button', { name: 'Show window' }));
+
+      expect(api.launch.start).toHaveBeenCalledTimes(2);
+      expect(api.launch.start).toHaveBeenNthCalledWith(1, { harnessId: HARNESS_ID });
+      expect(api.launch.start).toHaveBeenNthCalledWith(2, { harnessId: HARNESS_ID });
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(api.launch.lastWorkspace).not.toHaveBeenCalled();
+      expect(api.launch.chooseWorkspace).not.toHaveBeenCalled();
+    },
+  );
+
   it('is in Chinese with the zh-CN catalog', async () => {
     setup('optional', 'zh-CN');
     await renderApp('#/library');

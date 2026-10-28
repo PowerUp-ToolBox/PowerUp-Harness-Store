@@ -58,7 +58,9 @@ const fakeServices: Services = {
   installs: { ...createInstallsStub(), chooseFolder: () => Promise.resolve('/Users/me/hello') },
   launch: {
     start: (harnessId, workspace) =>
-      ok({ outcome: 'started', launchId: `launch-of-${harnessId}-in-${String(workspace)}` }),
+      Promise.resolve(
+        ok({ outcome: 'started', launchId: `launch-of-${harnessId}-in-${String(workspace)}` }),
+      ),
     chooseWorkspace: (harnessId) => Promise.resolve(ok(`/Users/me/${harnessId}`)),
     lastWorkspace: () => Promise.resolve(ok({ path: '/Users/me/project', exists: false })),
     status: () => [

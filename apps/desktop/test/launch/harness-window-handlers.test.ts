@@ -34,7 +34,9 @@ function setup() {
       }),
     ),
     openLogs: vi.fn(() => Promise.resolve()),
-    relaunch: vi.fn(() => ok({ outcome: 'started' as const, launchId: 'launch-2' })),
+    relaunch: vi.fn(() =>
+      Promise.resolve(ok({ outcome: 'started' as const, launchId: 'launch-2' })),
+    ),
     close: vi.fn(),
     reload: vi.fn(),
     webLayout: vi.fn(),
