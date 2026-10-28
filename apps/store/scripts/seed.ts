@@ -125,7 +125,7 @@ function seedEmail(login: string): string {
 }
 
 /** Every file under `dir`, by `/`-separated relative path. */
-function readFolder(dir: string): Map<string, Uint8Array> {
+export function readFolder(dir: string): Map<string, Uint8Array> {
   const files = new Map<string, Uint8Array>();
   const visit = (prefix: string) => {
     for (const entry of readdirSync(join(dir, prefix), { withFileTypes: true })) {

@@ -4,34 +4,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import { seed } from '../scripts/seed.ts';
-import { call, serviceRest } from './support.ts';
+import { listObjects, serviceRest } from './support.ts';
 
 interface Snapshot {
   counts: Record<string, number>;
   harnesses: unknown[];
   versions: unknown[];
   objects: Record<string, string[]>;
-}
-
-/** Every object path under `prefix` in `bucket`, listed folder by folder. */
-async function listObjects(bucket: string, prefix = ''): Promise<string[]> {
-  const reply = await call<{ name: string; id: string | null }[]>(
-    'service',
-    'POST',
-    `storage/v1/object/list/${bucket}`,
-    {
-      prefix,
-      limit: 1000,
-    },
-  );
-  const paths: string[] = [];
-  for (const item of reply.body) {
-    const path = prefix === '' ? item.name : `${prefix}/${item.name}`;
-    // Folders have no id.
-    if (item.id === null) paths.push(...(await listObjects(bucket, path)));
-    else paths.push(path);
-  }
-  return paths.sort();
 }
 
 async function snapshot(): Promise<Snapshot> {

@@ -29,8 +29,49 @@ GitHub is the only sign-in, and only Publishers sign in (P0-07.2). The desktop a
 
 ## Edge Functions
 
+### Errors of the Edge Functions
+Every function answers an error with `{ "error": { "code", "message", ... } }`; `code` is stable and the desktop app maps it to translated copy, `message` is English for logs. Codes shared by the functions:
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `invalid_request` | A body field is missing or malformed |
+| 401 | `unauthenticated` | No JWT, an invalid or expired one, or a user with no `profiles` row (no GitHub login) |
+| 403 | `forbidden` | Not the owner, or not an administrator |
+| 404 | `not_found` | Unknown Harness or version, or one that is not visible |
+| 405 | `method_not_allowed` | Anything but `POST` |
+| 409 | `harness_taken_down` | `publish` or `unpublish` against a taken-down Harness or version |
+| 429 | `rate_limited` | `publish` (20 per Publisher per 24 h) and `report` |
+| 500 | `internal_error` | Anything unexpected (logged by the function) |
+
+The functions check their own caller (config.toml `verify_jwt = false`): the Publisher and admin functions call Auth's `getUser` with the service role on the bearer token; `download` and `report` need no JWT. Every call still sends the anon key as `apikey`.
+
 ### `POST /functions/v1/publish` (Publisher JWT)
-Multipart: `package` (zip), `metadata` (JSON: `changelog?`). Steps: authenticate → unzip in memory (streaming, size limits) → `validatePackage()` from `packages/manifest` → check `id.publisher == profile.github_login` → check version greater than existing → upload package and assets → insert `harness_versions` (and `harnesses` if first version) → update denormalised columns. Returns `{ harness_id, version, url }`. Errors: `401`, `413 package_too_large`, `422 invalid_manifest` (with `problems[]`), `409 version_not_greater`, `403 publisher_mismatch`.
+`multipart/form-data` with the Harness Package zip in the part `package`; other parts are ignored. Everything else comes from the Manifest (P0): the changelog is the Manifest's `changelog`.
+
+Steps (P0-07.3):
+1. Authenticate (`401 unauthenticated`).
+2. Content-Length: none is `411 length_required`; over 500 MB plus 64 KB (multipart framing) is `413 package_too_large`, before the body is read. The exact limit is validatePackage's `archive_too_large`, on the zip itself.
+3. Rate limit: 20 publishes per Publisher per rolling 24 hours, counted from `harness_versions.published_at`, any status (`429 rate_limited`).
+4. Read the body into memory, open it with `ArchiveSource.open(bytes)` and run `validatePackage()` from `packages/manifest` with `publisher` (the caller's `github_login`) and `publishedVersions` (every version of that Harness, Unpublished and taken-down ones included), exactly what the desktop app runs. Nothing is reimplemented in the function.
+5. A taken-down Harness gets no new version: `409 harness_taken_down`.
+6. Upload the package to `harness-packages/<publisher>/<slug>/<version>.zip`, then the icon and screenshots to `harness-assets` (paths in data-model.md), never overwriting: an object already there means another publish of this version (`409 version_not_greater`; it is not deleted).
+7. `publish_version()` (SQL, service role only) inserts the Harness on its first version and the Harness Version in one transaction, under a per-Publisher lock, re-checking the rate limit and that no version was published since step 4 (else `409 version_not_greater`; a retry gives the up-to-date answer). Triggers refresh the Harness's listing fields.
+
+On any failure after the first upload, the objects this request uploaded (and only those) are deleted.
+
+`201` → `{ harness_id, version, url }`, where `url` is the in-app Store route `/store/h/<publisher>/<slug>` (there is no web Store page in P0).
+
+When validatePackage refuses the package, the status comes from all its problems, in this order: `413 package_too_large` when any is `archive_too_large` or `archive_too_many_files`; else `422 invalid_manifest` when any is something other than `publisher_mismatch` and `version_not_greater` (archive safety included: symbolic links, `..` and absolute paths are `archive_symlink` and `archive_path_traversal` problems); else `403 publisher_mismatch`; else `409 version_not_greater`. Each of these bodies carries every problem, exactly as validatePackage returns them:
+
+```json
+{ "error": { "code": "invalid_manifest", "message": "…",
+  "problems": [ { "path": "license", "code": "schema_required", "messageKey": "schema_required",
+                  "params": { "key": "license" }, "message": "Required key \"license\" is missing." } ] } }
+```
+
+A `409 version_not_greater` from a publish that lost a race (step 6 or 7) has no `problems`. Other errors: `400 invalid_request` (not multipart, or no `package` part), `401`, `405`, `411`, `413` from the Content-Length (no `problems`), `429`, `500`.
+
+Known limitations (P0): the package is held in memory (an Edge Function has no disk to stream to), so publishing near the 500 MB limit needs more memory and a larger request than a hosted Edge Function allows; the gateway (and the local edge runtime) passes the Content-Length refusal on only once the whole body has arrived. A package object left by a crash between upload and commit blocks that version number until it is removed by hand.
 
 ### `POST /functions/v1/download` (anon)
 Body `{ harness_id, version?, platform, app_version }`. Resolves the version (latest published if omitted), checks the platform is supported, inserts a `download_events` row, increments counters, returns `{ url (signed, 60 s), sha256, size, manifest }`.

@@ -5,7 +5,7 @@
  * metadata a GitHub sign-in gives, and their JWTs are minted with the stack's JWT secret, so no
  * test ever reaches GitHub.
  */
-import { spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHmac, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -127,15 +127,42 @@ export async function createUser(
 }
 
 /**
- * Removes a test user and every Harness they published. Does nothing for a user that was never
- * created, so an `afterAll` after a failed `beforeAll` does not hide that failure.
+ * Removes a test user, every Harness they published and their objects in both buckets. Does
+ * nothing for a user that was never created, so an `afterAll` after a failed `beforeAll` does not
+ * hide that failure.
  */
 export async function deleteUser(user: TestUser | undefined): Promise<void> {
   if (user === undefined) return;
   await serviceRest('DELETE', `harnesses?publisher_id=eq.${user.id}`);
+  for (const bucket of ['harness-packages', 'harness-assets']) {
+    const prefixes = await listObjects(bucket, user.userName.toLowerCase());
+    if (prefixes.length > 0)
+      await call('service', 'DELETE', `storage/v1/object/${bucket}`, { prefixes });
+  }
   const reply = await call('service', 'DELETE', `auth/v1/admin/users/${user.id}`);
   if (reply.status !== 200)
     throw new Error(`Deleting ${user.userName} failed: ${JSON.stringify(reply.body)}`);
+}
+
+/** Every object path under `prefix` in `bucket`, listed folder by folder. */
+export async function listObjects(bucket: string, prefix = ''): Promise<string[]> {
+  const reply = await call<{ name: string; id: string | null }[]>(
+    'service',
+    'POST',
+    `storage/v1/object/list/${bucket}`,
+    {
+      prefix,
+      limit: 1000,
+    },
+  );
+  const paths: string[] = [];
+  for (const item of reply.body) {
+    const path = prefix === '' ? item.name : `${prefix}/${item.name}`;
+    // Folders have no id.
+    if (item.id === null) paths.push(...(await listObjects(bucket, path)));
+    else paths.push(path);
+  }
+  return paths.sort();
 }
 
 export interface HarnessRow {
@@ -230,12 +257,46 @@ export function isPermissionDenied(reply: Reply): boolean {
   );
 }
 
-/** The local stack's database container, named by the CLI after config.toml's `project_id`. */
-function databaseContainer(): string {
+/** config.toml's `project_id`, after which the CLI names the stack's containers and network. */
+function projectId(): string {
   const config = readFileSync(join(storeRoot(), 'supabase', 'config.toml'), 'utf8');
-  const projectId = /^project_id\s*=\s*"([^"]+)"/m.exec(config)?.[1];
-  if (projectId === undefined) throw new Error('No project_id in supabase/config.toml');
-  return `supabase_db_${projectId}`;
+  const id = /^project_id\s*=\s*"([^"]+)"/m.exec(config)?.[1];
+  if (id === undefined) throw new Error('No project_id in supabase/config.toml');
+  return id;
+}
+
+/** The local stack's database container. */
+function databaseContainer(): string {
+  return `supabase_db_${projectId()}`;
+}
+
+/** The Edge Functions as the gateway reaches them on the stack's network, bypassing it. */
+export function edgeRuntimeUrl(): string {
+  return `http://supabase_edge_runtime_${projectId()}:8081`;
+}
+
+/**
+ * Runs a Node ES module `script` in a throwaway container on the stack's Docker network, with
+ * `env`, and resolves with its standard output. The container is from the Storage image, which
+ * the stack has already pulled and which ships Node. For what the gateway hides: it buffers a
+ * whole request body before passing the request on.
+ */
+export function nodeOnStackNetwork(script: string, env: Record<string, string>): Promise<string> {
+  const id = projectId();
+  const image = execFileSync(
+    'docker',
+    ['inspect', `supabase_storage_${id}`, '--format', '{{.Config.Image}}'],
+    { encoding: 'utf8' },
+  ).trim();
+  const args = ['run', '--rm', '--network', `supabase_network_${id}`, '--entrypoint', 'node'];
+  for (const [key, value] of Object.entries(env)) args.push('--env', `${key}=${value}`);
+  args.push(image, '--input-type=module', '--eval', script);
+  return new Promise((resolve, reject) => {
+    execFile('docker', args, { encoding: 'utf8', timeout: 60_000 }, (error, stdout, stderr) => {
+      if (error === null) resolve(stdout.trim());
+      else reject(new Error(`${error.message}\n${stderr}`));
+    });
+  });
 }
 
 /**

@@ -6,3 +6,7 @@
 .env.keys
 .env.local
 .env.*.local
+
+# @harness-store/manifest bundled for the Deno Edge Functions by `pnpm build`
+# (scripts/bundle-manifest.ts).
+functions/_shared/manifest.js

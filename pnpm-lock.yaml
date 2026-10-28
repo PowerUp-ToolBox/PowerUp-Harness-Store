@@ -110,6 +110,9 @@ importers:
       supabase:
         specifier: 2.120.0
         version: 2.120.0
+      vite:
+        specifier: ^8.3.1
+        version: 8.3.1(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1)
       vitest:
         specifier: ^5.0.2
         version: 5.0.2(@types/node@24.19.2)(jsdom@30.1.3(@noble/hashes@1.8.0))(vite@8.3.1(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))

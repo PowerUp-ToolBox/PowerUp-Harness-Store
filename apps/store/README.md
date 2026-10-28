@@ -4,15 +4,18 @@ The backend of the **Store**: a Supabase project ([ADR-0006](../../docs/adr/0006
 
 ## Layout
 
-| Path                          | What                                                                                                                                                      |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `supabase/config.toml`        | Local stack settings (Supabase CLI). The GitHub provider's client id, secret and URL come from the environment (`supabase/.env.example`).                 |
-| `supabase/migrations/`        | The schema: tables, enums, triggers, row-level security, Storage buckets. Migrations are the only way it changes.                                         |
-| `supabase/functions/_shared/` | Plain TypeScript modules with relative imports only, used by the Deno Edge Functions, the seed script and the unit tests (storage paths, README storage). |
-| `scripts/seed.ts`             | Seeds the local stack from the `packages/manifest` fixture packages.                                                                                      |
-| `scripts/supabase.ts`         | Runs the pinned Supabase CLI with the env(...) values of config.toml filled in (`node dist/scripts/supabase.js start`).                                   |
-| `test/`                       | Fast checks with no Docker (`pnpm test`): the shared modules and static rules every migration follows.                                                    |
-| `test-store/`                 | The Store seam: tests over HTTP against a running local stack (`pnpm test:store`).                                                                        |
+| Path                           | What                                                                                                                                                                                                                             |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `supabase/config.toml`         | Local stack settings (Supabase CLI). The GitHub provider's client id, secret and URL come from the environment (`supabase/.env.example`).                                                                                        |
+| `supabase/migrations/`         | The schema: tables, enums, triggers, row-level security, Storage buckets. Migrations are the only way it changes.                                                                                                                |
+| `supabase/functions/_shared/`  | Plain TypeScript modules with relative imports only, used by the Deno Edge Functions, the seed script and the unit tests (storage paths, README storage, HTTP errors, publish rules). Also `manifest.js`, generated (see below). |
+| `supabase/functions/<name>/`   | The Deno Edge Functions (`Deno.serve` entry files, not type-checked by `tsc`; the store tests exercise them over HTTP): `publish`.                                                                                               |
+| `supabase/functions/deno.json` | The functions' imports: supabase-js, pinned as an `npm:` specifier.                                                                                                                                                              |
+| `scripts/bundle-manifest.ts`   | Bundles `@harness-store/manifest` (and its npm dependencies) into `supabase/functions/_shared/manifest.js` (gitignored); `pnpm build` runs it.                                                                                   |
+| `scripts/seed.ts`              | Seeds the local stack from the `packages/manifest` fixture packages.                                                                                                                                                             |
+| `scripts/supabase.ts`          | Runs the pinned Supabase CLI with the env(...) values of config.toml filled in (`node dist/scripts/supabase.js start`).                                                                                                          |
+| `test/`                        | Fast checks with no Docker (`pnpm test`): the shared modules and static rules every migration follows.                                                                                                                           |
+| `test-store/`                  | The Store seam: tests over HTTP against a running local stack (`pnpm test:store`).                                                                                                                                               |
 
 ## Local stack
 
@@ -22,7 +25,7 @@ Needs Docker. The Supabase CLI is the pinned `supabase` devDependency, so nothin
 pnpm db:start        # build, then `supabase start`: applies every migration to an empty database
 pnpm db:reset        # build, `supabase db reset` (migrations from empty again), then the seed
 pnpm test:store      # the store tests (they seed again first)
-pnpm functions:serve # build, then serve the Edge Functions
+pnpm functions:serve # build (with the manifest bundle), then serve the Edge Functions
 pnpm db:stop
 ```
 
@@ -48,5 +51,11 @@ Re-running the seed first deletes every catalogue row and every object in both b
 - anon and authenticated read Harnesses that are `active` with a `latest_version`, published versions of active Harnesses, and the public columns of `profiles` (not `is_admin`, so a `select=*` on profiles is refused: name the columns). A Publisher may update their own `display_name`, `bio` and `avatar_url` only.
 - `harness-packages` is private; `harness-assets` is served by public URL but cannot be listed or written.
 - Internal SQL functions are not RPCs: EXECUTE is revoked from `public`, `anon` and `authenticated`.
+
+## Edge Functions
+
+An Edge Function only sees the files under `supabase/functions`, both when served and when deployed, so it cannot import the workspace's `@harness-store/manifest`. `pnpm build` bundles that package's pure main entry into `supabase/functions/_shared/manifest.js` with Vite; `db:start`, `functions:serve` and CI build first. Each function checks its own caller (`verify_jwt = false` in config.toml) and follows [`api.md`](../../docs/tech/api.md):
+
+- `publish` (P0-07.3): validates an uploaded Harness Package with `validatePackage()`, stores it and its assets, and records the Harness Version through the `publish_version()` SQL function.
 
 CI runs all of this in the `store` job of [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).

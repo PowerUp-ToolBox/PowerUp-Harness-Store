@@ -411,6 +411,16 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# The Edge Functions. Each checks its own caller (the Publisher and admin functions call Auth's
+# getUser with the service role), so the gateway's JWT check is off: it would refuse the newer
+# publishable keys and anonymous calls the functions accept. Every function takes its imports
+# (supabase-js, pinned) from functions/deno.json, and @harness-store/manifest from
+# functions/_shared/manifest.js, which `pnpm build` bundles (scripts/bundle-manifest.ts).
+[functions.publish]
+enabled = true
+verify_jwt = false
+import_map = "./functions/deno.json"
+
 [analytics]
 # Not used by the Store; off to keep the local stack small.
 enabled = false
