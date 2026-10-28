@@ -30,18 +30,18 @@ export function createDispatcher(options: DispatcherOptions): Dispatch {
   return async (sender, request) => {
     if (!isTrustedSender(sender)) throw new UntrustedSenderError();
     if (!isRequest(request)) {
-      return fail('invalid_input', 'An IPC request must be an object with a string `method`.');
+      return fail('invalid_input');
     }
     const { method, input } = request;
     if (!Object.hasOwn(handlers, method)) {
-      return fail('invalid_input', `Unknown IPC method: ${method}.`, { method });
+      return fail('invalid_input', { method });
     }
     const handler = handlers[method as keyof IpcHandlers] as (input: unknown) => unknown;
     try {
       return (await handler(input)) as IpcResult<unknown>;
     } catch (error) {
       onHandlerError?.(method, error);
-      return fail('internal_error', `${method} failed unexpectedly.`, { method });
+      return fail('internal_error', { method });
     }
   };
 }

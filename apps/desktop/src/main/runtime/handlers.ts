@@ -1,6 +1,7 @@
 import type { IpcMethodName, IpcOutput, IpcResult } from '../../shared/ipc.js';
 import { fail, ok } from './ipc-result.js';
 import type { Services } from './services.js';
+import { parseSettingsPatch } from './settings.js';
 
 /**
  * One handler per IPC method. The input arrives as `unknown` because it crossed a process
@@ -16,8 +17,17 @@ export type IpcHandlers = {
 export function createHandlers(services: Services): IpcHandlers {
   return {
     'app.ping': (input) => {
-      if (input !== undefined) return fail('invalid_input', 'app.ping takes no input.');
+      if (input !== undefined) return fail('invalid_input', { method: 'app.ping' });
       return ok({ version: services.app.version });
+    },
+    'settings.get': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'settings.get' });
+      return ok(services.settings.get());
+    },
+    'settings.set': (input) => {
+      const patch = parseSettingsPatch(input);
+      if (patch === null) return fail('invalid_input', { method: 'settings.set' });
+      return ok(services.settings.set(patch));
     },
   };
 }

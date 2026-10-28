@@ -15,6 +15,7 @@ import { createDispatcher } from './runtime/dispatcher.js';
 import { createHandlers } from './runtime/handlers.js';
 import { isAllowedExternalUrl, mainWindowOptions } from './runtime/main-window.js';
 import type { Services } from './runtime/services.js';
+import { createSettingsService } from './runtime/settings.js';
 import { initialWindowBounds } from './runtime/window-state.js';
 
 // A fresh profile for manual runs and E2E: must be set before `ready`.
@@ -41,7 +42,11 @@ if (!app.requestSingleInstanceLock()) {
 
 function start(): void {
   const appState = createAppStateFile(join(app.getPath('userData'), APP_STATE_FILE_NAME));
-  const services: Services = { app: { version: app.getVersion() } };
+  const services: Services = {
+    app: { version: app.getVersion() },
+    // On Linux app.getLocale() follows LANG; on macOS and Windows the OS language, or `--lang`.
+    settings: createSettingsService(appState, () => app.getLocale()),
+  };
   const dispatch = createDispatcher({
     handlers: createHandlers(services),
     isTrustedSender: (sender) => mainWindow !== null && sender === mainWindow.webContents,

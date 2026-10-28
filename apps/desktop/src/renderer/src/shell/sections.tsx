@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { MessageKey } from '../../../shared/i18n/catalogs.js';
 import {
   LibraryIcon,
   ModelsIcon,
@@ -11,18 +12,19 @@ import {
 export interface Section {
   /** The section's route; nested routes (`/store/h/…`) belong to the section too. */
   readonly path: string;
-  readonly label: string;
+  /** The catalog key of the sidebar label, which is also the page title. */
+  readonly labelKey: MessageKey;
   readonly icon: ReactNode;
 }
 
 /** The sidebar, in the order of docs/ux/design-principles.md §1. */
 export const SECTIONS: readonly Section[] = [
-  { path: '/library', label: 'Library', icon: <LibraryIcon /> },
-  { path: '/store', label: 'Store', icon: <StoreIcon /> },
-  { path: '/models', label: 'Models', icon: <ModelsIcon /> },
-  { path: '/publish', label: 'Publish', icon: <PublishIcon /> },
-  { path: '/usage', label: 'Usage', icon: <UsageIcon /> },
-  { path: '/settings', label: 'Settings', icon: <SettingsIcon /> },
+  { path: '/library', labelKey: 'section.library', icon: <LibraryIcon /> },
+  { path: '/store', labelKey: 'section.store', icon: <StoreIcon /> },
+  { path: '/models', labelKey: 'section.models', icon: <ModelsIcon /> },
+  { path: '/publish', labelKey: 'section.publish', icon: <PublishIcon /> },
+  { path: '/usage', labelKey: 'section.usage', icon: <UsageIcon /> },
+  { path: '/settings', labelKey: 'section.settings', icon: <SettingsIcon /> },
 ];
 
 export function sectionFor(pathname: string): Section | undefined {

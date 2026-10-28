@@ -1,14 +1,32 @@
 /**
  * The IPC contract between the renderer and the Runtime (main process), defined once and used by
  * the main handlers, the preload bridge and the renderer. It is types plus two constant lists; it
- * imports nothing, so every process can bundle it.
+ * imports only types, so every process can bundle it.
  *
  * Transport: one `ipcMain.handle` channel carries `{ method, input }` and always resolves to an
  * {@link IpcResult}; one event channel carries `{ event, payload }` from main to the renderer.
  */
 
-/** Error codes the Runtime returns over IPC. Later tickets add the Gateway and service codes. */
-export type IpcErrorCode = 'internal_error' | 'invalid_input' | 'not_implemented';
+import type { Locale } from './i18n/locale.js';
+
+/**
+ * Error codes the Runtime returns over IPC: its own three, then every Model Gateway code
+ * (`GATEWAY_ERROR_STATUS` in @harness-store/gateway; a test keeps the two lists in step). Each has
+ * an `error.<code>` entry in both message catalogs.
+ */
+export type IpcErrorCode =
+  | 'internal_error'
+  | 'invalid_input'
+  | 'not_implemented'
+  | 'invalid_request'
+  | 'invalid_token'
+  | 'invalid_host'
+  | 'provider_not_connected'
+  | 'not_supported'
+  | 'unknown_slot'
+  | 'slot_unbound'
+  | 'provider_error'
+  | 'provider_timeout';
 
 export interface IpcError {
   readonly code: IpcErrorCode;
@@ -29,6 +47,22 @@ export type IpcResult<T> =
  */
 export interface IpcMethods {
   'app.ping': { input: undefined; output: { version: string } };
+  'settings.get': { input: undefined; output: Settings };
+  /** Applies the patch and returns the settings as they now are. */
+  'settings.set': { input: SettingsPatch; output: Settings };
+}
+
+/** The app settings as the renderer sees them. */
+export interface Settings {
+  /** The User's language override; absent means "System" (follow the OS locale). */
+  readonly locale?: Locale;
+  /** The locale the UI renders in: `locale`, else the OS locale mapped to `en` or `zh-CN`. */
+  readonly resolvedLocale: Locale;
+}
+
+/** The settings the renderer may write. `locale: null` clears the override (back to System). */
+export interface SettingsPatch {
+  readonly locale?: Locale | null;
 }
 
 export type IpcMethodName = keyof IpcMethods;
@@ -37,7 +71,11 @@ export type IpcOutput<M extends IpcMethodName> = IpcMethods[M]['output'];
 
 // A record keyed by every method name fails to compile when a method is added to IpcMethods but
 // not here, or listed here but not in IpcMethods.
-const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = { 'app.ping': true };
+const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
+  'app.ping': true,
+  'settings.get': true,
+  'settings.set': true,
+};
 
 /** The method names at runtime; the preload builds `window.api` from this list. */
 export const IPC_METHODS = Object.freeze(Object.keys(METHOD_NAMES) as IpcMethodName[]);

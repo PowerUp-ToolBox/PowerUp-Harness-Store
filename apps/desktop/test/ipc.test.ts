@@ -2,10 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { createDispatcher, UntrustedSenderError } from '../src/main/runtime/dispatcher.js';
 import { createHandlers, type IpcHandlers } from '../src/main/runtime/handlers.js';
 import type { Services } from '../src/main/runtime/services.js';
+import { translatorFor } from '../src/shared/i18n/translate.js';
 import { IPC_METHODS } from '../src/shared/ipc.js';
 
 const MAIN_WINDOW = { id: 'main window webContents' };
-const fakeServices: Services = { app: { version: '1.2.3' } };
+const fakeServices: Services = {
+  app: { version: '1.2.3' },
+  settings: {
+    get: () => ({ resolvedLocale: 'en' }),
+    set: () => ({ resolvedLocale: 'en' }),
+  },
+};
+const en = translatorFor('en');
 
 function dispatcherFor(handlers: IpcHandlers = createHandlers(fakeServices)) {
   const onHandlerError = vi.fn();
@@ -37,7 +45,8 @@ describe('IPC handlers against a fake service container', () => {
       error: {
         code: 'invalid_input',
         messageKey: 'error.invalid_input',
-        message: 'app.ping takes no input.',
+        params: { method: 'app.ping' },
+        message: en.t('error.invalid_input'),
       },
     });
   });
@@ -71,6 +80,7 @@ describe('createDispatcher', () => {
   it('turns a handler that throws into internal_error and reports the cause', async () => {
     const boom = new Error('boom');
     const { dispatch, onHandlerError } = dispatcherFor({
+      ...createHandlers(fakeServices),
       'app.ping': () => {
         throw boom;
       },
@@ -81,14 +91,17 @@ describe('createDispatcher', () => {
         code: 'internal_error',
         messageKey: 'error.internal_error',
         params: { method: 'app.ping' },
-        message: 'app.ping failed unexpectedly.',
+        message: en.t('error.internal_error'),
       },
     });
     expect(onHandlerError).toHaveBeenCalledWith('app.ping', boom);
   });
 
   it('turns a handler whose promise rejects into internal_error', async () => {
-    const { dispatch } = dispatcherFor({ 'app.ping': () => Promise.reject(new Error('later')) });
+    const { dispatch } = dispatcherFor({
+      ...createHandlers(fakeServices),
+      'app.ping': () => Promise.reject(new Error('later')),
+    });
     await expect(dispatch(MAIN_WINDOW, { method: 'app.ping' })).resolves.toMatchObject({
       ok: false,
       error: { code: 'internal_error' },
