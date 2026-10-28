@@ -1,3 +1,5 @@
+English | [简体中文](authoring-harnesses.zh-CN.md)
+
 # Authoring Harnesses
 
 This guide takes a Publisher from an empty folder to a **Harness** that is ready for the Store. It builds a small one along the way, **First Harness**, and explains each step with the two reference Harnesses that ship in this repository: [`hello-web`](../../examples/hello-web) (UI Kind `web`) and [`hello-term`](../../examples/hello-term) (UI Kind `terminal`). Follow it section by section and you end with a Harness you have installed, launched and checked exactly as the Store will check it.

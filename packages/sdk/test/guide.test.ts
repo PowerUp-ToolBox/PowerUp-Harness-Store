@@ -7,7 +7,9 @@
  *   Gateway whose `default` Slot is bound to the fake Provider (no real Provider, no real key);
  * - every Manifest in it is valid, and the reference Harnesses' Manifests are quoted exactly;
  * - it keeps the nine sections of ticket P0-06.4 in order, and the three sentences of what the
- *   platform does not do (ADR-0004's trust model).
+ *   platform does not do (ADR-0004's trust model);
+ * - its zh-CN twin, docs/guides/authoring-harnesses.zh-CN.md, has the same headings and the same
+ *   code blocks byte for byte, and the two link to each other.
  *
  * The shell commands and the build script were checked by following the guide once from an empty
  * folder; they are not run here.
@@ -157,6 +159,18 @@ describe('the guide', () => {
         warnings: [],
       });
     }
+  });
+
+  it('has a zh-CN twin with the same headings and the same code, linked both ways', () => {
+    const twin = readFileSync(join(REPO, 'docs/guides/authoring-harnesses.zh-CN.md'), 'utf8');
+    // Every fenced block, indented ones in list items included, in order.
+    const code = (text: string) =>
+      [...text.matchAll(/^( *)```.*\n[\s\S]*?^\1```$/gm)].map(([block]) => block);
+    const levels = (text: string) => text.match(/^#{1,6} /gm);
+    expect(code(twin)).toEqual(code(guide));
+    expect(levels(twin)).toEqual(levels(guide));
+    expect(guide).toMatch(/^English \| \[简体中文\]\(authoring-harnesses\.zh-CN\.md\)$/m);
+    expect(twin).toMatch(/^\[English\]\(authoring-harnesses\.md\) \| 简体中文$/m);
   });
 
   it('shows a models fragment that is valid in a Manifest', () => {
