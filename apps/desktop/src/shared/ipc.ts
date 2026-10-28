@@ -76,8 +76,10 @@ export interface IpcMethods {
   /** Every Provider of the Gateway's table, in its order, local ones (Ollama, LM Studio) included. */
   'providers.list': { input: undefined; output: readonly ProviderPreset[] };
   /**
-   * Looks for local Providers (Ollama, LM Studio) running on their default ports. A stub that
-   * finds none until P0-03.3 adds detection.
+   * Looks for local Providers (Ollama, LM Studio) on their default ports now: `GET /v1/models` on
+   * both at once, each for at most 1.5 seconds, so the answer comes within about that long. Lists
+   * those that answered with a model list, each with whether it already has its Connection. It
+   * never adds a Connection: the User adds one with `connections.add`.
    */
   'connections.detectLocal': { input: undefined; output: readonly LocalProvider[] };
   /**
@@ -207,15 +209,21 @@ export interface ProviderPreset {
   readonly testModel: string | null;
 }
 
-/** A local Provider found running on this machine, not yet added as a Connection. */
+/** A local Provider found running on this machine. */
 export interface LocalProvider {
-  /** `ollama` or `lmstudio`. */
+  /** `ollama` or `lmstudio`, also the id its Connection gets. */
   readonly providerId: string;
   readonly displayName: string;
   /** Where it answered, such as `http://127.0.0.1:11434/v1`. */
   readonly baseUrl: string;
   /** The models it lists. */
   readonly models: readonly string[];
+  /**
+   * Whether this Provider already had its Connection (enabled or not) when detection ran. Adding
+   * it again edits that Connection, so the wizard then leaves out the detected base URL, keeping a
+   * custom one.
+   */
+  readonly added: boolean;
 }
 
 /** What the User entered to add a Connection. */

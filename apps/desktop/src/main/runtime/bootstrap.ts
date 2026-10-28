@@ -19,6 +19,7 @@ import {
 } from './connectivity.js';
 import { DATABASE_FILE_NAME, openDatabase } from './database.js';
 import { createGatewayHost } from './gateway-host.js';
+import { createLocalDetector, type LocalProbeTarget } from './local-detection.js';
 import type { SecretCipher } from './secret-cipher.js';
 import type { Services } from './services.js';
 import { createSettingsService } from './settings.js';
@@ -42,10 +43,16 @@ export interface RuntimeOptions {
   /** Makes the Store connectivity checks (Electron's `net.fetch`, so system proxies apply). */
   readonly fetch: FetchLike;
   /**
-   * Tests Connections and lists their models: Node's `fetch`, the one the Model Gateway's upstream
-   * calls use, so a passing test means the Gateway reaches the same place. Tests pass a fake.
+   * Tests Connections, lists their models and detects local Providers: Node's `fetch`, the one the
+   * Model Gateway's upstream calls use, so a passing test means the Gateway reaches the same place.
+   * Tests pass a fake.
    */
   readonly providerFetch: typeof globalThis.fetch;
+  /**
+   * Where local Provider detection looks, over `providerFetch`. Default: the base URLs of Ollama
+   * and LM Studio in the Provider table. Tests point it at fake Providers on ports the OS picks.
+   */
+  readonly localProbeTargets?: readonly LocalProbeTarget[];
   /** The clock of Connection test times and the model-list cache. Default: the system clock. */
   readonly now?: () => Date;
   /** Encrypts Connection secrets (Electron's `safeStorage`); tests pass a reversible fake. */
@@ -152,6 +159,12 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           store: connectionStore,
           cipher: options.secretCipher,
           ...createProviderChecks(options.providerFetch),
+          detectLocal: createLocalDetector({
+            fetch: options.providerFetch,
+            ...(options.localProbeTargets === undefined
+              ? {}
+              : { targets: options.localProbeTargets }),
+          }),
           ...(options.now === undefined ? {} : { now: options.now }),
         });
   let stopping = false;

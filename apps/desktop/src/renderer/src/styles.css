@@ -570,7 +570,8 @@ input[type='password'] {
   align-items: flex-start;
 }
 
-.wizard-links {
+.wizard-links,
+.install-links {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 20px;
@@ -776,6 +777,35 @@ input[type='password'] {
 
 .empty-panel-title {
   font-weight: 600;
+}
+
+/* Local Provider detection on the Models page, below the Connections list. */
+.local-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.local-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.local-panel-header h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.local-panel-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--color-text-muted);
 }
 
 .connection-list {

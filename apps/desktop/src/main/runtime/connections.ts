@@ -32,11 +32,9 @@ import type {
 } from '../../shared/ipc.js';
 import type { ConnectionRow, ConnectionStore } from './connection-store.js';
 import { fail, ok } from './ipc-result.js';
+import { LOCAL_PROVIDER_IDS, type LocalDetector } from './local-detection.js';
 import { createModelCache } from './model-cache.js';
 import type { SecretCipher } from './secret-cipher.js';
-
-/** The Providers that run on the User's machine. */
-const LOCAL_PROVIDER_IDS: ReadonlySet<string> = new Set(['ollama', 'lmstudio']);
 
 /** The Provider with no base URL of its own and many named Connections: the custom endpoint. */
 const CUSTOM_PROVIDER_ID = 'openai-compatible';
@@ -107,7 +105,7 @@ export function createProviderChecks(fetch: typeof globalThis.fetch): {
 export interface ConnectionsService {
   /** Every Connection: in the Provider table's order, custom endpoints by name. */
   list(): readonly ConnectionSummary[];
-  /** Local Providers running on their default ports. */
+  /** Probes for local Providers (Ollama, LM Studio) now; never adds a Connection. */
   detectLocal(): Promise<readonly LocalProvider[]>;
   /** Checks the draft, tests the Connection and saves it when the test passes. */
   add(draft: ConnectionDraft): Promise<IpcResult<ConnectionSummary>>;
@@ -130,6 +128,8 @@ export interface ConnectionsServiceOptions {
   readonly test: ConnectionTester;
   /** The live model listing: {@link createProviderChecks} in the app; tests pass a fake. */
   readonly listModels: ModelLister;
+  /** Local Provider detection: `createLocalDetector` in the app; tests pass a fake. */
+  readonly detectLocal: LocalDetector;
   /** The clock of `lastTestedAt` and of the 10-minute model cache. Default: the system clock. */
   readonly now?: () => Date;
   /** The Provider table; tests pass their own. */
@@ -157,6 +157,9 @@ export interface ConnectionsServiceOptions {
  * a Provider that needs one named, is not asked for it again. Live model listings are kept for 10
  * minutes per Connection; the models of a passed test fill that cache too, and a new key or base
  * URL, or removing the Connection, empties it.
+ *
+ * `detectLocal` only reports which local Providers answered and whether each already has its
+ * Connection; it never adds one. Adding a detected Provider is an ordinary `add`.
  */
 export function createConnectionsService(options: ConnectionsServiceOptions): ConnectionsService {
   const { store, cipher, test, providers = PROVIDERS } = options;
@@ -274,7 +277,22 @@ export function createConnectionsService(options: ConnectionsServiceOptions): Co
         .map(summarize);
     },
 
-    detectLocal: () => Promise.resolve([]),
+    async detectLocal() {
+      const found = await options.detectLocal();
+      return found.flatMap((detected) => {
+        const provider = findProvider(detected.providerId, providers);
+        if (provider === undefined) return [];
+        return [
+          {
+            providerId: provider.id,
+            displayName: provider.displayName,
+            baseUrl: detected.baseUrl,
+            models: detected.models,
+            added: store.get(provider.id) !== undefined,
+          },
+        ];
+      });
+    },
 
     async add(draft) {
       const invalid = () => fail('invalid_input', { method: 'connections.add' });

@@ -83,8 +83,8 @@ async function start(): Promise<void> {
     },
     // net.fetch goes through Chromium's network stack, so the OS proxy settings apply.
     fetch: (url, init) => net.fetch(url, init),
-    // Connection tests and model listings use Node's fetch, as the Model Gateway's upstream calls
-    // do, so a passing test means the Gateway reaches the same place.
+    // Connection tests, model listings and local detection use Node's fetch, as the Model
+    // Gateway's upstream calls do, so a passing test means the Gateway reaches the same place.
     providerFetch: (input, init) => globalThis.fetch(input, init),
     // safeStorage is usable from `ready` on, which start() runs after.
     secretCipher: createSafeStorageCipher(safeStorage, process.platform),

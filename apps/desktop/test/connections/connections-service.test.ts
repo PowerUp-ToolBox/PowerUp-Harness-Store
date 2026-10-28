@@ -13,6 +13,7 @@ import {
   type ModelLister,
 } from '../../src/main/runtime/connections.js';
 import { openDatabase } from '../../src/main/runtime/database.js';
+import type { LocalDetector } from '../../src/main/runtime/local-detection.js';
 import { createSafeStorageCipher } from '../../src/main/runtime/secret-cipher.js';
 import type {
   ConnectionDraft,
@@ -30,6 +31,7 @@ let db: DatabaseSync;
 let cipher: FakeCipher;
 let tester: ReturnType<typeof vi.fn<ConnectionTester>>;
 let lister: ReturnType<typeof vi.fn<ModelLister>>;
+let detector: ReturnType<typeof vi.fn<LocalDetector>>;
 /** The service's clock: test times and the model-list cache. */
 let clock: Date;
 let service: ConnectionsService;
@@ -43,12 +45,14 @@ beforeEach(() => {
   cipher = createFakeCipher();
   tester = vi.fn<ConnectionTester>(() => Promise.resolve({ ok: true }));
   lister = vi.fn<ModelLister>(() => Promise.resolve({ ok: true, models: [] }));
+  detector = vi.fn<LocalDetector>(() => Promise.resolve([]));
   clock = new Date(T0);
   service = createConnectionsService({
     store: createConnectionStore(db),
     cipher,
     test: tester,
     listModels: lister,
+    detectLocal: detector,
     now: () => clock,
   });
 });
@@ -988,5 +992,64 @@ describe('testing a draft', () => {
   ])('rejects $reason as invalid_input', async ({ draft }) => {
     await expect(service.testDraft(draft)).resolves.toMatchObject(invalid('connections.testDraft'));
     expect(tester).not.toHaveBeenCalled();
+  });
+});
+
+describe('detecting local Providers', () => {
+  const OLLAMA_FOUND = {
+    providerId: 'ollama',
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    models: ['qwen3:8b', 'llama3.2:3b'],
+  };
+  const LM_STUDIO_FOUND = {
+    providerId: 'lmstudio',
+    baseUrl: 'http://127.0.0.1:1234/v1',
+    models: ['gemma-3'],
+  };
+
+  it('reports what was found, with names, and adds nothing', async () => {
+    detector.mockResolvedValue([OLLAMA_FOUND, LM_STUDIO_FOUND]);
+    await expect(service.detectLocal()).resolves.toEqual([
+      { ...OLLAMA_FOUND, displayName: 'Ollama', added: false },
+      { ...LM_STUDIO_FOUND, displayName: 'LM Studio', added: false },
+    ]);
+    expect(service.list()).toEqual([]);
+    expect(connectionRows()).toEqual([]);
+    expect(tester).not.toHaveBeenCalled();
+  });
+
+  it('marks a Provider that already has its Connection, enabled or not, as added', async () => {
+    data(await service.add({ providerId: 'ollama' }));
+    data(await service.update({ id: 'ollama', enabled: false }));
+    detector.mockResolvedValue([OLLAMA_FOUND, LM_STUDIO_FOUND]);
+    await expect(service.detectLocal()).resolves.toMatchObject([
+      { providerId: 'ollama', added: true },
+      { providerId: 'lmstudio', added: false },
+    ]);
+  });
+
+  it('probes again on every call: nothing is remembered between detections', async () => {
+    await expect(service.detectLocal()).resolves.toEqual([]);
+    detector.mockResolvedValue([LM_STUDIO_FOUND]);
+    await expect(service.detectLocal()).resolves.toMatchObject([{ providerId: 'lmstudio' }]);
+    expect(detector).toHaveBeenCalledTimes(2);
+  });
+
+  it('adding what was found creates an ordinary Connection with the fixed id, no key, at the default base URL', async () => {
+    detector.mockResolvedValue([OLLAMA_FOUND]);
+    const [found] = await service.detectLocal();
+    if (found === undefined) throw new Error('Ollama not found');
+    const added = data(await service.add({ providerId: found.providerId, baseUrl: found.baseUrl }));
+    expect(added).toMatchObject({
+      id: 'ollama',
+      providerId: 'ollama',
+      local: true,
+      enabled: true,
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      keyHint: null,
+    });
+    // The default base URL is stored as NULL, so it follows the preset.
+    expect(connectionRows()).toMatchObject([{ id: 'ollama', base_url: null, secret_ref: null }]);
+    expect(secretRows()).toEqual([]);
   });
 });

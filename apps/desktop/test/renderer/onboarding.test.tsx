@@ -59,12 +59,14 @@ const OLLAMA: LocalProvider = {
   displayName: 'Ollama',
   baseUrl: 'http://127.0.0.1:11434/v1',
   models: ['qwen3:8b', 'llama3.2:3b'],
+  added: false,
 };
 const LM_STUDIO: LocalProvider = {
   providerId: 'lmstudio',
   displayName: 'LM Studio',
   baseUrl: 'http://127.0.0.1:1234/v1',
   models: ['gemma-3'],
+  added: false,
 };
 
 /** connections.add as the Runtime answers: the Connection, with the models it lists. */

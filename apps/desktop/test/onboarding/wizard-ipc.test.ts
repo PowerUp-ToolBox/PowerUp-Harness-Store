@@ -175,7 +175,7 @@ describe('providers.list', () => {
 });
 
 describe('connections for the wizard', () => {
-  it('connections.detectLocal finds nothing until P0-03.3', async () => {
+  it('connections.detectLocal finds nothing when neither local Provider answers', async () => {
     const runtime = await launch();
     await expect(call(runtime, 'connections.detectLocal')).resolves.toEqual({ ok: true, data: [] });
   });

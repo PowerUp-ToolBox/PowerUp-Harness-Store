@@ -32,7 +32,7 @@ export interface Services {
     /** Every Provider of the Gateway's table. */
     readonly list: () => readonly ProviderPreset[];
   };
-  /** The User's Connections, with their encrypted secrets; local detection is a stub until P0-03.3. */
+  /** The User's Connections, with their encrypted secrets, and local Provider detection. */
   readonly connections: ConnectionsService;
   readonly bindings: {
     /** The global Slot Bindings (Default Models). */

@@ -3,6 +3,7 @@ import type { ConnectionSummary, IpcError, ProviderPreset } from '../../../share
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { ConnectionDialog } from '../models/ConnectionDialog.js';
+import { LocalProvidersPanel } from '../models/LocalProvidersPanel.js';
 import { connectionName, connectionStatus, CUSTOM_PROVIDER_ID, monogram } from '../models/names.js';
 import { RemoveConnectionDialog } from '../models/RemoveConnectionDialog.js';
 import { LockIcon } from '../shell/icons.js';
@@ -31,7 +32,8 @@ export function ModelsPage() {
  * last passed test used. A disabled Connection is not tested: its row shows only Disabled, so a
  * result would not show. Tests and Enable or Disable of different Connections may run at once;
  * while a row's own runs, its buttons wait, so it is not edited or removed under them. The list is
- * read from the Runtime when the page opens and again after every change made here.
+ * read from the Runtime when the page opens and again after every change made here. Below it,
+ * {@link LocalProvidersPanel} offers the local Providers found running.
  */
 function ConnectionsSection() {
   const { t } = useI18n();
@@ -140,6 +142,15 @@ function ConnectionsSection() {
             />
           ))}
         </ul>
+      )}
+      {connections === null ? null : (
+        <LocalProvidersPanel
+          connections={connections}
+          onAdded={() => {
+            setError(null);
+            void load();
+          }}
+        />
       )}
       {dialog?.kind === 'remove' ? (
         <RemoveConnectionDialog
