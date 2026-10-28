@@ -142,6 +142,7 @@
   "permission.filesystem.home": "访问你的用户主目录",
   "permission.filesystem.home.consequence": "它可以读取和修改你的任何文件。",
   "permission.filesystem.paths": "读写以下路径：{paths}",
+  "permission.filesystem.paths.consequence": "它可以读取和修改这些路径下的任何文件。",
   "permission.shell": "会执行命令行命令",
   "permission.shell.consequence": "它可以以你的身份运行任何程序。",
   "permission.network.none": "除 Model Gateway 外不联网",

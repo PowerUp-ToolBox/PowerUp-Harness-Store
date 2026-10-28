@@ -42,6 +42,8 @@ export interface InstallerOptions {
   readonly onChanged?: (harnessId: string) => void;
   /** The clock of `installed_at`. Default: the system clock. */
   readonly now?: () => Date;
+  /** Reports a cleanup that failed after an install was recorded. Default: `console.error`. */
+  readonly logError?: (message: string, error: unknown) => void;
 }
 
 /**
@@ -63,13 +65,20 @@ export interface InstallerOptions {
  * 4. The `installs` row is written with `source = 'local'` (also over a Store install of the same
  *    Harness ID) and the Declared Permissions as consented.
  *
- * Installs run one at a time. A failure at any step removes what that install created and leaves
- * the previous install as it was.
+ * Installs run one at a time. A failure at any step up to writing the row removes what that
+ * install created and leaves the previous install as it was. Once the row is written the install
+ * has succeeded: deleting the replaced folders and creating the Data Directory are best effort
+ * (a failure is logged; a launch creates a missing Data Directory again).
  */
 export function createInstaller(options: InstallerOptions): InstallsService {
   const { store, platform } = options;
   const paths = harnessPaths(options.root);
   const now = options.now ?? (() => new Date());
+  const logError =
+    options.logError ??
+    ((message: string, error: unknown) => {
+      console.error(message, error);
+    });
   /** The Manifest each folder showed when last inspected, as JSON, by path. */
   const inspected = new Map<string, string>();
   /** The icons read so far, by install path: an installed version's files never change. */
@@ -141,7 +150,7 @@ export function createInstaller(options: InstallerOptions): InstallsService {
             throw error;
           }
           await makeEntriesExecutable(manifest, staging);
-          await putInPlace(paths, {
+          const replaced = await putInPlace(paths, {
             staging,
             target,
             previous: store.get(harnessId),
@@ -158,7 +167,15 @@ export function createInstaller(options: InstallerOptions): InstallsService {
               });
             },
           });
-          await mkdir(paths.dataDir(harnessId), { recursive: true });
+          // The row is written: from here on nothing undoes or fails the install.
+          for (const folder of replaced) {
+            await rm(folder, { recursive: true, force: true }).catch((error: unknown) => {
+              logError(`Could not delete the replaced install folder ${folder}`, error);
+            });
+          }
+          await mkdir(paths.dataDir(harnessId), { recursive: true }).catch((error: unknown) => {
+            logError(`Could not create the Data Directory of ${harnessId}`, error);
+          });
         } finally {
           await rm(staging, { recursive: true, force: true });
         }
@@ -296,9 +313,13 @@ async function makeEntriesExecutable(manifest: Manifest, folder: string): Promis
 
 /**
  * Moves the copied files from `staging` to `target` and records the install with `record`. The
- * same version already in `target` is moved aside first and deleted once the row is written, or
- * moved back if anything fails; the previous install's folder, when it was another version, is
- * deleted only after the row names the new one.
+ * same version already in `target` is moved aside first, and moved back if anything fails. Returns
+ * the folders the caller deletes once the row is written: the one moved aside, and the previous
+ * install's folder when it is another version.
+ *
+ * "Another version" is decided by the folder's identity, not by its path: on a case-insensitive
+ * file system (macOS, Windows) `1.0.0-beta` and `1.0.0-Beta` are two versions but one folder, so
+ * the previous path names the folder just installed.
  */
 async function putInPlace(
   paths: HarnessPaths,
@@ -308,7 +329,7 @@ async function putInPlace(
     readonly previous: InstallRow | undefined;
     readonly record: () => void;
   },
-): Promise<void> {
+): Promise<string[]> {
   const { staging, target, previous } = move;
   await mkdir(dirname(target), { recursive: true });
   let aside: string | null = null;
@@ -328,14 +349,28 @@ async function putInPlace(
     if (aside !== null) await rename(aside, target);
     throw error;
   }
-  if (aside !== null) await rm(aside, { recursive: true, force: true });
+  const replaced = aside === null ? [] : [aside];
   // Only a folder of the install layout is ever deleted, whatever the row says.
   if (
     previous !== undefined &&
-    previous.installPath !== target &&
-    isInside(paths.harnesses, previous.installPath)
+    isInside(paths.harnesses, previous.installPath) &&
+    !(await sameFolder(previous.installPath, target))
   ) {
-    await rm(previous.installPath, { recursive: true, force: true });
+    replaced.push(previous.installPath);
+  }
+  return replaced;
+}
+
+/** Whether both paths name one folder (same device and inode); false when either is missing. */
+async function sameFolder(a: string, b: string): Promise<boolean> {
+  try {
+    const [first, second] = await Promise.all([
+      stat(a, { bigint: true }),
+      stat(b, { bigint: true }),
+    ]);
+    return first.dev === second.dev && first.ino === second.ino;
+  } catch {
+    return false;
   }
 }
 

@@ -44,16 +44,41 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function installer(options: { isRunning?: (harnessId: string) => boolean } = {}) {
+function installer(
+  options: {
+    isRunning?: (harnessId: string) => boolean;
+    store?: InstallStore;
+    onChanged?: (harnessId: string) => void;
+    logError?: (message: string, error: unknown) => void;
+  } = {},
+) {
   return createInstaller({
     store,
     root: join(root, 'userData'),
     platform: 'linux-x64',
     pickFolder: () => Promise.resolve(null),
     now: () => new Date('2026-10-28T09:00:00.000Z'),
+    logError: () => undefined,
     ...options,
   });
 }
+
+/** The real store, except that writing a row throws, as a full or locked database would. */
+function storeThatCannotWrite(): InstallStore {
+  return {
+    all: () => store.all(),
+    get: (harnessId) => store.get(harnessId),
+    put: () => {
+      throw new Error('database is locked');
+    },
+  };
+}
+
+const userData = () => join(root, 'userData');
+const installedAt = (version: string) =>
+  harnessPaths(userData()).installPath('acme/fixture-web', version);
+const versionFolders = () => readdirSync(join(userData(), 'harnesses', 'acme', 'fixture-web'));
+const downloads = () => readdirSync(join(userData(), 'downloads'));
 
 function editManifest(change: (manifest: Record<string, unknown>) => void) {
   const path = join(folder, 'manifest.json');
@@ -102,6 +127,138 @@ describe('createInstaller', () => {
       availableVersion: null,
     });
     expect(existsSync(storeInstall)).toBe(false);
+  });
+
+  it('a failed row write on a reinstall of the same version keeps the installed files', async () => {
+    await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+    const before = store.get('acme/fixture-web');
+    writeFileSync(join(folder, 'index.mjs'), '// changed\n');
+
+    await expect(
+      installer({ store: storeThatCannotWrite() }).installFromFolder(folder),
+    ).rejects.toThrow('database is locked');
+    expect(store.get('acme/fixture-web')).toEqual(before);
+    expect(readFileSync(join(installedAt('1.0.0'), 'index.mjs'), 'utf8')).toBe(
+      readFileSync(join(FIXTURE, 'index.mjs'), 'utf8'),
+    );
+    expect(versionFolders()).toEqual(['1.0.0']);
+    expect(downloads()).toEqual([]);
+  });
+
+  it('a failed row write on a version change keeps the previous version', async () => {
+    await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+    const before = store.get('acme/fixture-web');
+    editManifest((manifest) => {
+      manifest.version = '1.1.0';
+    });
+
+    await expect(
+      installer({ store: storeThatCannotWrite() }).installFromFolder(folder),
+    ).rejects.toThrow('database is locked');
+    expect(store.get('acme/fixture-web')).toEqual(before);
+    expect(existsSync(join(installedAt('1.0.0'), 'manifest.json'))).toBe(true);
+    expect(versionFolders()).toEqual(['1.0.0']);
+    expect(downloads()).toEqual([]);
+  });
+
+  it('a version change replaces the previous version folder', async () => {
+    await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+    editManifest((manifest) => {
+      manifest.version = '0.9.0';
+    });
+    await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+    expect(store.get('acme/fixture-web')).toMatchObject({
+      version: '0.9.0',
+      installPath: installedAt('0.9.0'),
+    });
+    expect(versionFolders()).toEqual(['0.9.0']);
+    expect(downloads()).toEqual([]);
+  });
+
+  // On a case-insensitive file system (the macOS and Windows defaults) both versions name one
+  // folder: the previous path is then the folder just installed and must not be deleted.
+  it('a version that differs only in letter case leaves the new install in place', async () => {
+    editManifest((manifest) => {
+      manifest.version = '1.0.0-beta';
+    });
+    await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+    editManifest((manifest) => {
+      manifest.version = '1.0.0-Beta';
+    });
+    await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+
+    const row = store.get('acme/fixture-web');
+    expect(row).toMatchObject({ version: '1.0.0-Beta', installPath: installedAt('1.0.0-Beta') });
+    expect(
+      JSON.parse(readFileSync(join(row?.installPath ?? '', 'manifest.json'), 'utf8')),
+    ).toMatchObject({ version: '1.0.0-Beta' });
+    expect(versionFolders()).toHaveLength(1);
+    expect(downloads()).toEqual([]);
+  });
+
+  it('runs two installs of one folder one after the other', async () => {
+    const both = installer();
+    const results = await Promise.all([
+      both.installFromFolder(folder),
+      both.installFromFolder(folder),
+    ]);
+    expect(results).toEqual([
+      { ok: true, data: { harnessId: 'acme/fixture-web', version: '1.0.0' } },
+      { ok: true, data: { harnessId: 'acme/fixture-web', version: '1.0.0' } },
+    ]);
+    expect(store.all()).toHaveLength(1);
+    expect(versionFolders()).toEqual(['1.0.0']);
+    expect(existsSync(join(installedAt('1.0.0'), 'manifest.json'))).toBe(true);
+    expect(downloads()).toEqual([]);
+  });
+
+  // A folder the OS will not let go of (Windows antivirus, a file indexer) stands in as a folder
+  // whose subfolder cannot be written. Root deletes it anyway.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'an install is reported once recorded, even when the replaced folder cannot be deleted',
+    async () => {
+      await expect(installer().installFromFolder(folder)).resolves.toMatchObject({ ok: true });
+      const stuck = join(installedAt('1.0.0'), 'stuck');
+      mkdirSync(stuck);
+      writeFileSync(join(stuck, 'file'), '');
+      chmodSync(stuck, 0o555);
+      editManifest((manifest) => {
+        manifest.version = '2.0.0';
+      });
+      const changed: string[] = [];
+      const logged: string[] = [];
+      try {
+        await expect(
+          installer({
+            onChanged: (harnessId) => changed.push(harnessId),
+            logError: (message) => logged.push(message),
+          }).installFromFolder(folder),
+        ).resolves.toEqual({ ok: true, data: { harnessId: 'acme/fixture-web', version: '2.0.0' } });
+      } finally {
+        chmodSync(stuck, 0o755);
+      }
+      expect(store.get('acme/fixture-web')).toMatchObject({ version: '2.0.0' });
+      expect(changed).toEqual(['acme/fixture-web']);
+      expect(logged).toEqual([
+        `Could not delete the replaced install folder ${installedAt('1.0.0')}`,
+      ]);
+    },
+  );
+
+  it('an install is reported once recorded, even when the Data Directory cannot be made', async () => {
+    mkdirSync(userData(), { recursive: true });
+    writeFileSync(join(userData(), 'data'), 'not a folder');
+    const changed: string[] = [];
+    const logged: string[] = [];
+    await expect(
+      installer({
+        onChanged: (harnessId) => changed.push(harnessId),
+        logError: (message) => logged.push(message),
+      }).installFromFolder(folder),
+    ).resolves.toMatchObject({ ok: true });
+    expect(store.get('acme/fixture-web')).toMatchObject({ version: '1.0.0' });
+    expect(changed).toEqual(['acme/fixture-web']);
+    expect(logged).toEqual(['Could not create the Data Directory of acme/fixture-web']);
   });
 
   it.skipIf(process.platform === 'win32')(

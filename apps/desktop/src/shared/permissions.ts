@@ -5,7 +5,7 @@
  *
  * The severity scale follows docs/ux/design-principles.md §4: low (green) for no access or the
  * Data Directory only, medium (yellow) for the Workspace or listed domains, high (red) for the
- * home folder, shell commands or any site. High items carry a one-line consequence.
+ * home folder, listed paths, shell commands or any site. High items carry a one-line consequence.
  */
 import type { DeclaredPermissions } from '@harness-store/manifest';
 import type { MessageKey } from './i18n/catalogs.js';
@@ -32,7 +32,8 @@ export const SEVERITY_LABEL: Readonly<Record<PermissionSeverity, MessageKey>> = 
 /**
  * The permission list, in a fixed order: files, then shell, then network. File access is always
  * listed (its scope is required), shell only when the Harness runs commands, network always.
- * Explicit paths are listed like domains (medium): the Publisher named exactly what they reach.
+ * Explicit paths are high, like the home folder: a path may be `~`, a disk root or any folder
+ * outside the Workspace, and the Manifest's re-consent ladder ranks `paths` above `home` too.
  */
 export function permissionItems(permissions: DeclaredPermissions): PermissionItem[] {
   const items: PermissionItem[] = [];
@@ -53,9 +54,10 @@ export function permissionItems(permissions: DeclaredPermissions): PermissionIte
       break;
     case 'paths':
       items.push({
-        severity: 'medium',
+        severity: 'high',
         messageKey: 'permission.filesystem.paths',
         params: { paths: (filesystem.paths ?? []).join(', ') },
+        consequenceKey: 'permission.filesystem.paths.consequence',
       });
       break;
   }

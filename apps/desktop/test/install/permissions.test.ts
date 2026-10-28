@@ -48,6 +48,7 @@ describe('permissionItems', () => {
       ],
     ],
     [
+      // A listed path can be as wide as the home folder or wider, so it is never shown milder.
       'listed paths',
       {
         filesystem: { scope: 'paths', paths: ['~/notes', '/tmp/out'] },
@@ -55,7 +56,19 @@ describe('permissionItems', () => {
         network: { domains: [] },
       },
       [
-        'medium Reads and writes these paths: ~/notes, /tmp/out',
+        'high Reads and writes these paths: ~/notes, /tmp/out — It can read and change any file under these paths.',
+        'low No network access besides the Model Gateway',
+      ],
+    ],
+    [
+      'the home folder or a disk root as a listed path',
+      {
+        filesystem: { scope: 'paths', paths: ['~', '/'] },
+        shell: false,
+        network: { domains: [] },
+      },
+      [
+        'high Reads and writes these paths: ~, / — It can read and change any file under these paths.',
         'low No network access besides the Model Gateway',
       ],
     ],

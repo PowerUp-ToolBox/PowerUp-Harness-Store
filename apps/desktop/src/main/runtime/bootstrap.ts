@@ -100,7 +100,10 @@ export interface RuntimeOptions {
   readonly emit?: <E extends IpcEventName>(event: E, payload: IpcEvents[E]) => void;
   /** Creates the Model Gateway; tests wrap the real one to make `listen` fail. */
   readonly createGateway?: (options: GatewayOptions) => Gateway;
-  /** Reports startup and shutdown failures. Default: `console.error`. */
+  /**
+   * Reports startup and shutdown failures, and an install's cleanup that failed after it was
+   * recorded. Default: `console.error`.
+   */
   readonly logError?: (message: string, error: unknown) => void;
 }
 
@@ -229,6 +232,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           platform: platformOf(options.platform ?? `${process.platform}-${process.arch}`),
           pickFolder: options.pickFolder ?? (() => Promise.resolve(null)),
           onChanged: (harnessId) => options.emit?.('installs.changed', { harnessId }),
+          logError,
           ...(options.now === undefined ? {} : { now: options.now }),
         });
   let stopping = false;

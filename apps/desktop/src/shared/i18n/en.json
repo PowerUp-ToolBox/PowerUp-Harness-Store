@@ -142,6 +142,7 @@
   "permission.filesystem.home": "Accesses your home folder",
   "permission.filesystem.home.consequence": "It can read and change any of your files.",
   "permission.filesystem.paths": "Reads and writes these paths: {paths}",
+  "permission.filesystem.paths.consequence": "It can read and change any file under these paths.",
   "permission.shell": "Runs shell commands",
   "permission.shell.consequence": "It can run any program on your machine as you.",
   "permission.network.none": "No network access besides the Model Gateway",
