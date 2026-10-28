@@ -41,6 +41,8 @@ let windows: ReturnType<typeof createFakeWindows>;
 let states: LaunchStatus[];
 let spawned: PtySpawnOptions[];
 let opened: string[];
+/** Whether the fake `shell.openPath` opens what it is given. */
+let openWorks: boolean;
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'harness-store-library-'));
@@ -49,6 +51,7 @@ beforeEach(async () => {
   states = [];
   spawned = [];
   opened = [];
+  openWorks = true;
   windows = createFakeWindows();
   runtime = await startRuntime({
     dataDir: userData,
@@ -70,7 +73,7 @@ beforeEach(async () => {
     },
     openPath: (path) => {
       opened.push(path);
-      return Promise.resolve();
+      return Promise.resolve(openWorks);
     },
   });
   // A model for the `default` Slot: a launch without one is refused.
@@ -288,6 +291,42 @@ describe('Open data folder', () => {
     });
     expect(opened).toEqual([folder]);
     expect(existsSync(folder)).toBe(true);
+  });
+});
+
+describe('when the OS cannot open the path', () => {
+  it('Show logs and Open data folder answer open_failed with the path', async () => {
+    await install('fixture-term');
+    openWorks = false;
+    const logs = logsDir('fixture-term');
+    const data = dataDir('fixture-term');
+
+    for (const [method, path] of [
+      ['launch.openLogs', logs],
+      ['launch.openDataFolder', data],
+    ] as const) {
+      const result = await call(method, 'acme/fixture-term');
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'open_failed', messageKey: 'error.open_failed', params: { path } },
+      });
+      if (!result.ok) expect(result.error.message).toContain(path);
+    }
+    expect(opened).toEqual([logs, data]);
+  });
+
+  it("Open logs in a Harness window answers open_failed with this launch's log", async () => {
+    await install('fixture-crash');
+    const launchId = await launch('acme/fixture-crash');
+    await waitForState(launchId, 'failed');
+    openWorks = false;
+
+    const log = join(logsDir('fixture-crash'), `${launchId}.log`);
+    await expect(runtime.supervisor.window(launchId)?.openLogs()).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'open_failed', params: { path: log } },
+    });
+    expect(opened).toEqual([log]);
   });
 });
 

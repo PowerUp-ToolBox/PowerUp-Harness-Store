@@ -147,8 +147,11 @@ export interface SupervisorOptions {
   readonly environment?: () => Readonly<Record<string, string | undefined>>;
   /** Pushes a launch's new state to the main window (`launch.state`). */
   readonly emit: (status: LaunchStatus) => void;
-  /** Opens a file or folder with the OS (Electron's `shell.openPath`). Default: does nothing. */
-  readonly openPath?: (path: string) => Promise<void>;
+  /**
+   * Opens a file or folder with the OS (Electron's `shell.openPath`), resolving whether the OS
+   * opened it. Default: does nothing, and answers that it did.
+   */
+  readonly openPath?: (path: string) => Promise<boolean>;
   /**
    * Opens the OS folder picker (Electron's `dialog`) at `defaultPath` when given, and resolves the
    * chosen folder's absolute path, or null when the User cancelled. Default: always cancelled.
@@ -205,8 +208,11 @@ export interface Supervisor {
 export interface LaunchWindow {
   readonly harnessId: string;
   info(): Promise<HarnessWindowInfo>;
-  /** Opens this launch's log file, or the Harness's logs folder (created) before it has one. */
-  openLogs(): Promise<void>;
+  /**
+   * Opens this launch's log file, or the Harness's logs folder (created) before it has one;
+   * `open_failed` when the OS could not open it.
+   */
+  openLogs(): Promise<IpcResult<null>>;
   /**
    * Launches the Harness again once this launch has ended, with this launch's Workspace (the User
    * is not asked again); while it runs, focuses it.
@@ -320,25 +326,25 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
   const environment = options.environment ?? (() => process.env);
   const spawnProcess = options.spawnProcess ?? spawnPiped;
   const askPort = options.freePort ?? freePort;
-  const openPath = options.openPath ?? (() => Promise.resolve());
+  const openPath = options.openPath ?? (() => Promise.resolve(true));
   const pickFolder = options.pickFolder ?? (() => Promise.resolve(null));
   const logError =
     options.logError ??
     ((message: string, error: unknown) => {
       console.error(message, error);
     });
+  /** Opens `path` with the OS; `open_failed`, naming it, when the OS could not. */
+  const open = async (path: string): Promise<IpcResult<null>> =>
+    (await openPath(path)) ? ok(null) : fail('open_failed', { path });
   /**
    * Opens `log` when that file exists, else the Harness's logs folder, created: the paths are the
    * Runtime's own, never one a window sent.
    */
   const openLogOrFolder = async (harnessId: string, log: string | null) => {
-    if (log !== null && (await isFile(log))) {
-      await openPath(log);
-      return;
-    }
+    if (log !== null && (await isFile(log))) return open(log);
     const folder = paths.logsDir(harnessId);
     await mkdir(folder, { recursive: true });
-    await openPath(folder);
+    return open(folder);
   };
   /** The latest launch of each Harness. */
   const byHarness = new Map<string, Launch>();
@@ -790,15 +796,13 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
         latest !== undefined && (await isFile(latest))
           ? latest
           : await newestLaunchLog(paths.logsDir(harnessId));
-      await openLogOrFolder(harnessId, log);
-      return ok(null);
+      return openLogOrFolder(harnessId, log);
     },
     async openDataFolder(harnessId) {
       const install = installs.get(harnessId);
       if (install === undefined) return fail('not_installed');
       await mkdir(install.dataDir, { recursive: true });
-      await openPath(install.dataDir);
-      return ok(null);
+      return open(install.dataDir);
     },
     isRunning: (harnessId) => byHarness.get(harnessId)?.finished === null,
     async stopAll() {

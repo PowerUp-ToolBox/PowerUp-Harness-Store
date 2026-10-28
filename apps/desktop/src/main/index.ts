@@ -202,10 +202,12 @@ async function start(): Promise<void> {
     emit: emitToMainWindow,
     // Every Harness runs in a window of its own (./harness-windows.ts).
     harnessWindows,
-    // A launch's log, or a Harness's logs folder, in the OS's own app for it.
+    // A launch's log, a Harness's logs folder or its Data Directory, in the OS's own app for it.
+    // A failure is the User's to see (`open_failed` on the card or in the Harness window).
     openPath: async (path) => {
       const error = await shell.openPath(path);
       if (error !== '') console.error(`Could not open ${path}: ${error}`);
+      return error === '';
     },
   });
   const started = await runtime;

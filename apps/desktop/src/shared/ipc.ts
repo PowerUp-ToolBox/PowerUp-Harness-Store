@@ -58,6 +58,12 @@ export type IpcErrorCode =
   | 'harness_installing'
   /** No Harness with this ID is installed. */
   | 'not_installed'
+  /**
+   * The OS could not open a log, logs folder or Data Directory (Electron `shell.openPath`
+   * failed: on Linux, say, no app is set up for it). The `path` param names it, so the User can
+   * open it another way.
+   */
+  | 'open_failed'
   | 'invalid_request'
   | 'invalid_token'
   | 'invalid_host'
@@ -259,12 +265,13 @@ export interface IpcMethods {
   /**
    * Opens this installed Harness's newest launch log in the OS's app for it: its latest launch's
    * log, else the most recently written one; its logs folder (created) before it has any. Main
-   * computes the path; `not_installed`.
+   * computes the path; `not_installed`, and `open_failed` when the OS could not open it.
    */
   'launch.openLogs': { input: string; output: null };
   /**
    * Opens this installed Harness's Data Directory in the OS file browser, creating it when
-   * missing. Main computes the path; `not_installed`.
+   * missing. Main computes the path; `not_installed`, and `open_failed` when the OS could not
+   * open it.
    */
   'launch.openDataFolder': { input: string; output: null };
 }

@@ -114,8 +114,11 @@ export interface RuntimeOptions {
    * it nothing can be launched: `launch.start` answers `not_implemented`.
    */
   readonly harnessWindows?: HarnessWindows;
-  /** Opens a file or folder with the OS (Electron's `shell.openPath`): a launch's log. */
-  readonly openPath?: (path: string) => Promise<void>;
+  /**
+   * Opens a file or folder with the OS (Electron's `shell.openPath`), a launch's log or a Data
+   * Directory, resolving whether the OS opened it.
+   */
+  readonly openPath?: (path: string) => Promise<boolean>;
   /**
    * How a Node Harness is run. Default: this process's executable with `ELECTRON_RUN_AS_NODE=1`,
    * which is Electron acting as Node in the app, and Node itself under plain Node.

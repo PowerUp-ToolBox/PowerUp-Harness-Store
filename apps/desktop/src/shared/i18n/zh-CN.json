@@ -324,6 +324,7 @@
   "error.harness_running": "该 Harness 正在运行。请先关闭它，再重试。",
   "error.harness_installing": "该 Harness 正在安装。请在安装完成后重试。",
   "error.not_installed": "该 Harness 未安装。",
+  "error.open_failed": "Harness Store 无法打开 \"{path}\"：本机没有应用打开它。请改用文件管理器打开。",
   "error.encryption_unavailable": "Harness Store 无法保存此密钥：本机没有可用的安全密钥存储。在 Linux 上，请安装并解锁 GNOME Keyring 或 KWallet 等密钥环，然后重启 Harness Store。Key 和登录会话永远不会以明文保存。",
   "error.invalid_request": "Model Gateway 无法解析该请求。",
   "error.invalid_token": "Gateway Token 缺失、无效或已被吊销。请重新启动该 Harness。",

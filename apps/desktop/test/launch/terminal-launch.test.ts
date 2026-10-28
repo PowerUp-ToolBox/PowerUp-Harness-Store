@@ -113,7 +113,7 @@ function start(): Promise<Runtime> {
     }),
     openPath: (path) => {
       opened.push(path);
-      return Promise.resolve();
+      return Promise.resolve(true);
     },
   });
 }

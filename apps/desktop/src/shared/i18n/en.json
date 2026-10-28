@@ -324,6 +324,7 @@
   "error.harness_running": "This Harness is running. Close it, then try again.",
   "error.harness_installing": "This Harness is being installed. Try again once the install has finished.",
   "error.not_installed": "This Harness is not installed.",
+  "error.open_failed": "Harness Store could not open \"{path}\": no app on this computer opened it. Open it from your file browser instead.",
   "error.encryption_unavailable": "Harness Store cannot store this secret: this computer offers no secure storage for secrets. On Linux, install and unlock a keyring such as GNOME Keyring or KWallet, then restart Harness Store. Keys and sign-in sessions are never stored unencrypted.",
   "error.invalid_request": "The Model Gateway could not read the request.",
   "error.invalid_token": "The Gateway Token is missing, unknown or revoked. Relaunch the Harness.",

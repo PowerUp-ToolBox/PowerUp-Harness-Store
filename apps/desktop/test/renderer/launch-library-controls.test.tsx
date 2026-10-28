@@ -246,4 +246,23 @@ describe('the card menu', () => {
       'This Harness is not installed.',
     );
   });
+
+  it('shows on the card that the OS could not open the log, naming it', async () => {
+    const api = setup();
+    api.launch.openLogs.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'open_failed',
+        messageKey: 'error.open_failed',
+        params: { path: '/logs/acme/hello-term' },
+        message: 'unused: the catalog renders it',
+      },
+    });
+    await renderApp('#/library');
+    fireEvent.click(within(await openMenu()).getByRole('menuitem', { name: 'Show logs' }));
+    expect(await (await card()).findByRole('alert')).toHaveProperty(
+      'textContent',
+      'Harness Store could not open "/logs/acme/hello-term": no app on this computer opened it. Open it from your file browser instead.',
+    );
+  });
 });

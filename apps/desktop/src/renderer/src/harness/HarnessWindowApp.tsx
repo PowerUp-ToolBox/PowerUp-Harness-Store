@@ -69,6 +69,11 @@ function HarnessWindow({ info, status }: HarnessWindowProps) {
     const result = await window.harness.window.relaunch();
     if (!result.ok) setError(result.error);
   };
+  const openLogs = async () => {
+    setError(null);
+    const result = await window.harness.window.openLogs();
+    if (!result.ok) setError(result.error);
+  };
 
   return (
     <div className="harness-window">
@@ -105,11 +110,7 @@ function HarnessWindow({ info, status }: HarnessWindowProps) {
               {t('harness.reload')}
             </button>
           )}
-          <button
-            type="button"
-            className="button-secondary"
-            onClick={() => void window.harness.window.openLogs()}
-          >
+          <button type="button" className="button-secondary" onClick={() => void openLogs()}>
             {t('harness.openLogs')}
           </button>
           {terminal && ended ? (
@@ -128,7 +129,8 @@ function HarnessWindow({ info, status }: HarnessWindowProps) {
           ) : null}
         </div>
       </header>
-      {terminal && error !== null ? (
+      {/* A web window that has ended shows the error in its overlay instead. */}
+      {error !== null && (terminal || !ended) ? (
         <div className="harness-bar-error">
           <ErrorMessage error={error} />
         </div>
@@ -136,7 +138,13 @@ function HarnessWindow({ info, status }: HarnessWindowProps) {
       {terminal ? (
         <TerminalView name={info.name} />
       ) : (
-        <WebArea info={info} status={status} error={error} onRelaunch={() => void relaunch()} />
+        <WebArea
+          info={info}
+          status={status}
+          error={error}
+          onRelaunch={() => void relaunch()}
+          onOpenLogs={() => void openLogs()}
+        />
       )}
     </div>
   );

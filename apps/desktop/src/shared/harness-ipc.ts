@@ -21,7 +21,10 @@ export interface HarnessWindowMethods {
   'window.slots': { input: undefined; output: readonly ResolvedSlot[] };
   /** Opens the Models page at this Harness's card in the main window, opening it if closed. */
   'window.openModels': { input: undefined; output: null };
-  /** Opens this launch's log file with the OS (its Harness's logs folder before it has one). */
+  /**
+   * Opens this launch's log file with the OS (its Harness's logs folder before it has one);
+   * `open_failed` when the OS could not open it.
+   */
   'window.openLogs': { input: undefined; output: null };
   /**
    * Launches the Harness again after this launch ended: this window closes and the new launch

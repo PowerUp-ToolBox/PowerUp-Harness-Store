@@ -22,6 +22,7 @@ const IPC_OWN_CODES = [
   'harness_running',
   'harness_installing',
   'not_installed',
+  'open_failed',
 ] as const;
 
 describe('catalog parity (CI)', () => {

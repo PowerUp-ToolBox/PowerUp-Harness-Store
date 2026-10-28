@@ -66,10 +66,7 @@ export function createHarnessWindowHandlers(
         return ok(null);
       }),
     'window.openLogs': (input) =>
-      withWindow('window.openLogs', input, none, async (window) => {
-        await window.openLogs();
-        return ok(null);
-      }),
+      withWindow('window.openLogs', input, none, (window) => window.openLogs()),
     'window.relaunch': (input) =>
       withWindow('window.relaunch', input, none, async (window) => {
         const result = await window.relaunch();

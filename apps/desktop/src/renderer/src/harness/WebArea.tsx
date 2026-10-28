@@ -10,9 +10,10 @@ const STARTING: readonly LaunchState[] = ['preparing', 'spawning', 'waiting-read
 interface WebAreaProps {
   readonly info: HarnessWindowInfo;
   readonly status: LaunchStatus;
-  /** Why the last Relaunch was refused. */
+  /** Why the last Relaunch or Show logs failed. */
   readonly error: IpcError | null;
   readonly onRelaunch: () => void;
+  readonly onOpenLogs: () => void;
 }
 
 /**
@@ -25,7 +26,7 @@ interface WebAreaProps {
  * with Show logs, Relaunch and Close. A Harness that quit with code 0 by itself shows the same
  * actions under a plain "{name} has exited", not Crashed.
  */
-export function WebArea({ info, status, error, onRelaunch }: WebAreaProps) {
+export function WebArea({ info, status, error, onRelaunch, onOpenLogs }: WebAreaProps) {
   const room = useRef<HTMLDivElement>(null);
   const [wasReady, setWasReady] = useState(status.state === 'ready');
   if (status.state === 'ready' && !wasReady) setWasReady(true);
@@ -58,7 +59,15 @@ export function WebArea({ info, status, error, onRelaunch }: WebAreaProps) {
   return (
     <div ref={room} className="harness-web">
       {starting ? <Starting name={info.name} startedAt={status.startedAt} /> : null}
-      {ended ? <Ended info={info} status={status} error={error} onRelaunch={onRelaunch} /> : null}
+      {ended ? (
+        <Ended
+          info={info}
+          status={status}
+          error={error}
+          onRelaunch={onRelaunch}
+          onOpenLogs={onOpenLogs}
+        />
+      ) : null}
     </div>
   );
 }
@@ -97,7 +106,7 @@ function secondsSince(startedAt: string): number {
   return Math.max(0, Math.floor((Date.now() - Date.parse(startedAt)) / 1000));
 }
 
-function Ended({ info, status, error, onRelaunch }: WebAreaProps) {
+function Ended({ info, status, error, onRelaunch, onOpenLogs }: WebAreaProps) {
   const { t } = useI18n();
   const { name } = info;
   const failed = status.state === 'failed';
@@ -136,11 +145,7 @@ function Ended({ info, status, error, onRelaunch }: WebAreaProps) {
         </code>
       )}
       <div className="harness-overlay-actions">
-        <button
-          type="button"
-          className="button-secondary"
-          onClick={() => void window.harness.window.openLogs()}
-        >
+        <button type="button" className="button-secondary" onClick={onOpenLogs}>
           {t('harness.showLogs')}
         </button>
         <button type="button" className="button-primary" onClick={onRelaunch}>

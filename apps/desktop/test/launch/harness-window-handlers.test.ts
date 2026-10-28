@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHarnessWindowHandlers } from '../../src/main/runtime/harness-window-handlers.js';
-import { ok } from '../../src/main/runtime/ipc-result.js';
+import { fail, ok } from '../../src/main/runtime/ipc-result.js';
 import {
   createSupervisorStub,
   type LaunchWindow,
@@ -33,7 +33,7 @@ function setup() {
         },
       }),
     ),
-    openLogs: vi.fn(() => Promise.resolve()),
+    openLogs: vi.fn(() => Promise.resolve(ok(null))),
     relaunch: vi.fn(() =>
       Promise.resolve(ok({ outcome: 'started' as const, launchId: 'launch-2' })),
     ),
@@ -91,8 +91,14 @@ describe('Harness window handlers', () => {
     expect(resolveAll).toHaveBeenCalledWith('acme/hello');
     await call('launch-1', 'window.openModels');
     expect(openModels).toHaveBeenCalledWith('acme/hello');
-    await call('launch-1', 'window.openLogs');
+    await expect(call('launch-1', 'window.openLogs')).resolves.toEqual({ ok: true, data: null });
     expect(launchWindow.openLogs).toHaveBeenCalledOnce();
+    // The OS could not open the log: the window is told so.
+    launchWindow.openLogs.mockResolvedValueOnce(fail('open_failed', { path: '/logs/a.log' }));
+    await expect(call('launch-1', 'window.openLogs')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'open_failed', params: { path: '/logs/a.log' } },
+    });
     await expect(call('launch-1', 'window.relaunch')).resolves.toEqual({ ok: true, data: null });
     await call('launch-1', 'window.close');
     expect(launchWindow.close).toHaveBeenCalledOnce();

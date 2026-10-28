@@ -101,7 +101,7 @@ beforeEach(async () => {
     }),
     openPath: (path) => {
       opened.push(path);
-      return Promise.resolve();
+      return Promise.resolve(true);
     },
   });
   await expect(

@@ -11,7 +11,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HarnessWindowApp } from '../../src/renderer/src/harness/HarnessWindowApp.js';
 import type { HarnessWindowEvents, HarnessWindowInfo } from '../../src/shared/harness-ipc.js';
-import type { LaunchStatus } from '../../src/shared/ipc.js';
+import type { IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 
 const terminals = vi.hoisted(() => [] as { written: string[] }[]);
 
@@ -84,7 +84,7 @@ function fakeHarness(locale: 'en' | 'zh-CN' = 'en', web?: Partial<HarnessWindowI
         ]),
       ),
       openModels: vi.fn(() => ok(null)),
-      openLogs: vi.fn(() => ok(null)),
+      openLogs: vi.fn<() => Promise<IpcResult<null>>>(() => ok(null)),
       relaunch: vi.fn(() => ok(null)),
       close: vi.fn(() => ok(null)),
     },
@@ -393,5 +393,56 @@ describe('Harness web window (P0-05.3)', () => {
     expect(screen.getByRole('alert').textContent).toContain('它没有任何输出。');
     // Open logs in the bar, Show logs in the overlay: both 查看日志.
     expect(screen.getAllByRole('button', { name: '查看日志' })).toHaveLength(2);
+  });
+});
+
+describe('Open logs that the OS could not open', () => {
+  const OPEN_FAILED: IpcResult<null> = {
+    ok: false,
+    error: {
+      code: 'open_failed',
+      messageKey: 'error.open_failed',
+      params: { path: '/logs/acme/hello/launch-1.log' },
+      message: 'unused: the catalog renders it',
+    },
+  };
+  const SAYS =
+    'Harness Store could not open "/logs/acme/hello/launch-1.log": no app on this computer opened it. Open it from your file browser instead.';
+
+  it('a terminal window shows why under its top bar', async () => {
+    const harness = fakeHarness();
+    harness.window.openLogs.mockResolvedValueOnce(OPEN_FAILED);
+    await act(() => render(<HarnessWindowApp />));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open logs' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(SAYS);
+    // Trying again clears it once the log opens.
+    fireEvent.click(screen.getByRole('button', { name: 'Open logs' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+  });
+
+  it("a web window shows why under its top bar while the Harness's page is shown", async () => {
+    const harness = fakeWebHarness({ ...STARTING, state: 'ready' });
+    harness.window.openLogs.mockResolvedValueOnce(OPEN_FAILED);
+    await act(() => render(<HarnessWindowApp />));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open logs' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(SAYS);
+  });
+
+  it('an ended web window shows why in its overlay, after Show logs', async () => {
+    const harness = fakeWebHarness({
+      ...STARTING,
+      state: 'failed',
+      reason: 'exit_nonzero',
+      exitCode: 3,
+    });
+    harness.window.openLogs.mockResolvedValueOnce(OPEN_FAILED);
+    await act(() => render(<HarnessWindowApp />));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show logs' }));
+    // The overlay is an alert itself; the error is the one inside it, and only there.
+    const error = await screen.findByText(SAYS);
+    expect(error.closest('.harness-overlay')).not.toBeNull();
+    expect(screen.getAllByText(SAYS)).toHaveLength(1);
   });
 });
