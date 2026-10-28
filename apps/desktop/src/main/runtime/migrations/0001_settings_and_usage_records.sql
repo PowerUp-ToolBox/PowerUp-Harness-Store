@@ -1,5 +1,5 @@
 -- App settings: one row per key, the value JSON-encoded. Keys are snake_case (data-model.md):
--- `locale` and the main-only `window_state` now; `onboarding_done` and `store_base_url` follow.
+-- `locale`, `onboarding_done`, `store_base_url` and the main-only `window_state`.
 CREATE TABLE settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
