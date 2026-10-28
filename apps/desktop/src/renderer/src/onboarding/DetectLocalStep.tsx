@@ -24,7 +24,8 @@ export interface DetectLocalStepProps {
  * Looks for Ollama and LM Studio (`connections.detectLocal`) each time the step opens. Every
  * Provider found gets an Add checkbox, on by default; Continue adds the checked ones. While the
  * Runtime looks, Continue waits and Skip stays available. When nothing is found, the step says so
- * and links to both installers instead of showing an empty list.
+ * and links to both installers instead of showing an empty list. A failed search shows its error
+ * above the same links and is treated like an empty one: Continue moves on.
  */
 export function DetectLocalStep({ nav, added, onAdded }: DetectLocalStepProps) {
   const { t } = useI18n();
@@ -59,9 +60,10 @@ export function DetectLocalStep({ nav, added, onAdded }: DetectLocalStepProps) {
     });
   };
 
+  const found = detection.state === 'done' ? detection.found : [];
   const addCheckedAndContinue = async () => {
-    if (detection.state !== 'done') return;
-    const toAdd = detection.found.filter(
+    if (detection.state === 'detecting') return;
+    const toAdd = found.filter(
       (provider) =>
         !unchecked.has(provider.providerId) &&
         !added.some((connection) => connection.providerId === provider.providerId),
@@ -86,7 +88,6 @@ export function DetectLocalStep({ nav, added, onAdded }: DetectLocalStepProps) {
     nav.next();
   };
 
-  const found = detection.state === 'done' ? detection.found : [];
   return (
     <>
       <h1 tabIndex={-1}>{t('onboarding.step.detect-local')}</h1>

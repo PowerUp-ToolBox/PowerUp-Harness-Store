@@ -29,8 +29,10 @@ export interface CloudKeyStepProps {
  * endpoint also asks for a name and a base URL), an API key, and Test connection, which adds the
  * Connection when the test succeeds (`connections.add`). A failed test shows the error inline with
  * Retry, Edit and Skip, and keeps what the User typed. Continue with an empty form is Skip;
- * Continue with an untested form runs the test first and moves on only if it succeeds, so a pasted
- * key is never dropped silently.
+ * Continue waits, like Test connection, while a started form misses a field it needs; Continue
+ * with an untested complete form runs the test first and moves on only if it succeeds, so a pasted
+ * key is never dropped silently. The form is locked while a test runs, so its result always belongs
+ * to what the fields show.
  */
 export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
   const { t } = useI18n();
@@ -61,23 +63,30 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
   }, []);
 
   const preset = presets?.find((item) => item.id === providerId);
-  const formEmpty = apiKey.trim() === '' && displayName.trim() === '' && baseUrl.trim() === '';
+  /** Only the fields the chosen preset shows count: hidden custom fields are not sent. */
+  const formEmpty =
+    apiKey.trim() === '' &&
+    (preset?.custom !== true || (displayName.trim() === '' && baseUrl.trim() === ''));
   const formComplete =
     preset !== undefined &&
     (!preset.requiresKey || apiKey.trim() !== '') &&
     (!preset.custom || (displayName.trim() !== '' && baseUrl.trim() !== ''));
+  const testing = test.state === 'testing';
   const alreadyAdded = test.state === 'added';
   /** The remote Connections this run added, kept when the User comes back to this step. */
   const remote = added.filter((connection) => !connection.local);
 
-  /** Any edit after a test starts over: the result belonged to what was typed before. */
+  /**
+   * Any edit after a test starts over: the result belonged to what was typed before. No edit can
+   * happen during a test, because the fields are disabled until it ends.
+   */
   const edit = (apply: () => void) => {
     apply();
-    if (test.state !== 'testing') setTest({ state: 'idle' });
+    setTest({ state: 'idle' });
   };
 
   const runTest = async (): Promise<boolean> => {
-    if (preset === undefined) return false;
+    if (preset === undefined || !formComplete) return false;
     const draft: ConnectionDraft = {
       providerId: preset.id,
       ...(apiKey.trim() === '' ? {} : { apiKey: apiKey.trim() }),
@@ -114,6 +123,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
             <select
               id="onboarding-provider"
               value={providerId}
+              disabled={testing}
               onChange={(event) => {
                 edit(() => {
                   setProviderId(event.target.value);
@@ -136,6 +146,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
                 <input
                   id="onboarding-display-name"
                   value={displayName}
+                  disabled={testing}
                   onChange={(event) => {
                     edit(() => {
                       setDisplayName(event.target.value);
@@ -149,6 +160,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
                   id="onboarding-base-url"
                   type="url"
                   value={baseUrl}
+                  disabled={testing}
                   placeholder={t('onboarding.cloud.base_url_placeholder')}
                   onChange={(event) => {
                     edit(() => {
@@ -172,6 +184,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
               autoComplete="off"
               spellCheck={false}
               value={apiKey}
+              disabled={testing}
               placeholder={preset?.keyPlaceholder}
               onChange={(event) => {
                 edit(() => {
@@ -186,12 +199,12 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
         <button
           type="button"
           className="button-secondary"
-          disabled={!formComplete || test.state === 'testing' || alreadyAdded}
-          aria-busy={test.state === 'testing'}
+          disabled={!formComplete || testing || alreadyAdded}
+          aria-busy={testing}
           onClick={() => void runTest()}
         >
-          {test.state === 'testing' ? <span className="spinner" aria-hidden="true" /> : null}
-          {test.state === 'testing' ? t('onboarding.cloud.testing') : t('onboarding.cloud.test')}
+          {testing ? <span className="spinner" aria-hidden="true" /> : null}
+          {testing ? t('onboarding.cloud.testing') : t('onboarding.cloud.test')}
         </button>
       </div>
       {remote.length > 0 ? (
@@ -237,7 +250,8 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
       <WizardActions
         nav={nav}
         onPrimary={() => void continueStep()}
-        busy={test.state === 'testing'}
+        primaryDisabled={!alreadyAdded && !formEmpty && !formComplete}
+        busy={testing}
       />
     </>
   );

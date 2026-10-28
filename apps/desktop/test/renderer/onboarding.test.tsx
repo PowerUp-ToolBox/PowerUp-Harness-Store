@@ -258,6 +258,28 @@ describe('Local Providers', () => {
     expect(screen.getByRole('button', { name: 'Continue' }).hasAttribute('disabled')).toBe(false);
   });
 
+  it('shows a failed search with the installer links, and Continue still moves on', async () => {
+    const api = installFreshProfile();
+    api.connections.detectLocal.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        messageKey: 'error.internal_error',
+        params: {},
+        message: 'Something went wrong inside Harness Store.',
+      },
+    });
+    await renderApp('');
+    await click('Continue');
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Something went wrong inside Harness Store. Try again, and restart the app if it keeps happening.',
+    );
+    expect(screen.getByRole('link', { name: 'Install Ollama' })).toBeDefined();
+    await click('Continue');
+    expect(heading()).toBe(CLOUD);
+    expect(api.connections.add).not.toHaveBeenCalled();
+  });
+
   it('adds the checked Providers on Continue, then offers their models, the first local one picked', async () => {
     const api = installFreshProfile();
     api.connections.detectLocal.mockResolvedValue({ ok: true, data: [OLLAMA, LM_STUDIO] });
@@ -411,11 +433,90 @@ describe('Remote Provider', () => {
 
     await click('Back');
     expect(screen.getByText('Connected: Anthropic')).toBeDefined();
-    // Coming back keeps the Connection; Continue does not add it twice.
+    // Coming back remounts the step with an empty form, so Continue is Skip; the Connection stays.
     await click('Continue');
     expect(api.connections.add).toHaveBeenCalledTimes(2);
     await click('Continue');
     expect(screen.getByText('claude-sonnet-4-5 on Anthropic')).toBeDefined();
+  });
+
+  it('Continue after a successful Test connection moves on without adding it again', async () => {
+    const api = await openCloudStep();
+    api.connections.add.mockImplementation(
+      connectionFor('anthropic', 'Anthropic', ['claude-sonnet-4-5']),
+    );
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-ant-1' } });
+    await click('Test connection');
+    expect(screen.getByText('Connected: Anthropic')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Test connection' }).hasAttribute('disabled')).toBe(
+      true,
+    );
+    await click('Continue');
+    expect(heading()).toBe(DEFAULT_MODEL);
+    expect(api.connections.add).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'anthropic',
+      apiKey: 'sk-ant-1',
+    });
+  });
+
+  it('Continue waits while a started form misses a field, as Test connection does', async () => {
+    const api = await openCloudStep();
+    const continueButton = () => screen.getByRole('button', { name: 'Continue' });
+    fireEvent.change(screen.getByLabelText('Provider'), {
+      target: { value: 'openai-compatible' },
+    });
+    expect(continueButton().hasAttribute('disabled')).toBe(false);
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'vLLM' } });
+    expect(continueButton().hasAttribute('disabled')).toBe(true);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('API key (optional)'), {
+      target: { value: 'secret' },
+    });
+    expect(continueButton().hasAttribute('disabled')).toBe(true);
+    await click('Skip');
+    expect(heading()).toBe(DEFAULT_MODEL);
+    expect(api.connections.add).not.toHaveBeenCalled();
+  });
+
+  it('ignores hidden custom fields: Continue on a form that looks empty is Skip', async () => {
+    const api = await openCloudStep();
+    fireEvent.change(screen.getByLabelText('Provider'), {
+      target: { value: 'openai-compatible' },
+    });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'vLLM' } });
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'anthropic' } });
+    expect(screen.queryByLabelText('Name')).toBeNull();
+    await click('Continue');
+    expect(heading()).toBe(DEFAULT_MODEL);
+    expect(api.connections.add).not.toHaveBeenCalled();
+  });
+
+  it('locks the form while a test runs, so the result matches what is shown', async () => {
+    const api = await openCloudStep();
+    let answer: (result: IpcResult<ConnectionSummary>) => void = () => undefined;
+    api.connections.add.mockReturnValue(
+      new Promise<IpcResult<ConnectionSummary>>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const key = screen.getByLabelText<HTMLInputElement>('API key');
+    fireEvent.change(key, { target: { value: 'sk-ant-a' } });
+    await click('Test connection');
+    expect(key.disabled).toBe(true);
+    expect(screen.getByLabelText<HTMLSelectElement>('Provider').disabled).toBe(true);
+
+    await act(async () => {
+      answer(await connectionFor('anthropic', 'Anthropic', ['claude-sonnet-4-5'])());
+    });
+    expect(screen.getByText('Connected: Anthropic')).toBeDefined();
+    expect(key.disabled).toBe(false);
+    expect(key.value).toBe('sk-ant-a');
+    // An edit after the test starts over: Test connection is offered again for the new key.
+    fireEvent.change(key, { target: { value: 'sk-ant-b' } });
+    expect(screen.getByRole('button', { name: 'Test connection' }).hasAttribute('disabled')).toBe(
+      false,
+    );
   });
 });
 
@@ -431,5 +532,27 @@ describe('Default model and Done', () => {
     await click('Continue');
     expect(screen.getAllByText('None')).toHaveLength(2);
     expect(screen.getByText(/^No Connection yet\./)).toBeDefined();
+  });
+
+  it('shows the error when onboardingDone cannot be saved, and Open Store still works', async () => {
+    const api = installFreshProfile();
+    api.settings.set.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        messageKey: 'error.internal_error',
+        params: {},
+        message: 'Something went wrong inside Harness Store.',
+      },
+    });
+    await renderApp('');
+    await click('Skip setup');
+    expect(heading()).toBe(DONE);
+    expect(api.settings.set).toHaveBeenCalledExactlyOnceWith({ onboardingDone: true });
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Something went wrong inside Harness Store. Try again, and restart the app if it keeps happening.',
+    );
+    await click('Open Store');
+    expect(window.location.hash).toBe('#/store');
   });
 });
