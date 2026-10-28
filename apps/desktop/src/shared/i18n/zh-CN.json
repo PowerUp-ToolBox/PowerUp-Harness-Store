@@ -40,6 +40,7 @@
   "harness.timedOut.noOutput": "它没有任何输出。",
   "harness.timedOut.log": "{name} 最近的输出",
   "harness.failedToStart": "{name} 无法启动",
+  "harness.ended": "{name} 已退出",
   "store.placeholder": "精选和最新的 Harness 会显示在这里。",
   "store.harness.placeholder": "Harness {harnessId} 的详情会显示在这里。",
   "store.publisher.placeholder": "发布者 {login} 的 Harness 会显示在这里。",

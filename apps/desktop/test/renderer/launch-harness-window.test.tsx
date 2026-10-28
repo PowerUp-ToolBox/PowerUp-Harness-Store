@@ -5,7 +5,7 @@
  * xterm.js replaced by a stand-in (jsdom cannot lay a terminal out). The top bar shows the Harness,
  * its models and Open logs; after a terminal's process ended, "Exited with code N" with Relaunch
  * and Close, and the window title adds the exit code. A web window shows Starting, then leaves the
- * room to the Harness's page, or shows Crashed, Timed out or Could not start.
+ * room to the Harness's page, or shows Crashed, Timed out, Could not start or (after code 0) Exited.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -300,6 +300,43 @@ describe('Harness web window (P0-05.3)', () => {
     // The title keeps the name only: the exit code is in the window.
     expect(document.title).toBe('Hello Web — Harness Store');
     expect(screen.getByRole('button', { name: 'Reload' })).toHaveProperty('disabled', true);
+  });
+
+  it('a Harness that quit with code 0 by itself says it exited, not that it crashed', async () => {
+    const harness = fakeWebHarness({ ...STARTING, state: 'ready' });
+    await act(() => render(<HarnessWindowApp />));
+    await screen.findByText('Hello Web');
+    act(() => {
+      harness.emit('window.state', { ...STARTING, state: 'stopped', exitCode: 0 });
+    });
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Hello Web has exited');
+    expect(alert.textContent).toContain('Exit code 0');
+    expect(alert.textContent).not.toContain('stopped unexpectedly');
+    for (const name of ['Show logs', 'Relaunch', 'Close']) {
+      expect(screen.getByRole('button', { name })).toBeDefined();
+    }
+  });
+
+  it('listens for its launch state before asking for it, so no state sent meanwhile is lost', async () => {
+    const harness = fakeWebHarness();
+    await act(() => render(<HarnessWindowApp />));
+    await screen.findByText('Starting Hello Web…');
+    const subscribed = harness.on.mock.calls.findIndex(([event]) => event === 'window.state');
+    expect(subscribed).toBeGreaterThanOrEqual(0);
+    expect(harness.on.mock.invocationCallOrder[subscribed]).toBeLessThan(
+      harness.window.info.mock.invocationCallOrder[0] ?? 0,
+    );
+    // A state sent once the answer came is shown.
+    act(() => {
+      harness.emit('window.state', {
+        ...STARTING,
+        state: 'failed',
+        reason: 'exit_nonzero',
+        exitCode: 1,
+      });
+    });
+    expect(screen.getByRole('alert').textContent).toContain('Hello Web stopped unexpectedly');
   });
 
   it('a process that could not start says so, and a refused Relaunch says why', async () => {

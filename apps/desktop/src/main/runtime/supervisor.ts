@@ -26,7 +26,7 @@ import { launchEnvironment } from './launch-env.js';
 import { KEPT_LAUNCH_LOGS, openLaunchLog, pruneLaunchLogs, type LaunchLog } from './launch-log.js';
 import type { LaunchStore } from './launch-store.js';
 import { spawnPiped, type PipedSpawner } from './piped-process.js';
-import { processTreeEndsWithin, signalProcessTree } from './process-tree.js';
+import { processTreeAlive, processTreeEndsWithin, signalProcessTree } from './process-tree.js';
 import type { PtyExit, PtyProcess, PtySpawner } from './pty.js';
 import {
   DEFAULT_READY_TIMEOUT_SECONDS,
@@ -260,9 +260,11 @@ interface Launch {
  * launch recorded as ended at most {@link KILL_WAIT_MS} later, and it ends `stopped`. A Harness
  * that exits on its own ends `stopped` with code 0 and `failed(exit_nonzero)` otherwise; its
  * window stays open with the exit code (a terminal stays readable; a web page makes way for the
- * Crashed state). Either way the Gateway Token is revoked and the
- * `launches` row gets `ended_at`, `exit_code` and `token_revoked_at`. A launch is refused while an
- * install of the same Harness is putting its files in place (`harness_installing`).
+ * Crashed state, or a plain Exited one after code 0). When a process it started still runs in its
+ * group once it exited, the group gets the shutdown sequence first (macOS and Linux; on Windows
+ * the tree cannot be found once its root has exited). Either way the Gateway Token is revoked and
+ * the `launches` row gets `ended_at`, `exit_code` and `token_revoked_at`. A launch is refused
+ * while an install of the same Harness is putting its files in place (`harness_installing`).
  */
 export function createSupervisor(options: SupervisorOptions): Supervisor {
   const { installs, launches, paths, windows, tokens } = options;
@@ -456,10 +458,18 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     launch.markExited();
     // A stop that was asked for ends the launch itself, once the exit came or it gave up.
     if (launch.stopRequested) return;
-    void finish(
-      launch,
-      exitCode === 0 ? { state: 'stopped' } : { state: 'failed', reason: 'exit_nonzero' },
-    );
+    const end: LaunchEnd =
+      exitCode === 0 ? { state: 'stopped' } : { state: 'failed', reason: 'exit_nonzero' };
+    // A process it started still runs in its group (a server it forked, say): the shutdown
+    // sequence stops the group before the launch ends, as nothing could stop it afterwards.
+    const { pid } = launch;
+    if (pid !== null && processTreeAlive(pid)) {
+      runtimeLine(launch, 'Processes it started are still running');
+      launch.stopRequested = true;
+      launch.stopping = stopProcess(launch, pid, end);
+      return;
+    }
+    void finish(launch, end);
   };
 
   /**

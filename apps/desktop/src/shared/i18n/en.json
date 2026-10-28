@@ -40,6 +40,7 @@
   "harness.timedOut.noOutput": "It printed nothing.",
   "harness.timedOut.log": "Last output of {name}",
   "harness.failedToStart": "{name} could not start",
+  "harness.ended": "{name} has exited",
   "store.placeholder": "Featured and new Harnesses appear here.",
   "store.harness.placeholder": "Details of the Harness {harnessId} appear here.",
   "store.publisher.placeholder": "Harnesses by the Publisher {login} appear here.",

@@ -57,15 +57,24 @@ export async function processTreeEndsWithin(
   if (platform === 'win32') return true;
   const deadline = Date.now() + ms;
   for (;;) {
-    if (!processGroupAlive(pid)) return true;
+    if (!processTreeAlive(pid, platform)) return true;
     const left = deadline - Date.now();
     if (left <= 0) return false;
     await sleep(Math.min(TREE_POLL_MS, left));
   }
 }
 
-/** Whether some process still belongs to the group `pid` led (signal 0 only checks). */
-function processGroupAlive(pid: number): boolean {
+/**
+ * Whether some process still belongs to the process group a Harness led, now: once the Harness
+ * itself has exited, a process it started may still run in its group (signal 0 only checks).
+ *
+ * On Windows the tree cannot be looked up once its root process has exited, so this answers false.
+ */
+export function processTreeAlive(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform === 'win32') return false;
   try {
     process.kill(-pid, 0);
     return true;

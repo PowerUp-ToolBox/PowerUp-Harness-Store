@@ -18,28 +18,41 @@ import { WebArea } from './WebArea.js';
  */
 export function HarnessWindowApp() {
   const [info, setInfo] = useState<HarnessWindowInfo | null>(null);
+  const [status, setStatus] = useState<LaunchStatus | null>(null);
   useEffect(() => {
     let current = true;
+    // Listening before asking: main does not keep the states it sends, so one sent while the
+    // answer is on its way would be lost (a web Harness that exits at once, say). The answer has
+    // the state when main made it, newer than any sent before it; the ones after it follow.
+    const unsubscribe = window.harness.on('window.state', (next) => {
+      if (current) setStatus(next);
+    });
     void window.harness.window.info().then((result) => {
-      if (current && result.ok) setInfo(result.data);
+      if (!current || !result.ok) return;
+      setInfo(result.data);
+      setStatus(result.data.status);
     });
     return () => {
       current = false;
+      unsubscribe();
     };
   }, []);
-  if (info === null) return null;
+  if (info === null || status === null) return null;
   return (
     <LocaleProvider locale={info.locale}>
-      <HarnessWindow info={info} />
+      <HarnessWindow info={info} status={status} />
     </LocaleProvider>
   );
 }
 
-function HarnessWindow({ info }: { readonly info: HarnessWindowInfo }) {
+interface HarnessWindowProps {
+  readonly info: HarnessWindowInfo;
+  readonly status: LaunchStatus;
+}
+
+function HarnessWindow({ info, status }: HarnessWindowProps) {
   const { t } = useI18n();
-  const [status, setStatus] = useState<LaunchStatus>(info.status);
   const [error, setError] = useState<IpcError | null>(null);
-  useEffect(() => window.harness.on('window.state', setStatus), []);
 
   const ended = status.state === 'stopped' || status.state === 'failed';
   const terminal = info.uiKind === 'terminal';

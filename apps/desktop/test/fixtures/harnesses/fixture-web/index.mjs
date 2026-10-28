@@ -5,9 +5,13 @@
 // - `/env`: the environment it was started with, as JSON;
 // - `/complete`: one chat completion from the Model Gateway for its `default` Model Slot, made
 //   with its Gateway Token, as the Gateway answered it;
-// - `/exit/<code>`: answers, then exits with that code (a crash once it was ready).
+// - `/exit/<code>`: answers, then exits with that code (a crash once it was ready);
+// - `/handoff/<code>`: answers, stops listening, starts a helper process (in its process group)
+//   that listens on the same port, prints `FIXTURE helper <pid>` once the helper listens, then
+//   exits with that code, leaving the helper running.
 // On SIGTERM it writes `SIGTERM` to $FIXTURE_SIGNAL_FILE and exits 0.
 import { appendFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 
 const PAGE = `<!doctype html>
@@ -50,6 +54,23 @@ const complete = async () => {
   return { status: response.status, body: await response.json() };
 };
 
+const handOff = (code) => {
+  const helper = spawn(
+    process.execPath,
+    [
+      '-e',
+      "require('node:http').createServer((q, r) => r.end('helper'))" +
+        ".listen(Number(process.env.HARNESS_PORT), '127.0.0.1', () => process.stdout.write('ready\\n'));",
+    ],
+    { stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  helper.stdout.once('data', () => {
+    process.stdout.write(`FIXTURE helper ${String(helper.pid)}\n`, () => {
+      process.exit(code);
+    });
+  });
+};
+
 const server = createServer((request, response) => {
   if (request.url === '/env') {
     response.writeHead(200, { 'content-type': 'application/json' });
@@ -59,6 +80,10 @@ const server = createServer((request, response) => {
     setTimeout(() => {
       process.exit(Number(request.url.slice('/exit/'.length)));
     }, 50);
+  } else if (request.url?.startsWith('/handoff/')) {
+    response.end('handing off');
+    server.close();
+    handOff(Number(request.url.slice('/handoff/'.length)));
   } else if (request.url === '/complete') {
     complete().then(
       (result) => {

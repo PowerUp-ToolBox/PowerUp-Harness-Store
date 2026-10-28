@@ -22,7 +22,8 @@ interface WebAreaProps {
  * {name}…" with the seconds since the launch began and Cancel, which closes the window and so
  * stops the Harness); once the process has ended, main takes the page away and it shows why:
  * Crashed with the exit code, Timed out with the last lines of the log, or Could not start, each
- * with Show logs, Relaunch and Close.
+ * with Show logs, Relaunch and Close. A Harness that quit with code 0 by itself shows the same
+ * actions under a plain "{name} has exited", not Crashed.
  */
 export function WebArea({ info, status, error, onRelaunch }: WebAreaProps) {
   const room = useRef<HTMLDivElement>(null);
@@ -99,12 +100,17 @@ function secondsSince(startedAt: string): number {
 function Ended({ info, status, error, onRelaunch }: WebAreaProps) {
   const { t } = useI18n();
   const { name } = info;
-  const timedOut = status.state === 'failed' && status.reason === 'ready_timeout';
+  const failed = status.state === 'failed';
+  const timedOut = failed && status.reason === 'ready_timeout';
+  // `stopped` here is an exit with code 0 nobody asked for (a stop that was asked for closes the
+  // window): the Harness quit, it did not crash.
   const title = timedOut
     ? t('harness.timedOut', { name })
-    : status.exitCode === undefined
-      ? t('harness.failedToStart', { name })
-      : t('harness.crashed', { name });
+    : !failed
+      ? t('harness.ended', { name })
+      : status.exitCode === undefined
+        ? t('harness.failedToStart', { name })
+        : t('harness.crashed', { name });
   const tail = status.logTail ?? [];
   return (
     <div className="harness-overlay" role="alert">

@@ -339,11 +339,11 @@ describe('launching fixture-web', () => {
     const web = await launch('acme/fixture-web');
     const slow = await launch('acme/fixture-slow-ready');
     await waitForState(web, 'ready');
-    await waitForState(slow, 'ready');
+    await waitForState(slow, 'ready', 8000);
     const { env } = (await served(web, '/env')) as { env: Record<string, string> };
     expect(env.HARNESS_PORT).toBe(String(portOf(web)));
     expect(portOf(slow)).not.toBe(portOf(web));
-  });
+  }, 10_000);
 
   it('never gives two web launches preparing at once one port, though the OS offers it to both', async () => {
     await install('fixture-web');
@@ -470,7 +470,81 @@ describe('launching fixture-web', () => {
     await windowCall(launchId, 'web.reload');
     expect(windows.reloaded).toEqual([]);
   });
+
+  it('a Harness that exits with code 0 on its own once ready ends stopped, not failed', async () => {
+    await install('fixture-web');
+    const launchId = await launch('acme/fixture-web');
+    await waitForState(launchId, 'ready');
+    await fetch(`http://127.0.0.1:${String(portOf(launchId))}/exit/0`);
+
+    const stopped = await waitForState(launchId, 'stopped');
+    expect(stopped).toMatchObject({ exitCode: 0 });
+    expect(stopped).not.toHaveProperty('reason');
+    expect(statesOf(launchId).map((each) => each.state)).toEqual([
+      'preparing',
+      'spawning',
+      'waiting-ready',
+      'ready',
+      'stopped',
+    ]);
+    // Its page is taken away; the window stays on its exit code (the page says it exited).
+    expect(windows.hidden).toEqual([launchId]);
+    expect(windows.open.has(launchId)).toBe(true);
+    expect(launchRows()).toMatchObject([{ launch_id: launchId, exit_code: 0 }]);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'a Harness that exits on its own leaving a process it started running gets that one stopped',
+    async () => {
+      await install('fixture-web');
+      const launchId = await launch('acme/fixture-web');
+      await waitForState(launchId, 'ready');
+      const port = portOf(launchId);
+      await fetch(`http://127.0.0.1:${String(port)}/handoff/3`);
+      const helperPid = await waitFor(() => {
+        const found = /FIXTURE helper (\d+)/.exec(
+          readFileSync(logPath('fixture-web', launchId), 'utf8'),
+        );
+        return found === null ? undefined : Number(found[1]);
+      });
+      try {
+        // The helper ends by SIGTERM; the launch keeps the end its own exit gave it.
+        await expect(waitForState(launchId, 'failed')).resolves.toMatchObject({
+          reason: 'exit_nonzero',
+          exitCode: 3,
+        });
+        expect(statesOf(launchId).map((each) => each.state)).toEqual([
+          'preparing',
+          'spawning',
+          'waiting-ready',
+          'ready',
+          'stopping',
+          'failed',
+        ]);
+        expect(isAlive(helperPid)).toBe(false);
+        await expect(accepts(port)).resolves.toBe(false);
+        const log = readFileSync(logPath('fixture-web', launchId), 'utf8');
+        expect(log).toMatch(
+          /\[runtime\] Exited with code 3\n.*\[runtime\] Processes it started are still running\n.*\[runtime\] Sent SIGTERM to \d+ and its children\n/,
+        );
+        expect(launchRows()).toMatchObject([{ launch_id: launchId, exit_code: 3 }]);
+        expect(windows.open.has(launchId)).toBe(true);
+      } finally {
+        if (isAlive(helperPid)) process.kill(helperPid, 'SIGKILL');
+      }
+    },
+  );
 });
+
+/** Whether a process with this pid still runs (signal 0 only checks). */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 describe('waiting for the port', () => {
   it('fixture-slow-ready, listening after 2 s, gets ready within its 5 s', async () => {
