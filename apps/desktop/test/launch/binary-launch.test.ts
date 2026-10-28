@@ -197,7 +197,7 @@ const waitForState = (launchId: string, state: LaunchStatus['state'], timeoutMs?
 
 /**
  * A copy of the fixture's folder under the temp root, its Entry without the executable bit (as a
- * package zipped on Windows has it), its Manifest changed by `edit` when given.
+ * Harness Package zipped on Windows has it), its Manifest changed by `edit` when given.
  */
 function fixtureCopy(fixture: string, edit?: (manifest: Record<string, unknown>) => void) {
   const folder = join(root, 'packages', fixture);

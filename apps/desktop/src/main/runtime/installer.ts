@@ -376,7 +376,7 @@ async function copyListedFiles(source: DirectorySource, target: string): Promise
 
 /**
  * Sets the executable bit (0755) on the Entry of every platform a binary Harness declares, so a
- * package made on Windows still launches on macOS and Linux. Windows has no such bit.
+ * Harness Package made on Windows still launches on macOS and Linux. Windows has no such bit.
  */
 async function makeEntriesExecutable(manifest: Manifest, folder: string): Promise<void> {
   if (process.platform === 'win32' || typeof manifest.entry === 'string') return;
