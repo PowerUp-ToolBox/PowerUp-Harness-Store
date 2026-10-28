@@ -21,7 +21,8 @@ const I18nContext = createContext<I18n | null>(null);
 const SettingsContext = createContext<SettingsState | null>(null);
 
 // Used only if the Runtime cannot answer settings.get, which falls back to the OS locale itself.
-const FALLBACK_SETTINGS: Settings = { resolvedLocale: 'en' };
+// The wizard stays closed: it could not record that it ran, so it would open on every launch.
+const FALLBACK_SETTINGS: Settings = { resolvedLocale: 'en', onboardingDone: true };
 
 /**
  * Loads the settings from the Runtime and provides them with the UI locale's translator. The

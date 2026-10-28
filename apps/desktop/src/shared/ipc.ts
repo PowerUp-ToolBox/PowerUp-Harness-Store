@@ -63,6 +63,21 @@ export interface IpcMethods {
    * of starting a second one.
    */
   'connectivity.check': { input: undefined; output: Connectivity };
+  /**
+   * The Providers a User can add a Connection for by hand, in the Gateway's order: every Provider
+   * except the local ones (Ollama, LM Studio), which detection finds instead.
+   */
+  'providers.list': { input: undefined; output: readonly ProviderPreset[] };
+  /**
+   * Looks for local Providers (Ollama, LM Studio) running on their default ports. A stub that
+   * finds none until P0-03 adds detection.
+   */
+  'connections.detectLocal': { input: undefined; output: readonly LocalProvider[] };
+  /**
+   * Tests the Connection and saves it when the test succeeds. A stub that answers
+   * `not_implemented` until P0-03 adds Connections.
+   */
+  'connections.add': { input: ConnectionDraft; output: ConnectionSummary };
 }
 
 /** The Runtime's startup steps, in order: open and migrate SQLite, then start the Model Gateway. */
@@ -98,11 +113,63 @@ export interface Settings {
   readonly locale?: Locale;
   /** The locale the UI renders in: `locale`, else the OS locale mapped to `en` or `zh-CN`. */
   readonly resolvedLocale: Locale;
+  /** Whether the first-run wizard reached its end (completed or skipped) once. */
+  readonly onboardingDone: boolean;
 }
 
 /** The settings the renderer may write. `locale: null` clears the override (back to System). */
 export interface SettingsPatch {
   readonly locale?: Locale | null;
+  readonly onboardingDone?: boolean;
+}
+
+/** A Provider the User can add a Connection for by hand: one row of the Gateway's table. */
+export interface ProviderPreset {
+  /** The Provider id (`anthropic`, `openai-compatible`, …). */
+  readonly id: string;
+  readonly displayName: string;
+  /** Whether a Connection needs an API key. */
+  readonly requiresKey: boolean;
+  /**
+   * The custom OpenAI-compatible endpoint: the User names it and gives its base URL, since the
+   * Provider has none of its own.
+   */
+  readonly custom: boolean;
+  /** What the Provider's keys look like, for the key field's placeholder; `''` when unknown. */
+  readonly keyPlaceholder: string;
+}
+
+/** A local Provider found running on this machine, not yet added as a Connection. */
+export interface LocalProvider {
+  /** `ollama` or `lmstudio`. */
+  readonly providerId: string;
+  readonly displayName: string;
+  /** Where it answered, such as `http://127.0.0.1:11434/v1`. */
+  readonly baseUrl: string;
+  /** The models it lists. */
+  readonly models: readonly string[];
+}
+
+/** What the User entered to add a Connection. */
+export interface ConnectionDraft {
+  readonly providerId: string;
+  readonly apiKey?: string;
+  /** The custom endpoint's name; other Providers use their own display name. */
+  readonly displayName?: string;
+  /** Required for the custom endpoint; a local Provider passes where it was found. */
+  readonly baseUrl?: string;
+}
+
+/** A saved Connection as the renderer sees it; its secret never leaves the Runtime. */
+export interface ConnectionSummary {
+  /** The Connection id: the Provider id, or `openai-compatible:<name>` for a custom endpoint. */
+  readonly id: string;
+  readonly providerId: string;
+  readonly displayName: string;
+  /** Whether the Provider runs on this machine (Ollama, LM Studio). */
+  readonly local: boolean;
+  /** The models the Provider lists; empty when it does not list them. */
+  readonly models: readonly string[];
 }
 
 export type IpcMethodName = keyof IpcMethods;
@@ -120,6 +187,9 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'diagnostics.get': true,
   'connectivity.get': true,
   'connectivity.check': true,
+  'providers.list': true,
+  'connections.detectLocal': true,
+  'connections.add': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */

@@ -3,12 +3,16 @@ import { vi } from 'vitest';
 import { Root } from '../../src/renderer/src/Root.js';
 import type { Locale } from '../../src/shared/i18n/locale.js';
 import type {
+  ConnectionDraft,
+  ConnectionSummary,
   Connectivity,
   ConnectivityState,
   Diagnostics,
   IpcEventName,
   IpcEvents,
   IpcResult,
+  LocalProvider,
+  ProviderPreset,
   Settings,
   SettingsPatch,
   StartupStatus,
@@ -25,17 +29,56 @@ export const FAKE_DIAGNOSTICS: Diagnostics = {
   databasePath: '/profile/harness-store.sqlite',
 };
 
+/** Three of the Runtime's presets, the custom endpoint among them. */
+export const FAKE_PRESETS: readonly ProviderPreset[] = [
+  {
+    id: 'anthropic',
+    displayName: 'Anthropic',
+    requiresKey: true,
+    custom: false,
+    keyPlaceholder: 'sk-ant-...',
+  },
+  {
+    id: 'openai',
+    displayName: 'OpenAI',
+    requiresKey: true,
+    custom: false,
+    keyPlaceholder: 'sk-...',
+  },
+  {
+    id: 'openai-compatible',
+    displayName: 'OpenAI-compatible endpoint',
+    requiresKey: false,
+    custom: true,
+    keyPlaceholder: '',
+  },
+];
+
+export interface FakeApiOptions {
+  /** Whether the first-run wizard already ran; true, a returning User, unless a test says so. */
+  readonly onboardingDone?: boolean;
+}
+
 /**
  * A fake `window.api` whose settings behave like the Runtime's: `osLocale` stands in for
  * `app.getLocale()` and an override set through `settings.set` wins over it. The Runtime started
- * fine and the Store is online; a test changes `app.status`, `diagnostics.get` or the
- * `connectivity` methods before rendering to say otherwise, and pushes events with `emit`.
+ * fine, the Store is online, and Connections are the Runtime's stubs (detection finds nothing,
+ * adding answers `not_implemented`); a test changes `app.status`, `diagnostics.get`, the
+ * `connectivity` or `connections` methods before rendering to say otherwise, and pushes events
+ * with `emit`.
  */
-export function installFakeApi(osLocale: Locale = 'en', override?: Locale) {
+export function installFakeApi(
+  osLocale: Locale = 'en',
+  override?: Locale,
+  options: FakeApiOptions = {},
+) {
   let locale = override;
+  let onboardingDone = options.onboardingDone ?? true;
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   const current = (): Settings =>
-    locale === undefined ? { resolvedLocale: osLocale } : { locale, resolvedLocale: locale };
+    locale === undefined
+      ? { resolvedLocale: osLocale, onboardingDone }
+      : { locale, resolvedLocale: locale, onboardingDone };
   const api = {
     app: {
       ping: vi.fn(() => Promise.resolve({ ok: true, data: { version: '4.5.6' } })),
@@ -48,6 +91,7 @@ export function installFakeApi(osLocale: Locale = 'en', override?: Locale) {
       get: vi.fn(() => Promise.resolve({ ok: true, data: current() })),
       set: vi.fn((patch: SettingsPatch): Promise<IpcResult<Settings>> => {
         if (patch.locale !== undefined) locale = patch.locale ?? undefined;
+        if (patch.onboardingDone !== undefined) onboardingDone = patch.onboardingDone;
         return Promise.resolve({ ok: true, data: current() });
       }),
     },
@@ -62,6 +106,27 @@ export function installFakeApi(osLocale: Locale = 'en', override?: Locale) {
       ),
       check: vi.fn((): Promise<IpcResult<Connectivity>> =>
         Promise.resolve(connectivityResult('online')),
+      ),
+    },
+    providers: {
+      list: vi.fn((): Promise<IpcResult<readonly ProviderPreset[]>> =>
+        Promise.resolve({ ok: true, data: FAKE_PRESETS }),
+      ),
+    },
+    connections: {
+      detectLocal: vi.fn((): Promise<IpcResult<readonly LocalProvider[]>> =>
+        Promise.resolve({ ok: true, data: [] }),
+      ),
+      add: vi.fn((draft: ConnectionDraft): Promise<IpcResult<ConnectionSummary>> =>
+        Promise.resolve({
+          ok: false,
+          error: {
+            code: 'not_implemented',
+            messageKey: 'error.not_implemented',
+            params: { method: 'connections.add', providerId: draft.providerId },
+            message: 'This is not available in this version of Harness Store yet.',
+          },
+        }),
       ),
     },
     on: vi.fn((event: string, listener: (payload: unknown) => void) => {

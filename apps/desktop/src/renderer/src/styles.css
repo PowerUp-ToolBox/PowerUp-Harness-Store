@@ -15,6 +15,7 @@
   --color-sidebar: #f4f3ef;
   --color-sidebar-active: #e2e0d9;
   --color-border: #e2e1dc;
+  --color-border-strong: #cfcdc6;
   --color-text: #1c1d21;
   --color-text-muted: #55585f;
   --color-accent: #2b59c3;
@@ -24,6 +25,10 @@
   --color-warning-bg: #fcf1d6;
   --color-warning-border: #ebd08f;
   --color-warning-text: #6b4a00;
+  --color-info-bg: #eef2fc;
+  --color-info-text: #1e3f8f;
+  --color-error-bg: #fbe9e7;
+  --color-error-border: #f0c2bc;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -33,6 +38,7 @@
     --color-sidebar: #232428;
     --color-sidebar-active: #34363c;
     --color-border: #34363c;
+    --color-border-strong: #4a4d55;
     --color-text: #ececee;
     --color-text-muted: #a5a8af;
     --color-accent: #8aa9f0;
@@ -42,6 +48,10 @@
     --color-warning-bg: #3a3017;
     --color-warning-border: #5e4c1f;
     --color-warning-text: #f3d78a;
+    --color-info-bg: #1f2a44;
+    --color-info-text: #c3d3f8;
+    --color-error-bg: #3b1f1d;
+    --color-error-border: #6a2f2a;
   }
 }
 
@@ -190,22 +200,6 @@ code {
   color: var(--color-text-muted);
 }
 
-.onboarding {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-  height: 100%;
-  padding: 36px 16px;
-  background: var(--color-bg-subtle);
-}
-
-.onboarding h1 {
-  margin: 0;
-  font-size: 26px;
-}
-
 .settings {
   display: flex;
   flex-direction: column;
@@ -269,7 +263,7 @@ select {
   min-width: 200px;
   min-height: 32px;
   padding: 4px 8px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-strong);
   border-radius: 6px;
   background: var(--color-bg);
   color: var(--color-text);
@@ -312,6 +306,60 @@ button {
 
 .button-primary:disabled:hover {
   background: var(--color-accent);
+}
+
+/* A quieter button beside the primary one (Back, Test connection, Retry). */
+.button-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button-secondary:hover {
+  background: var(--color-bg-subtle);
+}
+
+.button-secondary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* A button that reads as a link (Skip). */
+.button-link {
+  min-height: 32px;
+  padding: 6px 2px;
+  border: none;
+  background: transparent;
+  color: var(--color-accent);
+  font-weight: 500;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.button-link:hover {
+  color: var(--color-accent-hover);
+}
+
+input:not([type='checkbox']) {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+}
+
+input[type='password'] {
+  font-family: var(--font-mono);
 }
 
 /* An inline spinner for a button whose action is running. */
@@ -381,4 +429,306 @@ button {
   font-size: 13px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* The first-run wizard: fills the window, a centred column with the step list above one card. */
+.wizard {
+  display: flex;
+  justify-content: center;
+  height: 100%;
+  padding: 36px 16px;
+  overflow-y: auto;
+  background: var(--color-bg-subtle);
+}
+
+.wizard-column {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  width: 100%;
+  max-width: 660px;
+}
+
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wizard-steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.wizard-steps li[data-state='current'] {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.wizard-step-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--color-border);
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wizard-step-dot svg {
+  width: 14px;
+  height: 14px;
+}
+
+[data-state='current'] > .wizard-step-dot {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+[data-state='done'] > .wizard-step-dot {
+  background: var(--color-success);
+  color: var(--color-bg);
+}
+
+.wizard-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-bg);
+}
+
+.wizard-card h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.wizard-card h1:focus {
+  outline: none;
+}
+
+.wizard-card p {
+  margin: 0;
+}
+
+.wizard-lead {
+  color: var(--color-text-muted);
+  font-size: 15px;
+}
+
+/* A plain-spoken note: the no-sandbox sentence, "no Connection yet". */
+.wizard-note {
+  padding: 12px 14px;
+  border: 1px solid var(--color-warning-border);
+  border-radius: 10px;
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+
+.wizard-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+  font-size: 13px;
+}
+
+.wizard-info svg {
+  flex: none;
+}
+
+/* Detection in progress, nothing found, no model to pick. */
+.wizard-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: 10px;
+  background: var(--color-bg-subtle);
+}
+
+.wizard-panel-column {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.wizard-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.wizard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 18px;
+  border-top: 1px solid var(--color-border);
+}
+
+.wizard-actions-end {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.wizard-actions .button-primary,
+.wizard-actions .button-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+}
+
+.wizard-test {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.wizard-summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 10px 20px;
+  margin: 0;
+}
+
+.wizard-summary dt {
+  font-weight: 600;
+}
+
+.wizard-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex: 1 1 200px;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.field-wide {
+  flex: 2 1 260px;
+}
+
+.field label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wizard-card > .field {
+  max-width: 320px;
+}
+
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+.provider-row-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.provider-row-name {
+  font-weight: 600;
+}
+
+.provider-row-detail {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.success-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.success-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* A failed action with its error and the ways forward (Retry, Edit, Skip). */
+.error-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-error-border);
+  border-radius: 10px;
+  background: var(--color-error-bg);
+}
+
+.error-panel-title {
+  color: var(--color-error);
+  font-weight: 600;
+}
+
+.error-panel .error-message {
+  color: var(--color-text);
+}
+
+.error-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }

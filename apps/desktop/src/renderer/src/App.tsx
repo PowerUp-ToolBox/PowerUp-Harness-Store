@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router';
 import { StoreGate } from './connectivity/StoreGate.js';
+import { useSettings } from './i18n/I18nProvider.js';
 import { HarnessDetailPage } from './pages/HarnessDetailPage.js';
 import { LibraryPage } from './pages/LibraryPage.js';
 import { ModelsPage } from './pages/ModelsPage.js';
@@ -15,9 +16,13 @@ import { Shell } from './shell/Shell.js';
  * The route table. Routes live in the URL hash (`#/store`), so the renderer is one page that never
  * navigates. A Harness ID contains a slash (`publisher/slug`), so the detail route is a splat.
  * The first-run wizard fills the window without the sidebar. Store routes show the offline panel
- * instead of their screen while the Store is unreachable.
+ * instead of their screen while the Store is unreachable. `/` and unknown routes go to the Library,
+ * or to the wizard until it has been completed or skipped once; the last route is not kept, so
+ * every launch starts there.
  */
 export function App() {
+  const { settings } = useSettings();
+  const home = settings.onboardingDone ? '/library' : '/onboarding';
   return (
     <Routes>
       <Route path="/onboarding" element={<OnboardingPage />} />
@@ -33,7 +38,7 @@ export function App() {
         <Route path="/usage" element={<UsagePage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
-      <Route path="*" element={<Navigate to="/library" replace />} />
+      <Route path="*" element={<Navigate to={home} replace />} />
     </Routes>
   );
 }

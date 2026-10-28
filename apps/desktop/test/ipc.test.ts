@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDispatcher, UntrustedSenderError } from '../src/main/runtime/dispatcher.js';
 import { createHandlers, type IpcHandlers } from '../src/main/runtime/handlers.js';
+import { createConnectionsStub, providerPresets } from '../src/main/runtime/connections.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
 import { IPC_METHODS } from '../src/shared/ipc.js';
@@ -14,8 +15,8 @@ const fakeServices: Services = {
     quit,
   },
   settings: {
-    get: () => ({ resolvedLocale: 'en' }),
-    set: () => ({ resolvedLocale: 'en' }),
+    get: () => ({ resolvedLocale: 'en', onboardingDone: false }),
+    set: () => ({ resolvedLocale: 'en', onboardingDone: true }),
   },
   diagnostics: {
     get: () => ({
@@ -28,6 +29,8 @@ const fakeServices: Services = {
     get: () => ({ state: 'offline' }),
     check: () => Promise.resolve({ state: 'online' }),
   },
+  providers: { list: () => providerPresets() },
+  connections: createConnectionsStub(),
 };
 const en = translatorFor('en');
 
@@ -99,16 +102,21 @@ describe('IPC handlers against a fake service container', () => {
     });
   });
 
-  it.each(['app.status', 'app.quit', 'diagnostics.get', 'connectivity.get', 'connectivity.check'])(
-    '%s rejects any input as invalid_input',
-    async (method) => {
-      const { dispatch } = dispatcherFor();
-      await expect(dispatch(MAIN_WINDOW, { method, input: {} })).resolves.toMatchObject({
-        ok: false,
-        error: { code: 'invalid_input', params: { method } },
-      });
-    },
-  );
+  it.each([
+    'app.status',
+    'app.quit',
+    'diagnostics.get',
+    'connectivity.get',
+    'connectivity.check',
+    'providers.list',
+    'connections.detectLocal',
+  ])('%s rejects any input as invalid_input', async (method) => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method, input: {} })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input', params: { method } },
+    });
+  });
 
   it('app.ping rejects any input as invalid_input', async () => {
     const { dispatch } = dispatcherFor();

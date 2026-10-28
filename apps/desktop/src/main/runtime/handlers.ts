@@ -1,4 +1,5 @@
 import type { IpcMethodName, IpcOutput, IpcResult } from '../../shared/ipc.js';
+import { parseConnectionDraft } from './connections.js';
 import { fail, ok } from './ipc-result.js';
 import type { Services } from './services.js';
 import { parseSettingsPatch } from './settings.js';
@@ -49,6 +50,19 @@ export function createHandlers(services: Services): IpcHandlers {
     'connectivity.check': async (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'connectivity.check' });
       return ok(await services.connectivity.check());
+    },
+    'providers.list': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'providers.list' });
+      return ok(services.providers.list());
+    },
+    'connections.detectLocal': async (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'connections.detectLocal' });
+      return ok(await services.connections.detectLocal());
+    },
+    'connections.add': (input) => {
+      const draft = parseConnectionDraft(input);
+      if (draft === null) return fail('invalid_input', { method: 'connections.add' });
+      return services.connections.add(draft);
     },
   };
 }

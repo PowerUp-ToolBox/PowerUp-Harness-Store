@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { isLocale } from '../../../shared/i18n/locale.js';
 import type { Diagnostics, IpcError } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
@@ -7,10 +8,13 @@ import { useI18n, useSettings } from '../i18n/I18nProvider.js';
 // The "System" choice clears the override; the select needs a value for it.
 const SYSTEM = 'system';
 
-// Language arrives here in P0-04.2, diagnostics in P0-04.3, the rest of the screen in P0-11. The
-// diagnostics are read from the Runtime (`diagnostics.get`) each time the screen opens.
+// Language arrives here in P0-04.2, diagnostics in P0-04.3, Re-run setup in P0-04.5, the rest of
+// the screen in P0-11. The diagnostics are read from the Runtime (`diagnostics.get`) each time the
+// screen opens. Re-run setup only opens the wizard at its first step: it clears no setting,
+// Connection or Slot Binding.
 export function SettingsPage() {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const { settings, updateSettings } = useSettings();
   const [error, setError] = useState<IpcError | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
@@ -46,6 +50,21 @@ export function SettingsPage() {
           </select>
           <p className="hint">{t('settings.language.note')}</p>
           {error === null ? null : <ErrorMessage error={error} />}
+        </div>
+      </section>
+      <section className="settings-row" aria-labelledby="settings-setup">
+        <h2 id="settings-setup" className="settings-heading">
+          {t('settings.setup')}
+        </h2>
+        <div className="settings-control">
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={() => void navigate('/onboarding')}
+          >
+            {t('settings.setup.rerun')}
+          </button>
+          <p className="hint">{t('settings.setup.note')}</p>
         </div>
       </section>
       {diagnostics === null ? null : <DiagnosticsSection diagnostics={diagnostics} />}

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/main/runtime/database.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
+import { createConnectionsStub, providerPresets } from '../../src/main/runtime/connections.js';
 import type { Services } from '../../src/main/runtime/services.js';
 import { createSqliteSettingsStore } from '../../src/main/runtime/settings-store.js';
 import { createSettingsService, parseSettingsPatch } from '../../src/main/runtime/settings.js';
@@ -53,6 +54,8 @@ function launch(osLocale: string) {
       get: () => ({ state: 'online' }),
       check: () => Promise.resolve({ state: 'online' }),
     },
+    providers: { list: () => providerPresets() },
+    connections: createConnectionsStub(),
   };
   const dispatch = createDispatcher({
     handlers: createHandlers(services),
@@ -65,11 +68,11 @@ describe('language setting over IPC', () => {
   it('first launch on a zh-TW OS renders in zh-CN; on en-US in en', async () => {
     await expect(launch('zh-TW')('settings.get')).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'zh-CN' },
+      data: { resolvedLocale: 'zh-CN', onboardingDone: false },
     });
     await expect(launch('en-US')('settings.get')).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'en' },
+      data: { resolvedLocale: 'en', onboardingDone: false },
     });
   });
 
@@ -77,7 +80,7 @@ describe('language setting over IPC', () => {
     const call = launch('en-US');
     await expect(call('settings.set', { locale: 'zh-CN' })).resolves.toEqual({
       ok: true,
-      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN' },
+      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN', onboardingDone: false },
     });
   });
 
@@ -85,7 +88,7 @@ describe('language setting over IPC', () => {
     await launch('en-US')('settings.set', { locale: 'zh-CN' });
     await expect(launch('en-US')('settings.get')).resolves.toEqual({
       ok: true,
-      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN' },
+      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN', onboardingDone: false },
     });
     expect(storedSettings()).toEqual({ locale: 'zh-CN' });
   });
@@ -94,7 +97,7 @@ describe('language setting over IPC', () => {
     await launch('zh-CN')('settings.set', { locale: 'en' });
     await expect(launch('zh-CN')('settings.set', { locale: null })).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'zh-CN' },
+      data: { resolvedLocale: 'zh-CN', onboardingDone: false },
     });
     expect(storedSettings()).toEqual({});
   });
@@ -150,6 +153,7 @@ describe('stored locale', () => {
         createSettingsService(createSqliteSettingsStore(database()), () => 'en').get(),
       ).toEqual({
         resolvedLocale: 'en',
+        onboardingDone: false,
       });
     },
   );

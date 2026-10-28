@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { createGateway, type Gateway, type GatewayOptions } from '@harness-store/gateway';
 import type { IpcEventName, IpcEvents, StartupStage, StartupStatus } from '../../shared/ipc.js';
+import { createConnectionsStub, providerPresets } from './connections.js';
 import {
   createConnectivityService,
   storeBaseUrlFrom,
@@ -145,6 +146,8 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
         }),
       },
       connectivity,
+      providers: { list: () => providerPresets() },
+      connections: createConnectionsStub(),
     },
     windowState: {
       read() {

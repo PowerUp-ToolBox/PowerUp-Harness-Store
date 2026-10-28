@@ -12,7 +12,8 @@ export interface SettingsService {
 /**
  * Settings kept in `store` (the SQLite `settings` table). `osLocale` is Electron's
  * `app.getLocale()`, read on every call so the resolved locale follows the OS. A stored locale
- * that is not a known one reads as absent.
+ * that is not a known one reads as absent; `onboarding_done` is true only when it is stored as
+ * `true`, so a fresh profile starts with the first-run wizard.
  */
 export function createSettingsService(
   store: SettingsStore,
@@ -22,12 +23,16 @@ export function createSettingsService(
     const stored = store.read('locale');
     const locale = isLocale(stored) ? stored : undefined;
     const resolvedLocale = resolveLocale(locale, osLocale());
-    return locale === undefined ? { resolvedLocale } : { locale, resolvedLocale };
+    const onboardingDone = store.read('onboarding_done') === true;
+    return locale === undefined
+      ? { resolvedLocale, onboardingDone }
+      : { locale, resolvedLocale, onboardingDone };
   };
   return {
     get,
     set(patch) {
       if (patch.locale !== undefined) store.write('locale', patch.locale ?? undefined);
+      if (patch.onboardingDone !== undefined) store.write('onboarding_done', patch.onboardingDone);
       return get();
     },
   };
@@ -36,10 +41,13 @@ export function createSettingsService(
 /** The patch when `input` is a well-formed {@link SettingsPatch}, else null (never throws). */
 export function parseSettingsPatch(input: unknown): SettingsPatch | null {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return null;
-  const allowed = new Set(['locale']);
+  const allowed = new Set(['locale', 'onboardingDone']);
   if (!Object.keys(input).every((key) => allowed.has(key))) return null;
-  const { locale } = input as { locale?: unknown };
-  if (locale === undefined) return {};
-  if (locale === null || isLocale(locale)) return { locale };
-  return null;
+  const { locale, onboardingDone } = input as { locale?: unknown; onboardingDone?: unknown };
+  if (locale !== undefined && locale !== null && !isLocale(locale)) return null;
+  if (onboardingDone !== undefined && typeof onboardingDone !== 'boolean') return null;
+  return {
+    ...(locale === undefined ? {} : { locale }),
+    ...(onboardingDone === undefined ? {} : { onboardingDone }),
+  };
 }

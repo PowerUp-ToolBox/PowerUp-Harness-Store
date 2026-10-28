@@ -252,7 +252,7 @@ describe('relaunch after a clean quit', () => {
     expect(second.status).toEqual({ state: 'ready' });
     await expect(call(second, 'settings.get')).resolves.toEqual({
       ok: true,
-      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN' },
+      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN', onboardingDone: false },
     });
     expect(second.windowState.read()).toEqual(windowState);
     await second.shutdown();
@@ -294,7 +294,7 @@ describe('startup failures', () => {
     // Without the database the UI still follows the OS locale, for the error screen.
     await expect(call(runtime, 'settings.get')).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'zh-CN' },
+      data: { resolvedLocale: 'zh-CN', onboardingDone: false },
     });
     expect(runtime.windowState.read()).toBeNull();
   });
@@ -318,7 +318,7 @@ describe('startup failures', () => {
     expect(createGatewaySpy).not.toHaveBeenCalled();
     await expect(call(runtime, 'settings.get')).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'en' },
+      data: { resolvedLocale: 'en', onboardingDone: false },
     });
     expect(runtime.windowState.read()).toBeNull();
   });

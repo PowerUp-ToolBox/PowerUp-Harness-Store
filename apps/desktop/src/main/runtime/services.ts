@@ -1,11 +1,12 @@
-import type { Diagnostics, StartupStatus } from '../../shared/ipc.js';
+import type { Diagnostics, ProviderPreset, StartupStatus } from '../../shared/ipc.js';
+import type { ConnectionsService } from './connections.js';
 import type { ConnectivityService } from './connectivity.js';
 import type { SettingsService } from './settings.js';
 
 /**
  * The service container: everything an IPC handler may use, created once by
  * {@link startRuntime} (./bootstrap.ts) and passed to {@link createHandlers}. Tests pass a fake.
- * Later specs add Connections and the Supervisor here.
+ * Later specs add Slot Bindings and the Supervisor here.
  */
 export interface Services {
   readonly app: {
@@ -22,4 +23,10 @@ export interface Services {
   };
   /** Whether the Store is reachable. */
   readonly connectivity: Pick<ConnectivityService, 'get' | 'check'>;
+  readonly providers: {
+    /** The Providers a User can add a Connection for by hand. */
+    readonly list: () => readonly ProviderPreset[];
+  };
+  /** Local Provider detection and adding Connections; stubs until P0-03. */
+  readonly connections: ConnectionsService;
 }

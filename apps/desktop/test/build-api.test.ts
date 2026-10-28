@@ -7,14 +7,18 @@ describe('buildApi (window.api)', () => {
     const api = buildApi(vi.fn<Invoke>(), vi.fn<Listen>());
     expect(Object.keys(api).sort()).toEqual([
       'app',
+      'connections',
       'connectivity',
       'diagnostics',
       'on',
+      'providers',
       'settings',
     ]);
     expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit']);
+    expect(Object.keys(api.connections)).toEqual(['detectLocal', 'add']);
     expect(Object.keys(api.connectivity)).toEqual(['get', 'check']);
     expect(Object.keys(api.diagnostics)).toEqual(['get']);
+    expect(Object.keys(api.providers)).toEqual(['list']);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
     expect(Object.isFrozen(api)).toBe(true);
     expect(Object.isFrozen(api.app)).toBe(true);

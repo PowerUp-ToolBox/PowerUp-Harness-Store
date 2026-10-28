@@ -1,6 +1,6 @@
 # @harness-store/desktop
 
-> Status: shell, i18n, the embedded Runtime and offline handling (P0-04.1 to P0-04.4): sidebar navigation, placeholder screens, typed IPC, window state, every UI string in `en` and `zh-CN`, the Model Gateway and local SQLite database starting with the app, and an offline banner and Store offline panel when the Store is unreachable. The first-run wizard follows in P0-04; the Runtime's installer and Process Supervisor in P0-05 and P0-10.
+> Status: shell, i18n, the embedded Runtime, offline handling and the first-run wizard (P0-04.1 to P0-04.5): sidebar navigation, placeholder screens, typed IPC, window state, every UI string in `en` and `zh-CN`, the Model Gateway and local SQLite database starting with the app, an offline banner and Store offline panel when the Store is unreachable, and a skippable five-step setup wizard. Connections, detection and the Default Model behind the wizard follow in P0-03; the Runtime's installer and Process Supervisor in P0-05 and P0-10.
 
 The Harness Store desktop app, built with Electron + React + TypeScript ([ADR-0003](../../docs/adr/0003-typescript-electron-stack.md)).
 
@@ -27,7 +27,7 @@ The renderer runs with `contextIsolation`, `sandbox` and no Node integration und
 
 On launch, before the window opens, the Runtime opens `harness-store.sqlite` in the userData folder (creating it and applying the migrations on first run), then starts the Model Gateway on `127.0.0.1` with a port the OS picks. If either step fails, the window shows a blocking error screen naming the step, with the details and Quit, instead of the app (`app.status`). Settings shows the Gateway's port, the database path and the app version (`diagnostics.get`). Quitting stops the Gateway, which writes its last Usage Records, then closes the database.
 
-SQLite is Node's built-in `node:sqlite`, so there is no native module to rebuild. Migrations are plain SQL files in `src/main/runtime/migrations/` (`0001_…sql`, never edited once released), bundled into the main process and tracked with `PRAGMA user_version`; each runs in its own transaction. The first creates `settings` (key/value, JSON values: the language override and the main window's size and position) and `usage_records` (one row per Usage Record from the Gateway).
+SQLite is Node's built-in `node:sqlite`, so there is no native module to rebuild. Migrations are plain SQL files in `src/main/runtime/migrations/` (`0001_…sql`, never edited once released), bundled into the main process and tracked with `PRAGMA user_version`; each runs in its own transaction. The first creates `settings` (key/value, JSON values: the language override, whether the first-run wizard has run, and the main window's size and position) and `usage_records` (one row per Usage Record from the Gateway).
 
 ## Offline
 
@@ -37,6 +37,12 @@ While offline, every main screen shows a banner ("You're offline. Library and Mo
 
 The Store base URL is the `store_base_url` setting (no UI until P0-11), else `http://127.0.0.1:54321`, the Supabase local stack. It is read at every check. To try it by hand, start the app without the local stack running (offline panel on Store), then serve anything on that port, for example `python3 -m http.server 54321`, and press Retry.
 
+## First run
+
+On a fresh profile (`settings.onboardingDone` false) the app opens on the first-run wizard (`/onboarding`), which fills the window without the sidebar: Welcome and language → Local Providers → Remote Provider (optional) → Default model → Done, with a step list on top and Skip on every step ("Skip setup" on Welcome jumps to the summary). Back works on every step but Welcome. Reaching Done sets `onboarding_done`, so later launches open on the Library; Open Store lands on Store home. The steps are a pure reducer (`src/renderer/src/onboarding/wizard-reducer.ts`); progress is not kept, so quitting midway starts again at Welcome. Settings has "Re-run setup", which opens the wizard at Welcome and clears nothing.
+
+Until P0-03, the Runtime's `connections.detectLocal` finds nothing and `connections.add` answers `not_implemented`, so the wizard shows its "not found" (with links to install Ollama and LM Studio), failed-test and "set this later in Models" states. The wizard keeps the chosen Default Model in its own state for the summary; P0-03 saves it as the `default` Slot Binding.
+
 ## Languages
 
 Every string the User sees comes from `src/shared/i18n/en.json` and `zh-CN.json`: flat keys, ICU messages, rendered with `const { t } = useI18n(); t('section.library')`. A new string needs an entry in both catalogs. The UI follows the Settings override, else the OS locale (`zh*` → `zh-CN`, anything else → `en`), which main resolves and sends over IPC; switching applies at once. Runtime and Gateway errors are looked up as `error.<code>` and Manifest problems as `manifest.<messageKey>`, falling back to the English `message`. Two checks run in `pnpm test` and `pnpm lint`: catalog parity (same keys, valid ICU, same arguments; every Manifest messageKey and Gateway code covered) and an ESLint rule that rejects hard-coded JSX text. To see Chinese, start the app with `--lang=zh-CN` or set the OS language (`LANG` only matters on Linux).
@@ -45,14 +51,15 @@ Every string the User sees comes from `src/shared/i18n/en.json` and `zh-CN.json`
 
 Run them with `pnpm --filter @harness-store/desktop <script>` from the repo root.
 
-| Command                       | What it does                                                                                                     |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `pnpm dev`                    | `electron-vite dev`: the app with renderer hot reload; main and preload rebuild and restart                      |
-| `pnpm build`                  | `electron-vite build`: compiles main, preload and renderer into `out/` (what the root build runs)                |
-| `pnpm package`                | Builds, then packages the app for the current OS into `release/` with electron-builder (manual)                  |
-| `pnpm test`                   | Vitest: seam tests under Node, renderer component tests under jsdom                                              |
-| `pnpm test:i18n`              | Only the i18n tests: catalog parity, locale resolution, translation, formatting, the lint rule                   |
-| `pnpm test:runtime-bootstrap` | Only the startup tests: SQLite and migrations against a temp data dir, Gateway start and stop, the error screen  |
-| `pnpm test:connectivity`      | Only the offline tests: the connectivity check, its backoff and debounce, the banner and the Store offline panel |
-| `pnpm lint`                   | ESLint with the shared root config                                                                               |
-| `pnpm typecheck`              | `tsc --build` over `tsconfig.json` (main, preload, shared) and `tsconfig.web.json` (renderer)                    |
+| Command                       | What it does                                                                                                      |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev`                    | `electron-vite dev`: the app with renderer hot reload; main and preload rebuild and restart                       |
+| `pnpm build`                  | `electron-vite build`: compiles main, preload and renderer into `out/` (what the root build runs)                 |
+| `pnpm package`                | Builds, then packages the app for the current OS into `release/` with electron-builder (manual)                   |
+| `pnpm test`                   | Vitest: seam tests under Node, renderer component tests under jsdom                                               |
+| `pnpm test:i18n`              | Only the i18n tests: catalog parity, locale resolution, translation, formatting, the lint rule                    |
+| `pnpm test:runtime-bootstrap` | Only the startup tests: SQLite and migrations against a temp data dir, Gateway start and stop, the error screen   |
+| `pnpm test:connectivity`      | Only the offline tests: the connectivity check, its backoff and debounce, the banner and the Store offline panel  |
+| `pnpm test:onboarding`        | Only the first-run wizard tests: the step table, `onboarding_done` in SQLite, the wizard screens and Re-run setup |
+| `pnpm lint`                   | ESLint with the shared root config                                                                                |
+| `pnpm typecheck`              | `tsc --build` over `tsconfig.json` (main, preload, shared) and `tsconfig.web.json` (renderer)                     |
