@@ -47,16 +47,28 @@ CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs on every push
 To reproduce a CI failure without pushing, run the same jobs once on your own OS (no OS matrix):
 
 ```sh
-pnpm ci:local                    # build, then every job in CI order; lint-typecheck failing skips the rest
-pnpm ci:local store-tests        # only the jobs named (needs Docker; stops the stack and deletes its data)
-pnpm ci:local --list             # the job names
+pnpm ci:local                       # build, then every job in CI order; lint-typecheck failing skips the rest
+pnpm ci:local unit supervisor-tests # only the jobs named
+pnpm ci:local --list                # the job names
 ```
 
-It runs with the dependencies you installed, and never passes a `CONFORMANCE_*` variable on, so the conformance suite stays on the fake Provider, as in CI.
+The full run includes `store-tests`, which needs Docker and **stops your local Supabase stack and deletes its data** (Harnesses you published, profiles, an `is_admin` flag), before it starts and again at the end; name the other jobs to keep it. It points Auth's GitHub provider at the fake GitHub of the sign-in tests, as in CI, even when `apps/store/supabase/.env` has a real OAuth app; run `pnpm db:start` in `apps/store` afterwards to sign in with that app again. It runs with the dependencies you installed, and never passes a `CONFORMANCE_*` variable on, so the conformance suite stays on the fake Provider, as in CI. Ctrl-C stops the command running, starts no other job and still stops the stack.
 
 A second workflow, [`nightly.yml`](./.github/workflows/nightly.yml), runs the conformance suite against real Providers every night and on demand (Actions → Nightly → Run workflow), with the repository secrets `CONFORMANCE_ANTHROPIC_API_KEY`, `CONFORMANCE_OPENAI_API_KEY` and, for an OpenAI-compatible endpoint, `CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL`, `CONFORMANCE_OPENAI_COMPATIBLE_MODEL` and `CONFORMANCE_OPENAI_COMPATIBLE_API_KEY` (the repository variables `CONFORMANCE_ANTHROPIC_MODEL` and `CONFORMANCE_OPENAI_MODEL` change the models). A Provider whose secret is not set is skipped, not failed. It never runs on a pull request.
 
-Which checks a pull request must pass is a branch protection setting of the repository (Settings → Branches → the `main` rule → Require status checks), not something the workflow files can set. Mark the `ci` jobs as required: `lint-typecheck`, `unit`, `gateway-conformance`, `store-tests` and the three `supervisor-tests` jobs (one per OS; GitHub lists each by its name, "Supervisor and installer (macos-latest)" and so on). Never mark `nightly` as required.
+Which checks a pull request must pass is a branch protection setting of the repository (Settings → Branches → the `main` rule → Require status checks), not something the workflow files can set. Mark the `ci` jobs as required. GitHub lists each check by the job's name, not its id, and a check appears there once it has run on the repository:
+
+| Check to mark as required | Job id |
+|---|---|
+| Lint, typecheck and catalogs | `lint-typecheck` |
+| Unit tests | `unit` |
+| Model Gateway conformance (fake Provider) | `gateway-conformance` |
+| Store backend on a local Supabase stack | `store-tests` |
+| Supervisor and installer (macos-latest) | `supervisor-tests` |
+| Supervisor and installer (windows-latest) | `supervisor-tests` |
+| Supervisor and installer (ubuntu-latest) | `supervisor-tests` |
+
+Never mark the Nightly workflow's "Model Gateway conformance (real Providers)" as required.
 
 To check a Harness Package (a folder or a zip) the way the Store will, build the Manifest package and run its CLI: `pnpm --filter @harness-store/manifest build`, then `node packages/manifest/bin/harness-manifest.js validate <path>`. See [`packages/manifest`](./packages/manifest/README.md#command-line-harness-manifest-validate) for its options, output and exit status.
 

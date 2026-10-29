@@ -1,10 +1,14 @@
 import { spawnSync } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { readPackageJson, readText, repoPath, ROOT_COMMANDS } from './repo.js';
 
 interface Step {
   name?: string;
+  env?: Record<string, string>;
   uses?: string;
   run?: string;
   if?: string;
@@ -13,6 +17,7 @@ interface Step {
 }
 
 interface Job {
+  name?: string;
   'runs-on'?: string;
   needs?: string | string[];
   strategy?: { 'fail-fast'?: boolean; matrix?: Record<string, unknown> };
@@ -54,6 +59,54 @@ const ciLocal = (...args: string[]) =>
   spawnSync(process.execPath, [repoPath('scripts', 'ci-local.mjs'), ...args], {
     encoding: 'utf8',
   });
+
+/**
+ * A scratch folder with a fake pnpm (`pnpm.cjs`, which ci-local runs as the pnpm that started it)
+ * and a fake `docker` on PATH, each logging its arguments and the GitHub provider variables to
+ * `log`. The fake pnpm exits 0, or ends by SIGINT as Ctrl-C would, sent to ci-local too, when its
+ * first argument is `interruptAt`. The fake docker always fails, so `store-tests` stops before it
+ * reaches the Supabase CLI and a stack the developer runs.
+ */
+function fakeTools(interruptAt?: string) {
+  const dir = mkdtempSync(join(tmpdir(), 'ci-local-'));
+  const log = join(dir, 'log');
+  const record = `require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify({ tool, args: process.argv.slice(2), githubClientId: process.env.SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID ?? null, githubUrl: process.env.SUPABASE_AUTH_EXTERNAL_GITHUB_URL ?? null }) + '\\n');`;
+  writeFileSync(
+    join(dir, 'pnpm.cjs'),
+    `const tool = 'pnpm';\n${record}\n` +
+      `if (process.argv[2] === ${JSON.stringify(interruptAt ?? null)}) {\n` +
+      `  process.kill(process.ppid, 'SIGINT');\n  process.kill(process.pid, 'SIGINT');\n}\n`,
+  );
+  writeFileSync(
+    join(dir, 'docker'),
+    `#!/usr/bin/env node\nconst tool = 'docker';\n${record}\nprocess.exitCode = 1;\n`,
+  );
+  chmodSync(join(dir, 'docker'), 0o755);
+  const calls = () =>
+    readFileSync(log, 'utf8')
+      .trim()
+      .split('\n')
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            tool: string;
+            args: string[];
+            githubClientId: string | null;
+            githubUrl: string | null;
+          },
+      );
+  const runCiLocal = (args: string[], env: Record<string, string> = {}) =>
+    spawnSync(process.execPath, [repoPath('scripts', 'ci-local.mjs'), ...args], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...env,
+        npm_execpath: join(dir, 'pnpm.cjs'),
+        PATH: `${dir}${delimiter}${process.env.PATH ?? ''}`,
+      },
+    });
+  return { dir, calls, runCiLocal };
+}
 
 describe('CI workflow', () => {
   it('runs on every push and every pull request, without branch or path filters', () => {
@@ -193,8 +246,24 @@ describe('CI workflow', () => {
   });
 });
 
+describe('required checks (README.md)', () => {
+  it('names each ci check as GitHub lists it: the job name, once per matrix OS', () => {
+    const readme = readText('README.md');
+    const checks = jobs.flatMap(([id, job]) => {
+      const name = job.name ?? id;
+      const os = job.strategy?.matrix?.os;
+      return Array.isArray(os)
+        ? os.map((each) => name.replace('${{ matrix.os }}', String(each)))
+        : [name];
+    });
+    expect(checks).toHaveLength(7);
+    for (const check of checks) expect(readme, check).toContain(`| ${check} |`);
+  });
+});
+
 describe('nightly workflow', () => {
   const job = nightly.jobs?.['gateway-conformance'];
+  const conformance = job?.steps?.find((step) => step.name === 'Conformance');
 
   it('runs on a schedule and on demand only, never on a push or a pull request', () => {
     expect(eventsOf(nightly).sort()).toEqual(['schedule', 'workflow_dispatch']);
@@ -210,12 +279,25 @@ describe('nightly workflow', () => {
     const read = [...live.matchAll(/env\('([A-Z_]+)'\)/g)].map(
       (match) => `CONFORMANCE_${match[1] ?? ''}`,
     );
-    expect(Object.keys(job?.env ?? {}).sort()).toEqual([...new Set(read)].sort());
-    for (const [name, value] of Object.entries(job?.env ?? {})) {
+    expect(Object.keys(conformance?.env ?? {}).sort()).toEqual([...new Set(read)].sort());
+    for (const [name, value] of Object.entries(conformance?.env ?? {})) {
       expect(value).toMatch(new RegExp(`^\\$\\{\\{ (secrets|vars)\\.${name} \\}\\}$`));
     }
     for (const name of ['CONFORMANCE_ANTHROPIC_API_KEY', 'CONFORMANCE_OPENAI_API_KEY']) {
-      expect(job?.env?.[name]).toBe(`\${{ secrets.${name} }}`);
+      expect(conformance?.env?.[name]).toBe(`\${{ secrets.${name} }}`);
+    }
+  });
+
+  it('gives the value of a secret to the Conformance step alone, never to install or build', () => {
+    // Job-level env would reach every step: the setup actions, dependency install scripts, builds.
+    expect(job?.env).toBeUndefined();
+    for (const step of job?.steps ?? []) {
+      if (step === conformance) continue;
+      for (const value of Object.values(step.env ?? {})) {
+        // Elsewhere only whether a secret is set, never its value.
+        if (value.includes('secrets.')) expect(value).toMatch(/^\$\{\{ .* != '' \}\}$/);
+      }
+      expect(JSON.stringify(step.with ?? {}), step.name).not.toContain('secrets.');
     }
   });
 });
@@ -237,6 +319,42 @@ describe('local CI parity (pnpm ci:local)', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('Unknown job e2e');
     expect(result.stdout).not.toContain('$ ');
+  });
+
+  // The fakes are a Node script with a shebang and a POSIX signal; repo-checks runs in `unit`, on
+  // Linux, and locally on macOS or Linux.
+  describe.skipIf(process.platform === 'win32')('with fake pnpm and docker', () => {
+    const dirs: string[] = [];
+    afterEach(() => {
+      for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    });
+
+    it.each([
+      ['pnpm build', 'build', ['build']],
+      ['the unit job', 'test', ['build', 'lint', 'typecheck', 'check:catalogs', 'test']],
+    ])('after Ctrl-C during %s starts nothing else and exits 130', (_, at, ran) => {
+      const tools = fakeTools(at);
+      dirs.push(tools.dir);
+      const result = tools.runCiLocal([]);
+      expect(result.status, result.stderr).toBe(130);
+      expect(tools.calls().map((call) => call.args[0])).toEqual(ran);
+      expect(tools.calls().some((call) => call.tool === 'docker')).toBe(false);
+      expect(result.stdout).toMatch(/skipped\s+supervisor-tests/);
+    });
+
+    it('runs store-tests with the fake GitHub of .env.example over a real OAuth app in the shell', () => {
+      const tools = fakeTools();
+      dirs.push(tools.dir);
+      const result = tools.runCiLocal(['store-tests'], {
+        SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID: 'a-real-oauth-app',
+        SUPABASE_AUTH_EXTERNAL_GITHUB_URL: '',
+      });
+      expect(result.status).toBe(1);
+      const docker = tools.calls().find((call) => call.tool === 'docker');
+      expect(docker?.args).toEqual(['info']);
+      expect(docker?.githubClientId).toBe('fake-github-client');
+      expect(docker?.githubUrl).toBe('http://fake-github:8080');
+    });
   });
 
   it('runs the same commands as each ci job', () => {

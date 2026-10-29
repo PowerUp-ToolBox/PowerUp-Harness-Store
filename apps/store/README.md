@@ -92,4 +92,4 @@ pnpm --filter @harness-store/store admin reports list --open
 
 The store tests run the CLI (`runAdmin`) against the local stack (`test-store/admin.test.ts`), including the Store home, search and Publisher page reads after a Takedown; its argument parsing and output are unit tests (`test/admin.test.ts`).
 
-CI runs all of this in the `store-tests` job of [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml); `pnpm ci:local store-tests` at the repository root runs the same steps locally and always stops the stack afterwards.
+CI runs all of this in the `store-tests` job of [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml); `pnpm ci:local store-tests` at the repository root runs the same steps locally, with the fake GitHub values of `supabase/.env.example` over any in `supabase/.env` or the shell, and always stops the stack afterwards, deleting its data.

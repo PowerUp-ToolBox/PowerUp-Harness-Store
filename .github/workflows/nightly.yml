@@ -29,14 +29,6 @@ jobs:
     name: Model Gateway conformance (real Providers)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      CONFORMANCE_ANTHROPIC_API_KEY: ${{ secrets.CONFORMANCE_ANTHROPIC_API_KEY }}
-      CONFORMANCE_ANTHROPIC_MODEL: ${{ vars.CONFORMANCE_ANTHROPIC_MODEL }}
-      CONFORMANCE_OPENAI_API_KEY: ${{ secrets.CONFORMANCE_OPENAI_API_KEY }}
-      CONFORMANCE_OPENAI_MODEL: ${{ vars.CONFORMANCE_OPENAI_MODEL }}
-      CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL: ${{ secrets.CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL }}
-      CONFORMANCE_OPENAI_COMPATIBLE_MODEL: ${{ secrets.CONFORMANCE_OPENAI_COMPATIBLE_MODEL }}
-      CONFORMANCE_OPENAI_COMPATIBLE_API_KEY: ${{ secrets.CONFORMANCE_OPENAI_COMPATIBLE_API_KEY }}
     steps:
       - name: Check out
         uses: actions/checkout@v7
@@ -58,17 +50,31 @@ jobs:
       - name: Build
         run: pnpm --filter "@harness-store/gateway..." build
 
-      # Names the Providers that run, never a value.
+      # Names the Providers that run. It gets only whether each secret is set, never a value.
       - name: Configured Providers
+        env:
+          ANTHROPIC: ${{ secrets.CONFORMANCE_ANTHROPIC_API_KEY != '' }}
+          OPENAI: ${{ secrets.CONFORMANCE_OPENAI_API_KEY != '' }}
+          OPENAI_COMPATIBLE: ${{ secrets.CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL != '' && secrets.CONFORMANCE_OPENAI_COMPATIBLE_MODEL != '' }}
         run: |
-          row() { if [ -n "$2" ]; then echo "| $1 | runs |"; else echo "| $1 | skipped (secret not set) |"; fi; }
+          row() { if [ "$2" = true ]; then echo "| $1 | runs |"; else echo "| $1 | skipped (secret not set) |"; fi; }
           {
             echo '| Provider | Conformance |'
             echo '| --- | --- |'
-            row anthropic "$CONFORMANCE_ANTHROPIC_API_KEY"
-            row openai "$CONFORMANCE_OPENAI_API_KEY"
-            row openai-compatible "${CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL:+${CONFORMANCE_OPENAI_COMPATIBLE_MODEL}}"
+            row anthropic "$ANTHROPIC"
+            row openai "$OPENAI"
+            row openai-compatible "$OPENAI_COMPATIBLE"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The secrets reach this step alone: not the setup actions, the dependencies' install scripts
+      # or the build, which run third-party code.
       - name: Conformance
+        env:
+          CONFORMANCE_ANTHROPIC_API_KEY: ${{ secrets.CONFORMANCE_ANTHROPIC_API_KEY }}
+          CONFORMANCE_ANTHROPIC_MODEL: ${{ vars.CONFORMANCE_ANTHROPIC_MODEL }}
+          CONFORMANCE_OPENAI_API_KEY: ${{ secrets.CONFORMANCE_OPENAI_API_KEY }}
+          CONFORMANCE_OPENAI_MODEL: ${{ vars.CONFORMANCE_OPENAI_MODEL }}
+          CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL: ${{ secrets.CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL }}
+          CONFORMANCE_OPENAI_COMPATIBLE_MODEL: ${{ secrets.CONFORMANCE_OPENAI_COMPATIBLE_MODEL }}
+          CONFORMANCE_OPENAI_COMPATIBLE_API_KEY: ${{ secrets.CONFORMANCE_OPENAI_COMPATIBLE_API_KEY }}
         run: pnpm --filter @harness-store/gateway exec vitest run conformance-live

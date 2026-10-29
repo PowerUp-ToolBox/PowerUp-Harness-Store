@@ -10,12 +10,17 @@
  * (`pnpm install`). `store-tests` needs Docker: it stops a local Supabase stack left running,
  * starts it afresh, resets and seeds its database, serves the Edge Functions, runs the store
  * tests, and always stops the stack again, deleting its data (`stop --no-backup`), as the CI job
- * does.
+ * does. Its commands get the values of supabase/.env.example (Auth's GitHub provider pointed at
+ * the fake GitHub of the sign-in tests) over any set in this shell or in supabase/.env, as CI has
+ * no other: a real OAuth app configured there for manual testing would fail those tests.
  *
  * Commands get this shell's environment without any CONFORMANCE_* variable, so the Gateway
  * conformance suite never reaches a real Provider from here, as in `ci`.
  *
- * Exit status: 0 when every job passed, 1 when one failed, 2 for an unknown job name.
+ * Ctrl-C ends the command running and starts nothing else but the stop of the stack.
+ *
+ * Exit status: 0 when every job passed, 1 when one failed, 2 for an unknown job name, 130 after
+ * Ctrl-C.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
@@ -33,41 +38,59 @@ const env = Object.fromEntries(
   Object.entries(process.env).filter(([name]) => !name.startsWith('CONFORMANCE_')),
 );
 
-/** Set by Ctrl-C: the command running then ends, nothing else starts, and the stack is stopped. */
+/**
+ * The environment of the `store-tests` commands: the variables of supabase/.env.example (`KEY=value`
+ * lines) over `env`. The Supabase CLI reads supabase/.env only for a variable its environment does
+ * not set, so these also win over a developer's own values there.
+ */
+function storeEnv() {
+  const example = readFileSync(join(STORE, 'supabase', '.env.example'), 'utf8');
+  const values = [...example.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/gm)];
+  return { ...env, ...Object.fromEntries(values.map(([, key, value]) => [key, value.trim()])) };
+}
+
+/**
+ * Set by Ctrl-C: the command running then ends, nothing else starts, and the stack is stopped.
+ * The terminal sends SIGINT to the command running as well as to this script, whose listener runs
+ * only once the event loop turns, which a spawnSync never lets it do: so a command that ends by
+ * SIGINT sets it too, and the jobs loop yields to the event loop before each job.
+ */
 let interrupted = false;
+
+/** Exit statuses of a command Ctrl-C ended: 128 + SIGINT, and Windows' STATUS_CONTROL_C_EXIT. */
+const INTERRUPTED_STATUSES = [130, 0xc000013a];
 
 /**
  * Runs a command with its output on this terminal, shown as `shown`; true when it exits 0. After
  * Ctrl-C only a command marked `always` (stopping the stack) still runs.
  */
-function run(command, args, { cwd = ROOT, shown = [command, ...args], always = false } = {}) {
+function run(
+  command,
+  args,
+  { cwd = ROOT, shown = [command, ...args], always = false, commandEnv = env } = {},
+) {
   if (interrupted && !always) return false;
   console.log(`\n$ ${shown.join(' ')}${cwd === ROOT ? '' : `  (in ${cwd})`}`);
-  const result = spawnSync(command, args, { cwd, env, stdio: 'inherit' });
+  const result = spawnSync(command, args, { cwd, env: commandEnv, stdio: 'inherit' });
   if (result.error !== undefined) console.error(result.error.message);
+  if (result.signal === 'SIGINT' || INTERRUPTED_STATUSES.includes(result.status)) {
+    interrupted = true;
+  }
   return result.status === 0;
 }
 
 /** Runs pnpm: the one that started this script when there is one, as repo-checks does. */
-function pnpm(args, cwd = ROOT) {
+function pnpm(args, cwd = ROOT, commandEnv = env) {
   const execPath = process.env.npm_execpath;
-  const shown = ['pnpm', ...args];
+  const options = { cwd, shown: ['pnpm', ...args], commandEnv };
   if (execPath !== undefined && /pnpm\.c?js$/.test(execPath)) {
-    return run(process.execPath, [execPath, ...args], { cwd, shown });
+    return run(process.execPath, [execPath, ...args], options);
   }
   if (process.platform === 'win32') {
-    return run('cmd.exe', ['/d', '/s', '/c', 'pnpm', ...args], { cwd, shown });
+    return run('cmd.exe', ['/d', '/s', '/c', 'pnpm', ...args], options);
   }
-  return run('pnpm', args, { cwd, shown });
+  return run('pnpm', args, options);
 }
-
-/** The apps/store wrapper around the pinned Supabase CLI (scripts/supabase.ts). */
-const supabase = (args, always = false) =>
-  run(process.execPath, ['dist/scripts/supabase.js', ...args], {
-    cwd: STORE,
-    shown: ['node', 'dist/scripts/supabase.js', ...args],
-    always,
-  });
 
 /** Runs each step in order, stopping at the first that fails. */
 const steps = (...each) => each.every((step) => step());
@@ -100,7 +123,16 @@ const JOBS = [
 ];
 
 async function storeTests() {
-  const docker = spawnSync('docker', ['info'], { env, stdio: 'ignore' });
+  const jobEnv = storeEnv();
+  /** The apps/store wrapper around the pinned Supabase CLI (scripts/supabase.ts). */
+  const supabase = (args, always = false) =>
+    run(process.execPath, ['dist/scripts/supabase.js', ...args], {
+      cwd: STORE,
+      shown: ['node', 'dist/scripts/supabase.js', ...args],
+      always,
+      commandEnv: jobEnv,
+    });
+  const docker = spawnSync('docker', ['info'], { env: jobEnv, stdio: 'ignore' });
   if (docker.status !== 0) {
     console.error(
       '\nstore-tests needs Docker, which is not running or not installed: start Docker and run ' +
@@ -110,15 +142,18 @@ async function storeTests() {
   }
   let functions;
   try {
+    console.log(
+      '\nstore-tests stops the local Supabase stack and deletes its data, now and at the end.',
+    );
     // A stack left running, and any `functions serve` attached to it, would be reused or would
     // stop the Edge Runtime this job starts; CI starts from nothing, so start from nothing here.
     if (!supabase(['stop', '--no-backup'])) return false;
     if (!supabase(['start', '-x', UNUSED_SERVICES])) return false;
     // Applies the migrations from empty once more, then runs the seed script.
-    if (!pnpm(['run', 'db:reset'], STORE)) return false;
-    functions = await serveFunctions();
+    if (!pnpm(['run', 'db:reset'], STORE, jobEnv)) return false;
+    functions = await serveFunctions(jobEnv);
     if (functions === undefined) return false;
-    const passed = pnpm(['run', 'test:store'], STORE);
+    const passed = pnpm(['run', 'test:store'], STORE, jobEnv);
     if (!passed) functions.printLog();
     return passed;
   } finally {
@@ -132,14 +167,14 @@ async function storeTests() {
  * Starts `supabase functions serve` in the background, its output in a temp log file, and waits
  * until it serves. Undefined (the log printed) when it exits or is not ready in two minutes.
  */
-async function serveFunctions() {
+async function serveFunctions(jobEnv) {
   const logDir = mkdtempSync(join(tmpdir(), 'harness-store-functions-'));
   const logPath = join(logDir, 'functions.log');
   const log = openSync(logPath, 'w');
   console.log(`\n$ node dist/scripts/supabase.js functions serve  (in ${STORE}, log ${logPath})`);
   const child = spawn(process.execPath, ['dist/scripts/supabase.js', 'functions', 'serve'], {
     cwd: STORE,
-    env,
+    env: jobEnv,
     stdio: ['ignore', log, log],
     // Its own process group on macOS and Linux, so stop() ends the CLI and what it started.
     detached: process.platform !== 'win32',
@@ -205,6 +240,8 @@ async function main(args) {
   const results = new Map();
   const built = pnpm(['build']);
   for (const job of selected) {
+    // Lets the SIGINT listener run if Ctrl-C came between two commands.
+    await new Promise((resolve) => setImmediate(resolve));
     const skip = !built || interrupted || results.get('lint-typecheck') === 'failed';
     if (skip) {
       results.set(job.id, 'skipped');
@@ -214,7 +251,7 @@ async function main(args) {
     results.set(job.id, (await job.run()) ? 'passed' : 'failed');
   }
 
-  console.log(`\n${built ? '' : 'pnpm build failed.\n'}`);
+  console.log(`\n${interrupted ? 'Interrupted.\n' : built ? '' : 'pnpm build failed.\n'}`);
   for (const [id, result] of results) console.log(`${result.padEnd(8)} ${id}`);
   if (interrupted) return 130;
   return built && [...results.values()].every((result) => result === 'passed') ? 0 : 1;
