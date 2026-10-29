@@ -11,7 +11,7 @@ Harness Store is a desktop app (Electron + React + TypeScript) that installs **H
 ```
 ┌──────────────────────────── Desktop app (Electron) ─────────────────────────────┐
 │  Renderer (React, i18n en/zh-CN)                                                │
-│    Library · Store · Models · Publish · Settings · First-run wizard             │
+│    Library · Store · Models · Publish · Usage · Settings · First-run wizard     │
 │                          ▲ typed IPC (contextBridge)                            │
 │  Main process = Runtime                                                         │
 │    ┌─────────────┐ ┌──────────────────┐ ┌──────────────────┐ ┌───────────────┐ │

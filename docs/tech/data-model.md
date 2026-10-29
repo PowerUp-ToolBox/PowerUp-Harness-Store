@@ -113,7 +113,7 @@ No IP or user identity stored.
 | `secrets` | encrypted blobs | `id` PK, `ciphertext` blob (Electron safeStorage), `created_at` |
 | `slot_bindings` | Slot Bindings | `scope` (`global` or `harness:<id>`), `slot`, `provider_id`, `model`; PK (`scope`, `slot`) |
 | `usage_records` | Usage Records | as defined in gateway-protocol §7; index on (`harness_id`, `timestamp`) |
-| `settings` | key/value | `locale`, `update_check_interval`, `store_base_url`, `onboarding_done` |
+| `settings` | key/value | `locale`, `update_check_interval`, `store_base_url`, `onboarding_done`, `window_state` (main process only) |
 | `launches` | audit of launches | `launch_id`, `harness_id`, `version`, `started_at`, `ended_at`, `exit_code`, `token_revoked_at` |
 
 Global Slot Bindings for `default` are the User's Default Model. Rows with scope `harness:<id>` are Model Overrides.

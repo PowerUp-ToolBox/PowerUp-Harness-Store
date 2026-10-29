@@ -1,8 +1,18 @@
 {
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Main process (the Runtime), preload, shared code, their tests and config files",
+  // The renderer has a different environment (DOM, JSX, no Node types), so it is its own project,
+  // tsconfig.web.json. `pnpm typecheck` and the root solution build both.
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "composite": true,
     "noEmit": true,
-    "types": ["node"]
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    // vite/client types `?raw` imports and import.meta.env, which electron-vite resolves at build time.
+    "types": ["node", "vite/client"],
+    "tsBuildInfoFile": "node_modules/.tmp/tsconfig.tsbuildinfo"
   },
-  "include": ["src", "test", "*.config.ts"]
+  "include": ["src/main", "src/preload", "src/shared", "test", "*.config.ts"],
+  "exclude": ["test/renderer"]
 }

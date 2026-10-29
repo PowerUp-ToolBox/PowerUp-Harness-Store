@@ -1,0 +1,19 @@
+# Packaging for the current OS: `pnpm --filter @harness-store/desktop package`. It is a manual step;
+# the root `pnpm build` (and CI) only compiles with electron-vite. Main and preload bundle all their
+# dependencies (electron.vite.config.ts), so the app ships out/ and package.json, no node_modules.
+# Code signing and auto-update are deferred (P0-04 Out of Scope).
+appId: io.github.powerup-toolbox.harness-store
+productName: Harness Store
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+npmRebuild: false
+mac:
+  target: dmg
+  identity: null
+win:
+  target: nsis
+linux:
+  target: AppImage

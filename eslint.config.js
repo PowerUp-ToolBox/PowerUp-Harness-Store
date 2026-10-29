@@ -13,7 +13,8 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
-  globalIgnores(['**/dist/', '**/coverage/', '**/node_modules/']),
+  // out/ and release/ are the desktop app's electron-vite and electron-builder output.
+  globalIgnores(['**/dist/', '**/out/', '**/release/', '**/coverage/', '**/node_modules/']),
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,
   tseslint.configs.stylisticTypeChecked,

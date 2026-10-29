@@ -1,0 +1,248 @@
+/**
+ * The IPC contract between the renderer and the Runtime (main process), defined once and used by
+ * the main handlers, the preload bridge and the renderer. It is types plus two constant lists; it
+ * imports only types, so every process can bundle it.
+ *
+ * Transport: one `ipcMain.handle` channel carries `{ method, input }` and always resolves to an
+ * {@link IpcResult}; one event channel carries `{ event, payload }` from main to the renderer.
+ */
+
+import type { Locale } from './i18n/locale.js';
+
+/**
+ * Error codes the Runtime returns over IPC: its own three, then every Model Gateway code
+ * (`GATEWAY_ERROR_STATUS` in @harness-store/gateway; a test keeps the two lists in step). Each has
+ * an `error.<code>` entry in both message catalogs.
+ */
+export type IpcErrorCode =
+  | 'internal_error'
+  | 'invalid_input'
+  | 'not_implemented'
+  | 'invalid_request'
+  | 'invalid_token'
+  | 'invalid_host'
+  | 'provider_not_connected'
+  | 'not_supported'
+  | 'unknown_slot'
+  | 'slot_unbound'
+  | 'provider_error'
+  | 'provider_timeout';
+
+export interface IpcError {
+  readonly code: IpcErrorCode;
+  /** The catalog key the renderer looks up, always `error.<code>`. */
+  readonly messageKey: `error.${IpcErrorCode}`;
+  readonly params?: Readonly<Record<string, string | number>>;
+  /** English text, the last fallback when the catalog cannot render `messageKey`. */
+  readonly message: string;
+}
+
+export type IpcResult<T> =
+  { readonly ok: true; readonly data: T } | { readonly ok: false; readonly error: IpcError };
+
+/**
+ * Every request/response method: name (`<domain>.<verb>`) → input and output types. `input:
+ * undefined` means the renderer calls it with no argument. Each handler checks its own input at
+ * runtime.
+ */
+export interface IpcMethods {
+  'app.ping': { input: undefined; output: { version: string } };
+  /** Whether the Runtime started; the renderer asks first and shows an error screen on failure. */
+  'app.status': { input: undefined; output: StartupStatus };
+  /** Quits the app, stopping the Model Gateway and closing the database first. */
+  'app.quit': { input: undefined; output: null };
+  'settings.get': { input: undefined; output: Settings };
+  /** Applies the patch and returns the settings as they now are. */
+  'settings.set': { input: SettingsPatch; output: Settings };
+  /** Read-only facts for support and debugging, shown in Settings. */
+  'diagnostics.get': { input: undefined; output: Diagnostics };
+  /** Whether the Store answered the last connectivity check. */
+  'connectivity.get': { input: undefined; output: Connectivity };
+  /**
+   * Checks the Store now (Retry) and returns the result. Joins a check already running instead
+   * of starting a second one.
+   */
+  'connectivity.check': { input: undefined; output: Connectivity };
+  /**
+   * The Providers a User can add a Connection for by hand, in the Gateway's order: every Provider
+   * except the local ones (Ollama, LM Studio), which detection finds instead.
+   */
+  'providers.list': { input: undefined; output: readonly ProviderPreset[] };
+  /**
+   * Looks for local Providers (Ollama, LM Studio) running on their default ports. A stub that
+   * finds none until P0-03 adds detection.
+   */
+  'connections.detectLocal': { input: undefined; output: readonly LocalProvider[] };
+  /**
+   * Tests the Connection and saves it when the test succeeds. A stub that answers
+   * `not_implemented` until P0-03 adds Connections.
+   */
+  'connections.add': { input: ConnectionDraft; output: ConnectionSummary };
+}
+
+/** The Runtime's startup steps, in order: open and migrate SQLite, then start the Model Gateway. */
+export type StartupStage = 'database' | 'gateway';
+
+/** How the Runtime's startup went; `detail` is the cause, in English, for a support request. */
+export type StartupStatus =
+  | { readonly state: 'ready' }
+  | { readonly state: 'failed'; readonly stage: StartupStage; readonly detail: string };
+
+export interface Diagnostics {
+  /** The desktop app's version. */
+  readonly version: string;
+  /** The Model Gateway as it is now: listening on a loopback port, or not running. */
+  readonly gateway: { readonly running: true; readonly port: number } | { readonly running: false };
+  /** The absolute path of the local SQLite database file. */
+  readonly databasePath: string;
+}
+
+/**
+ * Whether the Store answers: `unknown` until the first check ends, then `online` or `offline`.
+ * The Store being down counts as offline, since the User meets the same problem either way.
+ */
+export type ConnectivityState = 'unknown' | 'online' | 'offline';
+
+export interface Connectivity {
+  readonly state: ConnectivityState;
+}
+
+/** The app settings as the renderer sees them. */
+export interface Settings {
+  /** The User's language override; absent means "System" (follow the OS locale). */
+  readonly locale?: Locale;
+  /** The locale the UI renders in: `locale`, else the OS locale mapped to `en` or `zh-CN`. */
+  readonly resolvedLocale: Locale;
+  /** Whether the first-run wizard reached its end (completed or skipped) once. */
+  readonly onboardingDone: boolean;
+}
+
+/** The settings the renderer may write. `locale: null` clears the override (back to System). */
+export interface SettingsPatch {
+  readonly locale?: Locale | null;
+  readonly onboardingDone?: boolean;
+}
+
+/** A Provider the User can add a Connection for by hand: one row of the Gateway's table. */
+export interface ProviderPreset {
+  /** The Provider id (`anthropic`, `openai-compatible`, …). */
+  readonly id: string;
+  readonly displayName: string;
+  /** Whether a Connection needs an API key. */
+  readonly requiresKey: boolean;
+  /**
+   * The custom OpenAI-compatible endpoint: the User names it and gives its base URL, since the
+   * Provider has none of its own.
+   */
+  readonly custom: boolean;
+  /** What the Provider's keys look like, for the key field's placeholder; `''` when unknown. */
+  readonly keyPlaceholder: string;
+}
+
+/** A local Provider found running on this machine, not yet added as a Connection. */
+export interface LocalProvider {
+  /** `ollama` or `lmstudio`. */
+  readonly providerId: string;
+  readonly displayName: string;
+  /** Where it answered, such as `http://127.0.0.1:11434/v1`. */
+  readonly baseUrl: string;
+  /** The models it lists. */
+  readonly models: readonly string[];
+}
+
+/** What the User entered to add a Connection. */
+export interface ConnectionDraft {
+  readonly providerId: string;
+  readonly apiKey?: string;
+  /** The custom endpoint's name; other Providers use their own display name. */
+  readonly displayName?: string;
+  /** Required for the custom endpoint; a local Provider passes where it was found. */
+  readonly baseUrl?: string;
+}
+
+/** A saved Connection as the renderer sees it; its secret never leaves the Runtime. */
+export interface ConnectionSummary {
+  /** The Connection id: the Provider id, or `openai-compatible:<name>` for a custom endpoint. */
+  readonly id: string;
+  readonly providerId: string;
+  readonly displayName: string;
+  /** Whether the Provider runs on this machine (Ollama, LM Studio). */
+  readonly local: boolean;
+  /** The models the Provider lists; empty when it does not list them. */
+  readonly models: readonly string[];
+}
+
+export type IpcMethodName = keyof IpcMethods;
+export type IpcInput<M extends IpcMethodName> = IpcMethods[M]['input'];
+export type IpcOutput<M extends IpcMethodName> = IpcMethods[M]['output'];
+
+// A record keyed by every method name fails to compile when a method is added to IpcMethods but
+// not here, or listed here but not in IpcMethods.
+const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
+  'app.ping': true,
+  'app.status': true,
+  'app.quit': true,
+  'settings.get': true,
+  'settings.set': true,
+  'diagnostics.get': true,
+  'connectivity.get': true,
+  'connectivity.check': true,
+  'providers.list': true,
+  'connections.detectLocal': true,
+  'connections.add': true,
+};
+
+/** The method names at runtime; the preload builds `window.api` from this list. */
+export const IPC_METHODS = Object.freeze(Object.keys(METHOD_NAMES) as IpcMethodName[]);
+
+/**
+ * Events main pushes to the renderer: name → payload. `progress:<jobId>` is reserved for
+ * long-running jobs (downloads, uploads, launch readiness); its payload is defined by its first
+ * producer.
+ */
+export interface IpcEvents {
+  /** The Store's connectivity changed; sent on every change, never twice for the same state. */
+  'connectivity.changed': Connectivity;
+  [event: `progress:${string}`]: unknown;
+}
+
+export type IpcEventName = keyof IpcEvents;
+
+export interface IpcRequest {
+  readonly method: string;
+  readonly input?: unknown;
+}
+
+export interface IpcEventMessage {
+  readonly event: string;
+  readonly payload: unknown;
+}
+
+/** The single channel `ipcRenderer.invoke` uses for every method. */
+export const IPC_INVOKE_CHANNEL = 'harness-store:invoke';
+/** The single channel main uses to push every event. */
+export const IPC_EVENT_CHANNEL = 'harness-store:event';
+
+export function isIpcEventName(name: string): name is IpcEventName {
+  return name === 'connectivity.changed' || /^progress:.+$/.test(name);
+}
+
+type Domain<M extends string> = M extends `${infer D}.${string}` ? D : never;
+type Verb<M extends string, D extends string> = M extends `${D}.${infer V}` ? V : never;
+
+type MethodFunction<M extends IpcMethodName> = [IpcInput<M>] extends [undefined]
+  ? () => Promise<IpcResult<IpcOutput<M>>>
+  : (input: IpcInput<M>) => Promise<IpcResult<IpcOutput<M>>>;
+
+/** Subscribes to one event; returns the function that unsubscribes. */
+export type IpcSubscribe = <E extends IpcEventName>(
+  event: E,
+  listener: (payload: IpcEvents[E]) => void,
+) => () => void;
+
+/** The only object the renderer sees: `window.api.<domain>.<verb>(input)` plus `on`. */
+export type DesktopApi = {
+  readonly [D in Domain<IpcMethodName>]: {
+    readonly [V in Verb<IpcMethodName, D>]: MethodFunction<Extract<`${D}.${V}`, IpcMethodName>>;
+  };
+} & { readonly on: IpcSubscribe };

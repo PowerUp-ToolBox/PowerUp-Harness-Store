@@ -1,5 +1,7 @@
 # Generated or vendored output
 dist/
+out/
+release/
 coverage/
 pnpm-lock.yaml
 *.tsbuildinfo
