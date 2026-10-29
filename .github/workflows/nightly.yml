@@ -1,0 +1,74 @@
+name: Nightly
+
+# The Model Gateway conformance suite against real Provider APIs (packages/gateway/test/
+# conformance-live.test.ts), every night and on demand. Never on a push or a pull request, so it is
+# never a check a pull request waits for: a contributor without access to the secrets is never
+# blocked by it. `ci` runs the same suite against the fake Provider on every push.
+#
+# The repository secrets have the names of the variables the suite reads; a Provider whose secret
+# is not set (a fork, or a repository with none) is reported as skipped, not failed:
+#   CONFORMANCE_ANTHROPIC_API_KEY, CONFORMANCE_OPENAI_API_KEY, and for any OpenAI-compatible
+#   endpoint CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL, CONFORMANCE_OPENAI_COMPATIBLE_MODEL and,
+#   when it needs one, CONFORMANCE_OPENAI_COMPATIBLE_API_KEY.
+# The repository variables CONFORMANCE_ANTHROPIC_MODEL and CONFORMANCE_OPENAI_MODEL override the
+# suite's default models.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  gateway-conformance:
+    name: Model Gateway conformance (real Providers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CONFORMANCE_ANTHROPIC_API_KEY: ${{ secrets.CONFORMANCE_ANTHROPIC_API_KEY }}
+      CONFORMANCE_ANTHROPIC_MODEL: ${{ vars.CONFORMANCE_ANTHROPIC_MODEL }}
+      CONFORMANCE_OPENAI_API_KEY: ${{ secrets.CONFORMANCE_OPENAI_API_KEY }}
+      CONFORMANCE_OPENAI_MODEL: ${{ vars.CONFORMANCE_OPENAI_MODEL }}
+      CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL: ${{ secrets.CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL }}
+      CONFORMANCE_OPENAI_COMPATIBLE_MODEL: ${{ secrets.CONFORMANCE_OPENAI_COMPATIBLE_MODEL }}
+      CONFORMANCE_OPENAI_COMPATIBLE_API_KEY: ${{ secrets.CONFORMANCE_OPENAI_COMPATIBLE_API_KEY }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      # Installs the pnpm version pinned in package.json#packageManager.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The Model Gateway and the workspace packages it imports (their dist/).
+      - name: Build
+        run: pnpm --filter "@harness-store/gateway..." build
+
+      # Names the Providers that run, never a value.
+      - name: Configured Providers
+        run: |
+          row() { if [ -n "$2" ]; then echo "| $1 | runs |"; else echo "| $1 | skipped (secret not set) |"; fi; }
+          {
+            echo '| Provider | Conformance |'
+            echo '| --- | --- |'
+            row anthropic "$CONFORMANCE_ANTHROPIC_API_KEY"
+            row openai "$CONFORMANCE_OPENAI_API_KEY"
+            row openai-compatible "${CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL:+${CONFORMANCE_OPENAI_COMPATIBLE_MODEL}}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Conformance
+        run: pnpm --filter @harness-store/gateway exec vitest run conformance-live

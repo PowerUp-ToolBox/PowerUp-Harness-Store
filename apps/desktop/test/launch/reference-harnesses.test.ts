@@ -193,13 +193,17 @@ function createFakeWindows() {
   return fakes;
 }
 
-/** Everything the pty of `launchId` printed so far, without the terminal's control sequences. */
+/**
+ * Everything the pty of `launchId` printed so far, without the terminal's control sequences: CSI
+ * sequences and window titles (OSC, which Windows' ConPTY writes and macOS and Linux ptys do not).
+ */
 function screen(launchId: string): string {
   return windows.sent
     .filter((each) => each.launchId === launchId && each.event === 'terminal.data')
     .map((each) => each.payload as string)
     .join('')
     .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '') // eslint-disable-line no-control-regex
+    .replace(/\x1b\][^\x07]*\x07/g, '') // eslint-disable-line no-control-regex
     .replace(/\r/g, '');
 }
 

@@ -1,0 +1,3 @@
+# Every text file is checked out with LF endings on every OS, as .editorconfig and Prettier
+# write them, so a Windows checkout (core.autocrlf) runs the same fixtures and scripts.
+* text=auto eol=lf

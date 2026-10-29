@@ -1,7 +1,15 @@
 name: CI
 
-# Runs on every push and every pull request, with exactly the root commands a
-# developer runs locally. Any failing step fails the build.
+# Runs on every push and every pull request. `lint-typecheck` runs first; every other job needs
+# it and nothing else, so a lint, type or catalog failure skips the rest, and the other jobs then
+# run in parallel. Later jobs (the Desktop E2E smoke and the acceptance journey) append to this
+# graph the same way. Each job installs and builds on its own runner, because packages import
+# each other's built dist/; setup-node's pnpm cache is keyed on pnpm-lock.yaml.
+#
+# Playwright suites retry a failed test once when CI is set (GitHub sets it on every runner), in
+# their own config; no job here retries a step.
+#
+# `pnpm ci:local` (scripts/ci-local.mjs) runs the same jobs once on the contributor's machine.
 on:
   push:
   pull_request:
@@ -14,8 +22,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  verify:
-    name: Install, build, lint, typecheck, test
+  lint-typecheck:
+    name: Lint, typecheck and catalogs
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -46,13 +54,75 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # The en and zh-CN catalogs of the desktop app have exactly the same keys (P0-04.2); a
+      # failure names each missing or extra key.
+      - name: Translation catalogs
+        run: pnpm check:catalogs
+
+  # Every package's tests: the root command a developer runs, which needs no Docker.
+  unit:
+    name: Unit tests
+    needs: lint-typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
       - name: Test
         run: pnpm test
 
+  # The Gateway HTTP seam (docs/tech/architecture.md §8, item 1): the conformance suite against the
+  # fake Provider. conformance-live.test.ts is picked up too and skips, since no CONFORMANCE_*
+  # variable is set here; the nightly workflow runs it against real Providers.
+  gateway-conformance:
+    name: Model Gateway conformance (fake Provider)
+    needs: lint-typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Conformance
+        run: pnpm --filter @harness-store/gateway exec vitest run conformance
+
   # The Store seam (docs/tech/architecture.md §8, item 4): the Supabase project in apps/store on a
-  # local stack in Docker. Separate from `verify`, whose root `pnpm test` needs no Docker.
-  store:
+  # local stack in Docker, started and torn down in this job. Separate from `unit`, whose root
+  # `pnpm test` needs no Docker.
+  store-tests:
     name: Store backend on a local Supabase stack
+    needs: lint-typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -110,3 +180,41 @@ jobs:
       - name: Stop the local Supabase stack
         if: always()
         run: node dist/scripts/supabase.js stop --no-backup
+
+  # The Supervisor seam (docs/tech/architecture.md §8, item 3) on each desktop OS: the real Runtime
+  # launching Harnesses in a pty (node-pty) and as piped processes, and the installer's extraction,
+  # executable bits and paths. Each OS passes or fails on its own (no fail-fast).
+  supervisor-tests:
+    name: Supervisor and installer (${{ matrix.os }})
+    needs: lint-typecheck
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The tests install and run the reference Harnesses' built out/ folders.
+      - name: Build
+        run: pnpm build
+
+      - name: Supervisor tests
+        run: pnpm --filter @harness-store/desktop run test:launch
+
+      - name: Installer tests
+        run: pnpm --filter @harness-store/desktop run test:install

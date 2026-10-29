@@ -35,7 +35,28 @@ pnpm test        # every package's test script (Vitest; no Docker needed)
 
 On a fresh clone, run `pnpm build` before `pnpm lint`, `pnpm typecheck` or `pnpm test`: packages depend on each other through `workspace:*` and import each other's built `dist/` (a package's own tests may import it by its package name too). Rebuild after changing a package that another one imports.
 
-CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs exactly these commands, in this order, on every push and pull request. A second job, `store`, starts a local Supabase stack in Docker and runs the Store tests against it (see [`apps/store`](./apps/store/README.md)).
+CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs on every push and pull request. Its first job, `lint-typecheck`, runs `pnpm build`, `pnpm lint`, `pnpm typecheck` and `pnpm check:catalogs` (the `en` and `zh-CN` catalogs of the desktop app have the same keys; a failure names each missing key). Every other job needs it alone, so a lint failure skips them all, and they then run in parallel, each installing and building on its own runner:
+
+| Job | What it runs |
+|---|---|
+| `unit` | `pnpm test`: every package's tests, no Docker |
+| `gateway-conformance` | the Model Gateway conformance suite against the fake Provider |
+| `store-tests` | starts a local Supabase stack in Docker, serves the Edge Functions, runs the Store tests against them, and stops the stack (see [`apps/store`](./apps/store/README.md)) |
+| `supervisor-tests` | the desktop app's Supervisor and installer tests (`test:launch`, `test:install`) on macOS, Windows and Linux, each passing or failing on its own |
+
+To reproduce a CI failure without pushing, run the same jobs once on your own OS (no OS matrix):
+
+```sh
+pnpm ci:local                    # build, then every job in CI order; lint-typecheck failing skips the rest
+pnpm ci:local store-tests        # only the jobs named (needs Docker; stops the stack and deletes its data)
+pnpm ci:local --list             # the job names
+```
+
+It runs with the dependencies you installed, and never passes a `CONFORMANCE_*` variable on, so the conformance suite stays on the fake Provider, as in CI.
+
+A second workflow, [`nightly.yml`](./.github/workflows/nightly.yml), runs the conformance suite against real Providers every night and on demand (Actions → Nightly → Run workflow), with the repository secrets `CONFORMANCE_ANTHROPIC_API_KEY`, `CONFORMANCE_OPENAI_API_KEY` and, for an OpenAI-compatible endpoint, `CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL`, `CONFORMANCE_OPENAI_COMPATIBLE_MODEL` and `CONFORMANCE_OPENAI_COMPATIBLE_API_KEY` (the repository variables `CONFORMANCE_ANTHROPIC_MODEL` and `CONFORMANCE_OPENAI_MODEL` change the models). A Provider whose secret is not set is skipped, not failed. It never runs on a pull request.
+
+Which checks a pull request must pass is a branch protection setting of the repository (Settings → Branches → the `main` rule → Require status checks), not something the workflow files can set. Mark the `ci` jobs as required: `lint-typecheck`, `unit`, `gateway-conformance`, `store-tests` and the three `supervisor-tests` jobs (one per OS; GitHub lists each by its name, "Supervisor and installer (macos-latest)" and so on). Never mark `nightly` as required.
 
 To check a Harness Package (a folder or a zip) the way the Store will, build the Manifest package and run its CLI: `pnpm --filter @harness-store/manifest build`, then `node packages/manifest/bin/harness-manifest.js validate <path>`. See [`packages/manifest`](./packages/manifest/README.md#command-line-harness-manifest-validate) for its options, output and exit status.
 
