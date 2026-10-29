@@ -34,9 +34,11 @@ import {
 import type { LaunchStore } from './launch-store.js';
 import { spawnPiped, type PipedSpawner } from './piped-process.js';
 import {
+  isConsoleProgram,
   processTreeAlive,
   processTreeEndsWithin,
   signalProcessTree,
+  type SignalOutcome,
   type StopSignal,
 } from './process-tree.js';
 import type { PtyExit, PtyProcess, PtySpawner } from './pty.js';
@@ -111,8 +113,9 @@ export interface WebWindowSpec extends HarnessWindowSpec {
 
 /**
  * How the Runtime runs a Node Harness: the program and the variables it needs to act as Node. In
- * the app that is Electron's own executable with `ELECTRON_RUN_AS_NODE=1` (the Runtime's Node, so
- * no system Node is needed); under plain Node in tests, Node itself.
+ * the app that is Electron's own executable with `ELECTRON_RUN_AS_NODE=1` on macOS and Linux, and
+ * the node.exe of Electron's Node version the build ships on Windows (node-runtime.ts), so no
+ * system Node is needed; under plain Node in tests, Node itself.
  */
 export interface NodeCommand {
   readonly path: string;
@@ -277,6 +280,11 @@ interface Launch {
   pty: PtyProcess | null;
   /** A web launch's `HARNESS_PORT`. */
   port: number | null;
+  /**
+   * Whether its program is a console program on Windows, which the polite step of the shutdown
+   * sequence cannot end ({@link signalProcessTree}): set with its command.
+   */
+  consoleProgram: boolean;
   windowOpen: boolean;
   /** Whether a web launch's page is in its window. */
   webShown: boolean;
@@ -318,8 +326,9 @@ interface Launch {
  * with the last 50 lines of its log.
  *
  * Closing the window stops the Harness: SIGTERM to its process group, SIGKILL to the group after
- * {@link STOP_GRACE_MS} when the process or another process of its group is still there, the
- * launch recorded as ended at most {@link KILL_WAIT_MS} later, and it ends `stopped`. A Harness
+ * {@link STOP_GRACE_MS} when the process or another process of its group is still there (at once
+ * on Windows when the polite step cannot end it, as for every console program), the launch
+ * recorded as ended at most {@link KILL_WAIT_MS} later, and it ends `stopped`. A Harness
  * that exits on its own ends `stopped` with code 0 and `failed(exit_nonzero)` otherwise; its
  * window stays open with the exit code (a terminal stays readable; a web page makes way for the
  * Crashed state, or a plain Exited one after code 0). When a process it started still runs in its
@@ -507,6 +516,8 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
         ...(node ? options.nodeCommand.env : {}),
       },
     };
+    // ConPTY hosts console programs only, and node.exe is one.
+    launch.consoleProgram = launch.port === null || node || isConsoleProgram(command.file);
     launch.windowOpen = true;
     setState(launch, 'spawning');
     const spec = { launchId: launch.launchId, harnessId, name: manifest.name };
@@ -641,6 +652,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     });
     child.onExit((exit) => {
       onProcessExit(launch, exit);
+      child.dispose();
     });
     setState(launch, 'ready');
   };
@@ -648,26 +660,34 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
   /**
    * The shutdown sequence of a launch whose process runs. SIGKILL goes to the process group when
    * the process, or any process of its group, is still there after the grace period: a process
-   * the Harness started may ignore SIGTERM although the Harness itself exits on it.
+   * the Harness started may ignore SIGTERM although the Harness itself exits on it. On Windows,
+   * when the polite step cannot end the tree (a console program, see {@link signalProcessTree}),
+   * the forced step follows at once instead of after the grace period.
    */
   const stopProcess = async (launch: Launch, child: { readonly pid: number }, end: LaunchEnd) => {
     setState(launch, 'stopping');
     // A pty whose pid is not known yet (Windows, just spawned) gets nothing now; SIGKILL, after
     // the grace period, reads it again.
-    const signal = (name: StopSignal) => {
+    const signal = (name: StopSignal): Promise<SignalOutcome> => {
       const { pid } = child;
       if (pid <= 0) {
         runtimeLine(launch, `Could not send ${name}: the process id is not known yet`);
-        return;
+        return Promise.resolve('sent');
       }
       runtimeLine(launch, `Sent ${name} to ${String(pid)} and its children`);
-      signalProcessTree(pid, name);
+      return signalProcessTree(pid, name, { consoleProgram: launch.consoleProgram });
     };
-    signal('SIGTERM');
+    // Settles only when the polite step was refused: it then cuts the grace period short.
+    const refused = signal('SIGTERM').then((outcome) => {
+      if (outcome === 'sent') return NEVER;
+      runtimeLine(launch, 'SIGTERM cannot end it on Windows: SIGKILL follows now');
+      return undefined;
+    });
     const graceEnds = Date.now() + STOP_GRACE_MS;
-    const exitedInTime = await settlesWithin(launch.exited, STOP_GRACE_MS);
+    const exitedInTime = await settlesWithin(launch.exited, STOP_GRACE_MS, refused);
     if (!exitedInTime || !(await processTreeEndsWithin(child.pid, graceEnds - Date.now()))) {
-      signal('SIGKILL');
+      // Not awaited: a taskkill that hangs must not keep the launch from being recorded as ended.
+      void signal('SIGKILL');
       if (!(await settlesWithin(launch.exited, KILL_WAIT_MS))) {
         runtimeLine(launch, 'The process did not report its exit; the launch is recorded as ended');
       }
@@ -759,6 +779,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       process: null,
       pty: null,
       port: null,
+      consoleProgram: false,
       windowOpen: false,
       webShown: false,
       processExited: false,
@@ -894,8 +915,15 @@ function resize(launch: Launch, size: TerminalSize): void {
   }
 }
 
-/** Whether `promise` settles within `ms`. */
-async function settlesWithin(promise: Promise<void>, ms: number): Promise<boolean> {
+/** A promise that never settles: nothing cuts a wait short. */
+const NEVER = new Promise<never>(() => undefined);
+
+/** Whether `promise` settles within `ms`; false as soon as `cutShort` settles first. */
+async function settlesWithin(
+  promise: Promise<void>,
+  ms: number,
+  cutShort: Promise<void> = NEVER,
+): Promise<boolean> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<boolean>((resolve) => {
     timer = setTimeout(() => {
@@ -903,7 +931,7 @@ async function settlesWithin(promise: Promise<void>, ms: number): Promise<boolea
     }, ms);
   });
   try {
-    return await Promise.race([promise.then(() => true), timeout]);
+    return await Promise.race([promise.then(() => true), timeout, cutShort.then(() => false)]);
   } finally {
     clearTimeout(timer);
   }

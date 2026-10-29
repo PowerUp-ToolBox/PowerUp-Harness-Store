@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
-// On Windows every stop of a Harness the tests run for real takes the shutdown sequence's whole
-// 5 s grace period (`taskkill` without /F cannot end a console process; see
+// On Windows the Harnesses the tests run for real start, stop and leave their folders more slowly
+// (ConPTY, taskkill, files locked for a moment after an exit; see
 // test/support/harness-processes.ts), in a test or in the afterEach that quits the Runtime.
 const WINDOWS = process.platform === 'win32';
 
