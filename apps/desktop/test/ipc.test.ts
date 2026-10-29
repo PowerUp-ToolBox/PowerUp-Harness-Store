@@ -11,6 +11,8 @@ import { IPC_METHODS } from '../src/shared/ipc.js';
 
 const MAIN_WINDOW = { id: 'main window webContents' };
 const quit = vi.fn();
+const stopWatching = vi.fn();
+const cancel = vi.fn();
 const fakeServices: Services = {
   app: {
     version: '1.2.3',
@@ -77,6 +79,18 @@ const fakeServices: Services = {
       Promise.resolve(harnessId === 'acme/hello' ? ok(null) : fail('not_installed')),
     openDataFolder: (harnessId) =>
       Promise.resolve(harnessId === 'acme/hello' ? ok(null) : fail('not_installed')),
+  },
+  publish: {
+    validateFolder: (path) => Promise.resolve(fail('file_unreadable', { path })),
+    stopWatching,
+    publish: ({ archiveId, jobId }) =>
+      Promise.resolve(
+        ok({ harnessId: 'octo-cat/hello', version: `${archiveId}-${jobId}`, url: '/store/h/x' }),
+      ),
+    cancel,
+    myHarnesses: () => Promise.resolve(fail('unauthenticated')),
+    unpublish: ({ harnessId, version }) =>
+      Promise.resolve(ok({ harnessId, version, latestVersion: null })),
   },
 };
 const en = translatorFor('en');
@@ -264,11 +278,81 @@ describe('IPC handlers against a fake service container', () => {
     ['launch.openLogs', { harnessId: 'acme/hello' }],
     ['launch.openDataFolder', ''],
     ['launch.openDataFolder', 'a'.repeat(257)],
+    ['publish.validateFolder', undefined],
+    ['publish.validateFolder', 'relative/folder'],
+    ['publish.validateFolder', { path: '/folder' }],
+    ['publish.stopWatching', '/folder'],
+    ['publish.publish', undefined],
+    ['publish.publish', 'archive-1'],
+    ['publish.publish', { archiveId: 'archive-1' }],
+    ['publish.publish', { archiveId: 'archive-1', jobId: '' }],
+    ['publish.publish', { archiveId: 'archive/1', jobId: 'job-1' }],
+    ['publish.publish', { archiveId: 'archive-1', jobId: 'job-1', path: '/folder' }],
+    ['publish.cancel', undefined],
+    ['publish.cancel', { jobId: 'job-1' }],
+    ['publish.cancel', 'job 1'],
+    ['publish.myHarnesses', 'octo-cat'],
+    ['publish.unpublish', undefined],
+    ['publish.unpublish', 'octo-cat/hello@1.0.0'],
+    ['publish.unpublish', { harnessId: 'octo-cat/hello' }],
+    ['publish.unpublish', { harnessId: 'hello', version: '1.0.0' }],
+    ['publish.unpublish', { harnessId: 'octo-cat/hello', version: '' }],
+    ['publish.unpublish', { harnessId: 'octo-cat/hello', version: 1 }],
+    ['publish.unpublish', { harnessId: 'octo-cat/hello', version: '1.0.0', force: true }],
   ])('%s rejects %j as invalid_input', async (method, input) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
       ok: false,
       error: { code: 'invalid_input', params: { method } },
+    });
+  });
+
+  it('publish.validateFolder passes an absolute path on; publish.stopWatching stops', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'publish.validateFolder', input: '/Users/me/hello' }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'file_unreadable', params: { path: '/Users/me/hello' } },
+    });
+    await expect(dispatch(MAIN_WINDOW, { method: 'publish.stopWatching' })).resolves.toEqual({
+      ok: true,
+      data: null,
+    });
+    expect(stopWatching).toHaveBeenCalledOnce();
+  });
+
+  it('publish.publish passes the archive and job on; publish.cancel cancels the job', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'publish.publish',
+        input: { archiveId: 'archive-1', jobId: 'job-1' },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { harnessId: 'octo-cat/hello', version: 'archive-1-job-1', url: '/store/h/x' },
+    });
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'publish.cancel', input: 'job-1' }),
+    ).resolves.toEqual({ ok: true, data: null });
+    expect(cancel).toHaveBeenCalledExactlyOnceWith('job-1');
+  });
+
+  it('publish.myHarnesses and publish.unpublish pass their call on', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'publish.myHarnesses' })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'unauthenticated' },
+    });
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'publish.unpublish',
+        input: { harnessId: 'octo-cat/hello', version: '1.0.0' },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { harnessId: 'octo-cat/hello', version: '1.0.0', latestVersion: null },
     });
   });
 

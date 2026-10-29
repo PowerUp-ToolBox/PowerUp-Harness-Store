@@ -107,6 +107,11 @@ export interface StoreAuth {
    */
   accessToken(): Promise<string | null>;
   /**
+   * The signed-in Publisher's GitHub login, from the stored session, without asking the Store;
+   * null when signed out. The Publish flow checks a Harness ID's publisher segment against it.
+   */
+  login(): Promise<string | null>;
+  /**
    * For Store calls made with {@link accessToken}: the Store answered 401 to `accessToken`, so
    * the session is no longer valid. Deletes it and sends `session_expired`, but only while it is
    * still the stored session: a 401 for the token of a session that was since refreshed, signed
@@ -537,6 +542,10 @@ export function createStoreAuth(options: StoreAuthOptions): StoreAuth {
 
     async accessToken() {
       return (await freshSession()).session?.accessToken ?? null;
+    },
+
+    async login() {
+      return (await current()).session?.identity.githubLogin ?? null;
     },
 
     async sessionRejected(accessToken) {

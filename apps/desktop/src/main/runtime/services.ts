@@ -3,6 +3,7 @@ import type { BindingsService } from './bindings.js';
 import type { ConnectionsService } from './connections.js';
 import type { ConnectivityService } from './connectivity.js';
 import type { InstallsService } from './installer.js';
+import type { PublishService } from './publish.js';
 import type { SettingsService } from './settings.js';
 import type { StoreAuth } from './store-auth.js';
 import type { Supervisor } from './supervisor.js';
@@ -42,5 +43,13 @@ export interface Services {
   readonly launch: Pick<
     Supervisor,
     'start' | 'chooseWorkspace' | 'lastWorkspace' | 'status' | 'openLogs' | 'openDataFolder'
+  >;
+  /**
+   * The Publish flow: building and validating a folder's Harness Package, watching it, and
+   * uploading it; the Publisher's Harnesses, and Unpublishing a version.
+   */
+  readonly publish: Pick<
+    PublishService,
+    'validateFolder' | 'stopWatching' | 'publish' | 'cancel' | 'myHarnesses' | 'unpublish'
   >;
 }

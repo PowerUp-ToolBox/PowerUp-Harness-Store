@@ -206,23 +206,579 @@ code {
   color: var(--color-text-muted);
 }
 
-/* The Publish placeholder's sign-in block (P0-07.2); P0-08.1 replaces it with the sign-in card. */
+/* The Publish screen (P0-08): account cards, then "New version" and its review. */
 .publish {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 720px;
+  max-width: 860px;
 }
 
-.publish-account {
+.publish-card {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-subtle);
+}
+
+.publish-card-text {
+  margin: 0;
+}
+
+.publish-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+
+.button-github {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
 }
 
-.publish-account p {
+.avatar {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+.avatar.monogram {
+  border-radius: 50%;
+}
+
+.avatar-small {
+  flex-basis: 20px;
+  width: 20px;
+  height: 20px;
+}
+
+.publish-account-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.publish-account-name {
+  font-weight: 600;
+}
+
+.publish-new {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 16px;
+  border: 2px dashed var(--color-border-strong);
+  border-radius: 12px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.drop-zone svg {
+  width: 40px;
+  height: 40px;
+}
+
+.drop-zone-title {
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.publish-folder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.publish-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.publish-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.publish-clean {
   margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-success-bg);
+  color: var(--color-text);
+}
+
+.problem-code {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.publish-version-badge {
+  align-self: flex-start;
+  margin: 0;
+}
+
+.publish-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.publish-review {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.publish-review-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.publish-review-section h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.publish-review-section h3 {
+  margin: 6px 0 0;
+  font-size: 14px;
+}
+
+.publish-review-section > p {
+  margin: 0;
+}
+
+.publish-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.publish-facts > div {
+  display: contents;
+}
+
+.publish-facts dt {
+  color: var(--color-text-muted);
+}
+
+.publish-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.publish-excluded {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The upload: its share sent, then an indeterminate bar while the Store processes it. */
+.publish-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 520px;
+}
+
+.publish-upload-label {
+  font-weight: 600;
+}
+
+.progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--color-info-bg);
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 0.2s ease-out;
+}
+
+.progress[data-indeterminate='true'] .progress-fill {
+  animation: progress-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes progress-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
+
+  .progress[data-indeterminate='true'] .progress-fill {
+    animation: none;
+  }
+}
+
+.publish-failure-text {
+  margin: 0;
+}
+
+.publish-success {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 620px;
+  padding: 20px;
+  border-radius: 14px;
+  background: var(--color-success-bg);
+  color: var(--color-text);
+}
+
+.publish-success p {
+  margin: 0;
+}
+
+.publish-success-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* The signed-in Publish screen's tabs: "New version" and "My Harnesses". */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tab {
+  min-height: 40px;
+  margin-bottom: -1px;
+  padding: 8px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab[aria-selected='true'] {
+  border-bottom-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+/* My Harnesses (P0-08.3): one card per Harness, with a table of its versions. */
+.publish-mine {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.publish-mine-done {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--color-success-bg);
+  color: var(--color-text);
+}
+
+.publish-mine-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.publish-mine-name {
+  margin: 0;
+  font-size: 15px;
+}
+
+.publish-mine-id {
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.publish-mine-harness > p {
+  margin: 0;
+}
+
+.publish-mine-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.publish-mine-table th {
+  padding: 6px 8px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.publish-mine-table td {
+  padding: 8px;
+  border-top: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+.publish-mine-table .publish-mine-number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.publish-mine-action {
+  text-align: right;
+}
+
+.publish-mine-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.publish-mine-note {
+  overflow-wrap: anywhere;
+}
+
+.status-chip[data-status='published'] {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.status-chip[data-status='unpublished'] {
+  color: var(--color-text-muted);
+}
+
+.status-chip[data-status='taken_down'] {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+/* Read by screen readers, not shown. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* README and changelogs, as plain text until P0-09 renders them as Markdown. */
+.listing-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* The Store's listing: its card and detail page (shared with P0-09). */
+.listing-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 420px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg);
+}
+
+.listing-card-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.listing-card-name {
+  margin: 0;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.listing-card-summary,
+.listing-card-meta {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.listing-card-meta {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.platform-badges,
+.tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.platform-badges li {
+  padding: 2px 7px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.tag-chips li {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+  font-size: 12px;
+}
+
+.listing-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg);
+}
+
+.listing-detail-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.listing-detail-icon {
+  flex: 0 0 72px;
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+}
+
+.listing-detail-icon.monogram {
+  font-size: 24px;
+}
+
+.listing-detail-heading {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.listing-detail-name {
+  margin: 0;
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+.listing-detail-publisher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.listing-detail-summary {
+  margin: 0;
+}
+
+.listing-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.listing-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.listing-section h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.listing-slots,
+.listing-versions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.listing-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+.listing-slot-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.listing-slot-note {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.listing-version {
+  font-weight: 600;
+}
+
+.listing-detail-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 13px;
 }
 
 .settings {
@@ -1791,7 +2347,13 @@ input[aria-invalid='true'] {
   overflow-wrap: anywhere;
 }
 
-/* The install consent dialog (shared with P0-10). */
+/* The trust block: the consent dialog's body, the listing preview's and the Store detail page's. */
+.trust-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .permission-list {
   display: flex;
   flex-direction: column;
@@ -1874,7 +2436,8 @@ input[aria-invalid='true'] {
   font-size: 13px;
 }
 
-.modal .no-sandbox {
+.trust-block .no-sandbox {
+  margin: 0;
   padding: 10px 12px;
   border: 1px solid var(--color-border-strong);
   border-radius: 10px;

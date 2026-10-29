@@ -59,18 +59,21 @@ Each flow lists steps, decision points and error branches. Screen details are in
 
 ## F5. Publish
 
-1. Publish screen requires sign-in. Not signed in → GitHub sign-in button and a one-paragraph explanation that only Publishers need an account. Sign-in opens the browser and returns to the app.
+1. Publish screen requires sign-in. Not signed in → GitHub sign-in button and a one-paragraph explanation that only Publishers need an account. Sign-in opens the browser and returns to the app; while it waits, Cancel stops it. Signed in → avatar, login, the Harness ID prefix the Store expects (`<login>/`) and Sign out, then the tabs "New version" and "My Harnesses".
 2. Choose a folder (button or drag and drop).
-3. Local validation runs immediately. Problems appear as a list with the field path and a plain message; the Continue button stays disabled until the list is empty. Re-validation happens when the folder changes on disk (Re-check button also available).
-4. Metadata form, prefilled from the Manifest and read-only for fields that come from it (ID, version, name, summary, platforms, permissions). Editable: nothing in P0 beyond confirming; changelog is shown if present.
-5. Review step: how the listing will look, including the trust block.
-6. Upload with progress; cancel allowed before completion.
-   - Version not greater than the last published → error naming the last version.
-   - ID publisher segment does not match the signed-in login → error with the expected prefix.
-   - Server rejects → verbatim message with Retry.
-7. Success: link to the listing, "Publish another", and a reminder that published versions are immutable.
+3. Local validation runs immediately, on the Harness Package the upload will send: the app builds it from the folder (leaving out `.git`, `node_modules/.cache/`, `.DS_Store`, `Thumbs.db`, `*.swp` and what a root `.harnessignore` names) and validates that zip as the Store will, including the Publisher's earlier versions of the Harness. Problems appear as a list ordered by field path, with a plain message and the code; warnings are listed apart and never block. The Continue button stays disabled until the problem list is empty. Re-validation happens when the folder changes on disk (Re-check button also available).
+   - Version not greater than the last published → problem naming the last version.
+   - ID publisher segment does not match the signed-in login → problem with the expected publisher.
+   - The Store could not be asked for earlier versions → a note that the Store checks again on upload; it does not block.
+4. Review step: read-only facts from the Manifest (ID, version, name, summary, platforms, permissions), the changelog if present, what was left out of the package, its size (warning above 100 MiB), then how the listing will look (card and detail page, including the trust block), with Publish and Back. Nothing is editable in P0.
+5. Upload with progress; Cancel while the package is still being sent, which returns to the review with "Upload cancelled". Once it is all sent, "Processing…" without Cancel.
+   - Store refuses → its message in the UI language, its code and any problems it found, with Retry.
+   - Session expired → "Sign in again"; the folder stays chosen and is validated again after signing in.
+6. Success: link to the listing, "Publish another", and a reminder that published versions are immutable.
 
-**Unpublish:** from the Publisher's own listing, per version, with confirmation naming the version and stating that existing installs keep working.
+The screen keeps its folder, validation and tab when the User visits another screen and comes back. Offline, Sign in, Publish and Unpublish are disabled with an explanation.
+
+**Unpublish:** from the "My Harnesses" tab (each Harness with its versions, status, downloads, and the administrator's note on taken-down versions), per published version, with a confirmation naming the version and stating that existing installs keep working.
 
 **Local test install:** the Publish screen offers "Install this folder locally" to install and launch without uploading, signed out and offline too. The folder is validated (problems and warnings listed, Re-check), then the install consent dialog opens, and only Install copies it; success shows "Installed {name} {version} from the folder. It is marked Local in the Library." with a link to the Library. Such installs are marked "Local" in the Library and are not updatable from the Store; installing again from the folder replaces the installed version, higher or lower.
 

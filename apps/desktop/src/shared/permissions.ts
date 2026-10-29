@@ -7,11 +7,27 @@
  * Data Directory only, medium (yellow) for the Workspace or listed domains, high (red) for the
  * home folder, listed paths, shell commands or any site. High items carry a one-line consequence.
  */
-import type { DeclaredPermissions } from '@harness-store/manifest';
+import type { DeclaredPermissions, Manifest } from '@harness-store/manifest';
 import type { MessageKey } from './i18n/catalogs.js';
 import type { ManifestSummary } from './ipc.js';
 
 export type PermissionSeverity = 'low' | 'medium' | 'high';
+
+/** What the trust block shows of a Harness: its Declared Permissions and how it runs. */
+export type TrustFacts = Pick<
+  ManifestSummary,
+  'permissions' | 'runtimeKind' | 'uiKind' | 'workspace'
+>;
+
+/** The trust facts of a Manifest; a Manifest without `workspace` asks for none. */
+export function trustFactsOf(manifest: Manifest): TrustFacts {
+  return {
+    permissions: manifest.permissions,
+    runtimeKind: manifest.runtime.kind,
+    uiKind: manifest.ui.kind,
+    workspace: manifest.workspace ?? 'none',
+  };
+}
 
 /** One line of the permission list: a catalog key with its arguments, and how serious it is. */
 export interface PermissionItem {
@@ -90,9 +106,7 @@ export function permissionItems(permissions: DeclaredPermissions): PermissionIte
  * The facts row: how the Harness runs (bundled Node or a native executable), how it opens (a
  * window or a terminal) and whether it asks for a Workspace.
  */
-export function harnessFacts(
-  summary: Pick<ManifestSummary, 'runtimeKind' | 'uiKind' | 'workspace'>,
-): MessageKey[] {
+export function harnessFacts(summary: Omit<TrustFacts, 'permissions'>): MessageKey[] {
   return [
     summary.runtimeKind === 'node' ? 'harness.runtime.node' : 'harness.runtime.binary',
     summary.uiKind === 'web' ? 'harness.ui.web' : 'harness.ui.terminal',

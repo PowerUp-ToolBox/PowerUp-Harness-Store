@@ -111,7 +111,7 @@ Node Harnesses are executed with the Runtime's Node (`<node> <entry>`). In P0 th
 
 - **Install**: Renderer → Runtime.install(harnessId, version) → Store `download` function → signed URL → download to temp → sha256 check → unpack → consent screen (permissions, MCP-like commands are not a concept here; only Declared Permissions and Entry) → record install.
 - **Update**: Runtime polls Store for newer published versions of installed Harnesses on app start and every 6 h. If the new Manifest adds a Declared Permission or changes Entry/runtime kind, the update requires re-consent; otherwise one click.
-- **Publish**: Renderer picks a folder → `packages/manifest` validation locally → metadata form prefilled from Manifest → zip → `publish` Edge Function (re-validates, stores, creates immutable Harness Version) → listing visible immediately.
+- **Publish**: Renderer picks a folder → the Runtime builds the deterministic zip from it (leaving out the fixed exclusions and `.harnessignore`) and validates that zip with `packages/manifest`, with the Publisher's login and their earlier versions from the Store → read-only review and listing preview → the same zip to the `publish` Edge Function with upload progress (re-validates, stores, creates immutable Harness Version) → listing visible immediately.
 - **Model call**: Harness → Gateway `/v1/chat/completions` (Slot) → resolve binding → Provider adapter → stream back → Usage Record handed to the local store once the response ends (one per attempted upstream call, whatever the outcome).
 
 ## 7. Non-goals in P0 (see ADRs and PRD)

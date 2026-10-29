@@ -9,6 +9,7 @@ import {
   type DesktopApi,
   type IpcRequest,
   type IpcResult,
+  type PathForFile,
 } from '../shared/ipc.js';
 
 /** Sends one request over the invoke channel (`ipcRenderer.invoke` in the app). */
@@ -22,10 +23,16 @@ type MethodCall = (input?: unknown) => Promise<IpcResult<unknown>>;
 /**
  * Builds `window.api` from {@link IPC_METHODS}: `'app.ping'` becomes `api.app.ping(input)`. Kept
  * free of Electron so it is unit-tested under Node; src/preload/index.ts passes the real
- * `ipcRenderer` in. Every level is frozen, so a renderer bug cannot swap a method out.
+ * `ipcRenderer` and `webUtils.getPathForFile` in. Every level is frozen, so a renderer bug cannot
+ * swap a method out.
  */
-export function buildApi(invoke: Invoke, listen: Listen): DesktopApi {
-  return buildBridge(IPC_METHODS, isIpcEventName, invoke, listen) as unknown as DesktopApi;
+export function buildApi(
+  invoke: Invoke,
+  listen: Listen,
+  pathForFile: PathForFile = () => '',
+): DesktopApi {
+  const bridge = buildBridge(IPC_METHODS, isIpcEventName, invoke, listen);
+  return Object.freeze({ ...bridge, pathForFile }) as unknown as DesktopApi;
 }
 
 /**

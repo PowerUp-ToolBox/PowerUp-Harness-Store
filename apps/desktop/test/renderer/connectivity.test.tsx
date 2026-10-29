@@ -103,7 +103,7 @@ describe('other routes while the Store is unreachable', () => {
     ['#/library', 'Library', 'Nothing installed yet'],
     ['#/models', 'Models', 'Connections'],
     ['#/usage', 'Usage', 'Tokens your Harnesses use appear here.'],
-    ['#/publish', 'Publish', 'Publish a Harness from a local folder here.'],
+    ['#/publish', 'Publish', "Signing in needs the Store, and you're offline."],
   ])('%s renders its own content, never the offline panel', async (hash, title, content) => {
     installOfflineApi();
     await renderApp(hash);

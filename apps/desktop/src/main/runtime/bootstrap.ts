@@ -27,6 +27,7 @@ import { createInstaller, createInstallsStub, type InstallsService } from './ins
 import { createLaunchStore, type LaunchStore } from './launch-store.js';
 import { createLocalDetector, type LocalProbeTarget } from './local-detection.js';
 import type { PipedSpawner } from './piped-process.js';
+import { createPublishService } from './publish.js';
 import { spawnNodePty, type PtySpawner } from './pty.js';
 import type { SecretCipher } from './secret-cipher.js';
 import type { Services } from './services.js';
@@ -64,8 +65,8 @@ export interface RuntimeOptions {
   /** Makes the Store connectivity checks (Electron's `net.fetch`, so system proxies apply). */
   readonly fetch: FetchLike;
   /**
-   * Makes the Store's Auth and PostgREST calls for the Publisher's sign-in (Electron's `net.fetch`).
-   * Default: Node's `fetch`.
+   * Makes the Store's Auth and PostgREST calls for the Publisher's sign-in and the Publish flow
+   * (Electron's `net.fetch`). Default: Node's `fetch`.
    */
   readonly storeFetch?: StoreFetch;
   /**
@@ -168,9 +169,9 @@ export interface Runtime {
     save(state: WindowState): void;
   };
   /**
-   * Stops every running Harness (the shutdown sequence, at most 10 s in all), the Store
-   * connectivity checks and the Model Gateway (it stops listening and hands over its last Usage
-   * Records), then closes the database. Idempotent: later calls return the first call's promise.
+   * Stops every running Harness (the shutdown sequence, at most 10 s in all), the Publish flow's
+   * folder watcher and uploads, the Store connectivity checks and the Model Gateway (it stops
+   * listening and hands over its last Usage Records), then closes the database. Idempotent: later calls return the first call's promise.
    */
   shutdown(): Promise<void>;
 }
@@ -353,6 +354,16 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     ...(options.now === undefined ? {} : { now: options.now }),
   });
 
+  const publish = createPublishService({
+    fetch: options.storeFetch ?? ((url, init) => globalThis.fetch(url, init)),
+    storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
+    anonKey: options.storeAnonKey ?? storeAnonKey(),
+    auth,
+    onFolderChanged: (path) => options.emit?.('publish.folderChanged', { path }),
+    onProgress: (jobId, progress) => options.emit?.(`progress:${jobId}`, progress),
+    onStoreUnreachable: () => void connectivity.check(),
+  });
+
   return {
     status: startupStatus,
     connectivity,
@@ -378,6 +389,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       auth,
       installs,
       launch: supervisor,
+      publish,
     },
     windowState: {
       read() {
@@ -399,6 +411,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
         // Harnesses first: their tokens are revoked and their launches recorded while the Gateway
         // and the database are still there.
         await supervisor.stopAll();
+        publish.close();
         connectivity.stop();
         gatewayPort = null;
         try {

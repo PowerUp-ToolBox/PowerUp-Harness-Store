@@ -178,17 +178,17 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Publish a Harness from a local folder; manage own listings.
 
-**Elements.** Signed-out: GitHub sign-in card. Signed-in: tabs "New version" and "My Harnesses". New version: folder drop zone, validation problem list (path, message), Continue, metadata review (read-only facts from Manifest, changelog), listing preview, Publish with progress. Secondary: "Install this folder locally". My Harnesses: list of own Harnesses and versions with download counts and Unpublish per version.
+**Elements.** Signed-out: GitHub sign-in card. Signed-in: tabs "New version" and "My Harnesses". New version: folder drop zone, validation problem list (path, message, code; warnings apart), Continue, review (read-only facts from Manifest, changelog, what was left out, package size), listing preview (card and detail page), Publish with progress and Cancel. Secondary: "Install this folder locally" (its own panel and folder picker, signed in or out). My Harnesses: list of own Harnesses and versions with status, download counts and Unpublish per published version.
 
-**States.** Signed out ("Install this folder locally" still works, offline too). Validating. Problems present (Continue disabled). Installed locally (inline "Installed Hello Web 0.1.0 from the folder. It is marked Local in the Library." with Open Library). Uploading (cancel). Rejected by server (verbatim message, Retry). Success (listing link). Offline (Publish disabled with explanation). Unpublish confirmation.
+**States.** Signed out ("Install this folder locally" still works, offline too). Validating. Problems present (Continue disabled). Installed locally (inline "Installed Hello Web 0.1.0 from the folder. It is marked Local in the Library." with Open Library). Uploading (Cancel while sending; then "Processing…"). Upload cancelled (back to the review). Rejected by server (translated message, code and the Store's problems, Retry). Session expired ("Sign in again", folder kept). Success (listing link). Offline (Publish disabled with explanation). Unpublish confirmation.
 
 **Key copy.**
 - "Only Publishers need to sign in. Browsing and installing never require an account." / "只有发布者需要登录，浏览和安装永远不需要账号。"
 - Sign in with GitHub / 使用 GitHub 登录 · Choose a folder / 选择文件夹 · Drop a Harness folder here / 将 Harness 文件夹拖到这里
 - "1 problem must be fixed before publishing" / "发布前需修复 1 个问题" · Re-check / 重新检查
-- "Version 0.1.0 is not greater than the last published version 0.2.0" / "版本 0.1.0 不高于已发布的 0.2.0"
+- Problems use the Manifest package's own messages, e.g. "Version 0.1.0 must be greater than every published version of this Harness; the latest is 0.2.0." / "版本 0.1.0 必须高于此 Harness 所有已发布的版本；最新版本为 0.2.0。" · "Your Harness IDs start with octocat/" / "你的 Harness ID 以 octocat/ 开头"
 - Publish / 发布 · "Published! Versions are immutable; publish a new version to change anything." / "发布成功！已发布版本不可修改，如需变更请发布新版本。"
-- Install this folder locally / 本地安装此文件夹 · "Installed Hello Web 0.1.0 from the folder. It is marked Local in the Library." / "已从文件夹安装 Hello Web 0.1.0，在资源库中标记为「本地」。" · Unpublish / 撤下 · "Existing installs keep working." / "已安装的用户不受影响。"
+- Install this folder locally / 本地安装此文件夹 · "Installed Hello Web 0.1.0 from the folder. It is marked Local in the Library." / "已从文件夹安装 Hello Web 0.1.0，在资源库中标记为「本地」。" · Unpublish / 撤下 · "Unpublish {name} {version}?" / "撤下 {name} {version}？" · "Existing installs keep working. This version can no longer be downloaded." / "已安装的用户不受影响。此版本将无法再被下载。"
 
 ---
 

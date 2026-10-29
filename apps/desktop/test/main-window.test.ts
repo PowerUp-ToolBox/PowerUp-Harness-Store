@@ -83,14 +83,18 @@ describe('isAllowedExternalUrl', () => {
 
 describe('renderer Content Security Policy', () => {
   // index.html: the main window; harness.html: a Harness window's own page.
-  it.each(['index.html', 'harness.html'])('%s ships the strict production policy', (page) => {
+  // The main window also shows the signed-in Publisher's GitHub avatar (P0-08.1).
+  it.each([
+    ['index.html', "img-src 'self' data: https://avatars.githubusercontent.com"],
+    ['harness.html', "img-src 'self' data:"],
+  ])('%s ships the strict production policy', (page, images) => {
     const html = readFileSync(new URL(`../src/renderer/${page}`, import.meta.url), 'utf8');
     const policy = /http-equiv="Content-Security-Policy"\s+content="([^"]+)"/.exec(html)?.[1];
     expect(policy?.split('; ')).toEqual([
       "default-src 'self'",
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",
+      images,
       "connect-src 'self'",
       "object-src 'none'",
       "base-uri 'none'",

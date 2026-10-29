@@ -112,6 +112,24 @@ describe('signing in', () => {
     expect(await auth.accessToken()).toMatch(/^access-/);
   });
 
+  it('login() names the signed-in Publisher from the stored session, without a Store call', async () => {
+    store.nextUser = 'user-1';
+    store.profiles.set('user-1', {
+      github_login: 'octo-cat',
+      display_name: null,
+      avatar_url: null,
+    });
+    const auth = createAuth();
+    await expect(auth.login()).resolves.toBeNull();
+    await auth.signIn();
+    const before = store.requests.length;
+    store.offline = true;
+    await expect(auth.login()).resolves.toBe('octo-cat');
+    expect(store.requests).toHaveLength(before);
+    await auth.signOut();
+    await expect(auth.login()).resolves.toBeNull();
+  });
+
   it('stores the session only encrypted, without GitHub’s own token', async () => {
     const auth = createAuth();
     await auth.signIn();

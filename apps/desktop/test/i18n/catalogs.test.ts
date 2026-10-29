@@ -1,5 +1,5 @@
 import { GATEWAY_ERROR_STATUS, PROVIDERS, type GatewayErrorCode } from '@harness-store/gateway';
-import { interpolate, MESSAGES_EN } from '@harness-store/manifest';
+import { interpolate, manifestSchema, MESSAGES_EN } from '@harness-store/manifest';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import en from '../../src/shared/i18n/en.json';
 import zhCN from '../../src/shared/i18n/zh-CN.json';
@@ -23,6 +23,16 @@ const IPC_OWN_CODES = [
   'harness_installing',
   'not_installed',
   'open_failed',
+  'unauthenticated',
+  'publisher_mismatch',
+  'version_not_greater',
+  'invalid_manifest',
+  'package_too_large',
+  'rate_limited',
+  'harness_taken_down',
+  'forbidden',
+  'not_found',
+  'upload_cancelled',
 ] as const;
 
 describe('catalog parity (CI)', () => {
@@ -125,5 +135,17 @@ describe('Provider names in the catalogs', () => {
         PROVIDERS.map((provider) => [`provider.${provider.id}`, provider.displayName]),
       ),
     );
+  });
+});
+
+describe('tag names in the catalogs', () => {
+  const tags = (manifestSchema as { $defs: { tag: { enum: string[] } } }).$defs.tag.enum;
+
+  it('every tag of the Manifest schema has tag.<name> in en and zh-CN, and there are no others', () => {
+    expect(tags.length).toBeGreaterThan(0);
+    for (const catalog of [en, zhCN]) {
+      const keys = Object.keys(catalog).filter((key) => key.startsWith('tag.'));
+      expect(keys.sort()).toEqual(tags.map((tag) => `tag.${tag}`).sort());
+    }
   });
 });

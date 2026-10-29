@@ -1,73 +1,78 @@
-import { useEffect, useState } from 'react';
-import type { AuthState, IpcError } from '../../../shared/ipc.js';
-import { ErrorMessage } from '../components/ErrorMessage.js';
+import { useEffect, useRef, type KeyboardEvent } from 'react';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { InstallFolderPanel } from '../install/InstallFolderPanel.js';
+import { AccountCard, SignInCard } from '../publish/AccountCards.js';
+import { MyHarnesses } from '../publish/MyHarnesses.js';
+import { NewVersion } from '../publish/NewVersion.js';
+import { usePublish, type PublishTab } from '../publish/PublishProvider.js';
 
-// Placeholder: the Publish flow arrives in P0-08. Until then the screen exercises the Store
-// sign-in of P0-07.2 (`auth.*`), the only screen that shows it (docs/ux/flows.md, F5): sign in
-// with GitHub in the browser, see the login, sign out. P0-08.1 builds the real sign-in card.
-// "Install this folder locally" (P0-05.1) works signed out and offline, so it is always shown.
+const TABS: readonly PublishTab[] = ['new', 'mine'];
+
+/**
+ * The Publish screen (docs/ux/screens.md, Publish; flow F5). Signed out: the GitHub sign-in card.
+ * Signed in: the Publisher's account, then the tabs "New version", which validates a folder,
+ * previews its listing (P0-08.1) and publishes it (P0-08.2), and "My Harnesses", their Harnesses
+ * and versions with Unpublish (P0-08.3). The state lives in the PublishProvider above the
+ * screens, so it survives leaving the screen. "Install this folder locally" (P0-05.1) is its own
+ * panel with its own folder picker, and works signed out and offline too.
+ */
 export function PublishPage() {
   const { t } = useI18n();
-  const [auth, setAuth] = useState<AuthState | null>(null);
-  const [signingIn, setSigningIn] = useState(false);
-  const [error, setError] = useState<IpcError | null>(null);
+  const { auth, loadAuth, tab, setTab } = usePublish();
+  const tabs = useRef<Partial<Record<PublishTab, HTMLButtonElement | null>>>({});
+  useEffect(loadAuth, [loadAuth]);
 
-  useEffect(() => {
-    let current = true;
-    void window.api.auth.whoami().then((result) => {
-      if (current && result.ok) setAuth(result.data);
-    });
-    const unsubscribe = window.api.on('auth.changed', (change) => {
-      setAuth(change.signedIn ? change : { signedIn: false });
-    });
-    return () => {
-      current = false;
-      unsubscribe();
-    };
-  }, []);
-
-  const signIn = async () => {
-    setSigningIn(true);
-    setError(null);
-    const result = await window.api.auth.signIn();
-    setSigningIn(false);
-    if (result.ok) setAuth(result.data);
-    else setError(result.error);
-  };
-
-  const signOut = async () => {
-    setError(null);
-    const result = await window.api.auth.signOut();
-    if (result.ok) setAuth(result.data);
-    else setError(result.error);
+  /** Left and right arrows move between the tabs, as in every tab list. */
+  const onTabKey = (event: KeyboardEvent) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const next = TABS[(TABS.indexOf(tab) + 1) % TABS.length] ?? 'new';
+    setTab(next);
+    tabs.current[next]?.focus();
   };
 
   return (
     <div className="publish">
       {auth === null ? null : auth.signedIn ? (
-        <section className="publish-account">
-          <p>{t('publish.signedInAs', { login: auth.githubLogin })}</p>
-          <button type="button" className="button-secondary" onClick={() => void signOut()}>
-            {t('publish.signOut')}
-          </button>
-        </section>
+        <>
+          <AccountCard
+            login={auth.githubLogin}
+            displayName={auth.displayName}
+            avatarUrl={auth.avatarUrl}
+          />
+          <div className="tabs" role="tablist" aria-label={t('publish.tabs')} onKeyDown={onTabKey}>
+            {TABS.map((id) => (
+              <button
+                key={id}
+                ref={(element) => {
+                  tabs.current[id] = element;
+                }}
+                type="button"
+                role="tab"
+                id={`publish-tab-${id}`}
+                className="tab"
+                aria-selected={tab === id}
+                aria-controls={`publish-panel-${id}`}
+                tabIndex={tab === id ? 0 : -1}
+                onClick={() => {
+                  setTab(id);
+                }}
+              >
+                {id === 'new' ? t('publish.tab.new') : t('publish.tab.mine')}
+              </button>
+            ))}
+          </div>
+          <div role="tabpanel" id={`publish-panel-${tab}`} aria-labelledby={`publish-tab-${tab}`}>
+            {tab === 'new' ? (
+              <NewVersion publisher={{ login: auth.githubLogin, avatarUrl: auth.avatarUrl }} />
+            ) : (
+              <MyHarnesses />
+            )}
+          </div>
+        </>
       ) : (
-        <section className="publish-account">
-          <p className="hint">{t('publish.signIn.explanation')}</p>
-          <button
-            type="button"
-            className="button-primary"
-            disabled={signingIn}
-            onClick={() => void signIn()}
-          >
-            {signingIn ? t('publish.signIn.waiting') : t('publish.signIn')}
-          </button>
-        </section>
+        <SignInCard />
       )}
-      {error === null ? null : <ErrorMessage error={error} />}
-      <p className="placeholder">{t('publish.placeholder')}</p>
       <InstallFolderPanel />
     </div>
   );

@@ -38,6 +38,32 @@ export type IpcErrorCode =
   /** The Store did not answer (network error, timeout or a 5xx). */
   | 'store_unreachable'
   /**
+   * The Store refused the Publisher's session (a 401), or nobody is signed in: the session is
+   * ended (`session_expired`) and the Publish screen asks to sign in again.
+   */
+  | 'unauthenticated'
+  /** The Store refused a Harness Package whose ID is not the signed-in Publisher's; `problems`. */
+  | 'publisher_mismatch'
+  /**
+   * The Store already has this version of the Harness or a greater one (any status); `problems`,
+   * except when another publish of it got there first.
+   */
+  | 'version_not_greater'
+  /** The Store found problems in the Harness Package; `problems` lists them. */
+  | 'invalid_manifest'
+  /** The Harness Package, or its icon, is larger than the Store takes. */
+  | 'package_too_large'
+  /** The Publisher published too many versions lately (20 per 24 hours). */
+  | 'rate_limited'
+  /** The Harness was taken down: it gets no new version, and its versions cannot be Unpublished. */
+  | 'harness_taken_down'
+  /** The Store refused the call: the Harness is another Publisher's. */
+  | 'forbidden'
+  /** The Store has no such Harness or version (or none the Publisher can see). */
+  | 'not_found'
+  /** The Publisher cancelled the upload (`publish.cancel`) before it was all sent. */
+  | 'upload_cancelled'
+  /**
    * A Harness folder is not (or no longer) a valid Harness Package: it cannot be read, fails
    * validation, or its Manifest changed since `installs.inspectFolder` showed it. The problems
    * themselves come from `installs.inspectFolder`, never in the error.
@@ -79,8 +105,17 @@ export interface IpcError {
   /** The catalog key the renderer looks up, always `error.<code>`. */
   readonly messageKey: `error.${IpcErrorCode}`;
   readonly params?: Readonly<Record<string, string | number>>;
-  /** English text, the last fallback when the catalog cannot render `messageKey`. */
+  /**
+   * English text, the last fallback when the catalog cannot render `messageKey`. For a refusal
+   * from the Store, the Store's own message.
+   */
   readonly message: string;
+  /**
+   * The problems the Store found in a Harness Package it refused (`invalid_manifest`,
+   * `package_too_large`, `publisher_mismatch`, `version_not_greater`), exactly as its
+   * `validatePackage` returned them: shown by `manifest.<messageKey>`.
+   */
+  readonly problems?: readonly Problem[];
 }
 
 export type IpcResult<T> =
@@ -274,6 +309,123 @@ export interface IpcMethods {
    * open it.
    */
   'launch.openDataFolder': { input: string; output: null };
+  /**
+   * Builds the Harness Package of the folder at this absolute path, exactly as the Publish flow
+   * uploads it (a deterministic zip of what the exclusion rules keep), and validates that zip
+   * with `validatePackage`, passing the signed-in Publisher's login and, when the Harness ID is
+   * theirs, every version of it the Store has (any status). Starts watching the folder
+   * (`publish.folderChanged`), replacing the folder watched before. Only the latest run's zip is
+   * kept; a run that a newer one replaced answers `package_invalid`. `invalid_input` for a path
+   * that is not a folder (a dropped file); `package_invalid` for a folder that cannot be read;
+   * `file_unreadable` for a file in it that the User's account cannot open.
+   */
+  'publish.validateFolder': { input: string; output: FolderValidation };
+  /** Stops watching the folder `publish.validateFolder` watches; nothing to stop is fine. */
+  'publish.stopWatching': { input: undefined; output: null };
+  /**
+   * Uploads the Harness Package `publish.validateFolder` built (`archiveId`) to the Store's
+   * `publish` function with the Publisher's session, and resolves once the Store answered: the
+   * new Harness Version and its listing's route. While the body is sent, `progress:<jobId>`
+   * events report `UploadProgress`; subscribe before calling. `package_invalid` when the archive
+   * is not the latest validation's, or that one found problems (validate again);
+   * `unauthenticated` (the session is ended, `session_expired`); `upload_cancelled`
+   * (`publish.cancel`); `store_unreachable`; the Store's refusals by its code, with its
+   * `problems`.
+   */
+  'publish.publish': { input: PublishRequest; output: PublishedVersion };
+  /**
+   * Cancels the upload `jobId` while its body is still being sent: `publish.publish` then answers
+   * `upload_cancelled`, and the Store keeps nothing. Once all of it is sent it changes nothing (the
+   * Store may already be saving it), and neither does an unknown or finished job.
+   */
+  'publish.cancel': { input: string; output: null };
+  /**
+   * The signed-in Publisher's Harnesses and every Harness Version of them the Store has, in any
+   * status (published, Unpublished, taken down with the administrator's note), read with their
+   * session (api.md, "Own versions"), with each Harness's own status from `latest_versions`.
+   * `unauthenticated` when nobody is signed in or the Store refused the session (which is then
+   * ended, `session_expired`); `store_unreachable`.
+   */
+  'publish.myHarnesses': { input: undefined; output: readonly OwnHarness[] };
+  /**
+   * Unpublishes one of the Publisher's Harness Versions through the Store's `unpublish`
+   * function: it can no longer be downloaded, and existing installs keep working. One already
+   * Unpublished is a success too. `unauthenticated` (the session is ended); `forbidden`,
+   * `not_found`, `harness_taken_down` (a taken-down Harness or version); `store_unreachable`.
+   */
+  'publish.unpublish': { input: UnpublishRequest; output: UnpublishedVersion };
+}
+
+/** Which Harness Package to upload, and the job its progress events are named after. */
+export interface PublishRequest {
+  /** From `publish.validateFolder`. */
+  readonly archiveId: string;
+  /** Chosen by the renderer (a UUID): the events are `progress:<jobId>`. */
+  readonly jobId: string;
+}
+
+/** The Harness Version the Store published. */
+export interface PublishedVersion {
+  readonly harnessId: string;
+  readonly version: string;
+  /** The listing's in-app route, `/store/h/<publisher>/<slug>`. */
+  readonly url: string;
+}
+
+/** The payload of `progress:<jobId>` for an upload: bytes of the request body sent so far. */
+export interface UploadProgress {
+  readonly sent: number;
+  readonly total: number;
+}
+
+/** A Harness Version's status in the Store. */
+export type HarnessVersionStatus = 'published' | 'unpublished' | 'taken_down';
+
+/**
+ * A Harness's own status in the Store (`latest_versions`): `available` with a published version,
+ * `unpublished` with none left, `taken_down` by an administrator, or `not_found`.
+ */
+export type HarnessStoreStatus = 'available' | 'unpublished' | 'taken_down' | 'not_found';
+
+/** One of the signed-in Publisher's Harnesses, as My Harnesses lists it. */
+export interface OwnHarness {
+  readonly harnessId: string;
+  /** The Manifest name of its newest Harness Version. */
+  readonly name: string;
+  readonly storeStatus: HarnessStoreStatus;
+  /** The version the Store offers (its latest published one); null when not `available`. */
+  readonly latestVersion: string | null;
+  /** The downloads of all its versions. */
+  readonly downloadCount: number;
+  /** Every Harness Version, newest published first. */
+  readonly versions: readonly OwnVersion[];
+}
+
+/** One of the Publisher's Harness Versions, in any status. */
+export interface OwnVersion {
+  readonly version: string;
+  readonly status: HarnessVersionStatus;
+  /** ISO-8601. */
+  readonly publishedAt: string;
+  /** ISO-8601; null unless Unpublished. */
+  readonly unpublishedAt: string | null;
+  /** The administrator's note on a taken-down version; null otherwise. */
+  readonly takedownNote: string | null;
+  readonly downloadCount: number;
+}
+
+/** Which Harness Version to Unpublish. */
+export interface UnpublishRequest {
+  readonly harnessId: string;
+  readonly version: string;
+}
+
+/** The Harness Version Unpublished, and the Harness's latest published version since. */
+export interface UnpublishedVersion {
+  readonly harnessId: string;
+  readonly version: string;
+  /** Null when no published version is left. */
+  readonly latestVersion: string | null;
 }
 
 /** Which installed Harness to launch, and with which Workspace. */
@@ -381,6 +533,44 @@ export interface FolderInspection {
   readonly problems: readonly Problem[];
   /** Findings that do not block installing, such as an ignored key. */
   readonly warnings: readonly Problem[];
+}
+
+/**
+ * Whether the Store was asked for the Publisher's earlier versions of the Harness: `checked`;
+ * `skipped` when nobody is signed in, the Manifest has no Harness ID or the ID is another
+ * Publisher's; `failed` when the Store did not answer (it checks again on upload).
+ */
+export type VersionCheck = 'checked' | 'skipped' | 'failed';
+
+/** A folder's Harness Package as the Publish flow built and validated it. */
+export interface FolderValidation {
+  /** Names the zip main keeps for the upload; null when none could be built (too large). */
+  readonly archiveId: string | null;
+  /** Every problem, ordered by path: shown by `manifest.<messageKey>`. Publishing needs none. */
+  readonly problems: readonly Problem[];
+  /** Findings that never block publishing. */
+  readonly warnings: readonly Problem[];
+  /** The Manifest, present exactly when there is no problem. */
+  readonly manifest: Manifest | null;
+  /** `assets/icon.png` of the zip as a `data:` URL, null when it has none that can be read. */
+  readonly iconDataUrl: string | null;
+  /** README.md of the zip (its first 1 MiB), null when it has none. */
+  readonly readme: string | null;
+  /** What the zip leaves out, topmost only: a folder as `dir/`, a file by its path. */
+  readonly excluded: readonly string[];
+  /** The zip's size in bytes. */
+  readonly archiveSize: number;
+  readonly versionCheck: VersionCheck;
+  /** The highest version the Store has of this Harness (any status); null when none or unchecked. */
+  readonly lastPublishedVersion: string | null;
+  /** The Store has no version of this Harness yet; false when unchecked. */
+  readonly isNew: boolean;
+}
+
+/** The watched Harness folder changed on disk (outside what the Publish flow leaves out). */
+export interface PublishFolderChanged {
+  /** Absolute, as given to `publish.validateFolder`. */
+  readonly path: string;
 }
 
 /** The Harness and version an install put in place. */
@@ -764,6 +954,12 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'launch.status': true,
   'launch.openLogs': true,
   'launch.openDataFolder': true,
+  'publish.validateFolder': true,
+  'publish.stopWatching': true,
+  'publish.publish': true,
+  'publish.cancel': true,
+  'publish.myHarnesses': true,
+  'publish.unpublish': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */
@@ -772,7 +968,7 @@ export const IPC_METHODS = Object.freeze(Object.keys(METHOD_NAMES) as IpcMethodN
 /**
  * Events main pushes to the renderer: name → payload. `progress:<jobId>` is reserved for
  * long-running jobs (downloads, uploads, launch readiness); its payload is defined by its first
- * producer.
+ * producer: `publish.publish`'s is {@link UploadProgress}.
  */
 export interface IpcEvents {
   /** The Store's connectivity changed; sent on every change, never twice for the same state. */
@@ -788,6 +984,11 @@ export interface IpcEvents {
    * at that Harness's card.
    */
   'app.navigate': AppNavigate;
+  /**
+   * The folder `publish.validateFolder` watches changed (500 ms after the last change); the
+   * Publish screen validates it again.
+   */
+  'publish.folderChanged': PublishFolderChanged;
   [event: `progress:${string}`]: unknown;
 }
 
@@ -815,6 +1016,7 @@ export function isIpcEventName(name: string): name is IpcEventName {
     name === 'installs.changed' ||
     name === 'launch.state' ||
     name === 'app.navigate' ||
+    name === 'publish.folderChanged' ||
     /^progress:.+$/.test(name)
   );
 }
@@ -847,5 +1049,17 @@ export type IpcSubscribe = <E extends IpcEventName>(
   listener: (payload: IpcEvents[E]) => void,
 ) => () => void;
 
-/** The only object the renderer sees: `window.api.<domain>.<verb>(input)` plus `on`. */
-export type DesktopApi = BridgeCalls<IpcMethods> & { readonly on: IpcSubscribe };
+/**
+ * The absolute path of a file or folder dropped on the page (Electron's
+ * `webUtils.getPathForFile`); `''` for one that has no path on disk.
+ */
+export type PathForFile = (file: File) => string;
+
+/**
+ * The only object the renderer sees: `window.api.<domain>.<verb>(input)`, plus `on` and
+ * `pathForFile`, which run in the preload without a call to main.
+ */
+export type DesktopApi = BridgeCalls<IpcMethods> & {
+  readonly on: IpcSubscribe;
+  readonly pathForFile: PathForFile;
+};
