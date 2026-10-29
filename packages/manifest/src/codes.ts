@@ -127,7 +127,7 @@ export const MESSAGES_EN = Object.freeze({
   'schema_pattern.slotName':
     'Model Slot name "{key}" must start with a lower-case letter and contain only lower-case letters, digits and hyphens (at most 32 characters).',
   'schema_pattern.modelId':
-    'Recommended Models must be "provider/model" ids such as "anthropic/claude-sonnet-4-5", with a lower-case Provider id. Found {actual}.',
+    'Recommended Models must be "provider/model" ids such as "anthropic/claude-sonnet-5-5", with a lower-case Provider id. Found {actual}.',
   'schema_pattern.domain':
     'Must be a lower-case domain name such as "api.github.com", optionally starting with "*.". Found {actual}.',
   'schema_pattern.unstorable_character':

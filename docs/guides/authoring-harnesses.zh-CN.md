@@ -596,7 +596,7 @@ SDK 只是为了方便，并非必需。`OPENAI_BASE_URL` 和 `OPENAI_API_KEY` �
       "default": {
         "description": "Reviews the change, reading files with tools",
         "requirements": { "tools": true, "minContext": 64000 },
-        "recommended": ["anthropic/claude-sonnet-4-5", "openai/gpt-5", "ollama/qwen3-coder:30b"]
+        "recommended": ["anthropic/claude-sonnet-5-5", "openai/gpt-5", "ollama/qwen3-coder:30b"]
       },
       "fast": {
         "description": "Summarises each changed file before the review",
@@ -612,7 +612,7 @@ SDK 只是为了方便，并非必需。`OPENAI_BASE_URL` 和 `OPENAI_API_KEY` �
 
 | 用户拥有 | `default` 解析为 | `fast` 解析为 |
 |---|---|---|
-| 一个 Anthropic 模型连接和 Ollama；默认模型为 `ollama/llama3.2` | `anthropic/claude-sonnet-4-5`（第一个有模型连接的推荐模型） | `ollama/qwen3:8b`（第一个有模型连接的推荐模型） |
+| 一个 Anthropic 模型连接和 Ollama；默认模型为 `ollama/llama3.2` | `anthropic/claude-sonnet-5-5`（第一个有模型连接的推荐模型） | `ollama/qwen3:8b`（第一个有模型连接的推荐模型） |
 | 只有 Ollama；默认模型为 `ollama/llama3.2` | `ollama/qwen3-coder:30b`（第三个推荐模型）；在用户拉取该模型之前会以 `provider_error` 失败 | `ollama/qwen3:8b` |
 | 只有 DeepSeek；默认模型为 `deepseek/deepseek-chat` | `deepseek/deepseek-chat`（没有推荐模型有模型连接，因此使用默认模型） | `deepseek/deepseek-chat`（`fast` 没有默认模型，因此使用 `default` 的默认模型） |
 

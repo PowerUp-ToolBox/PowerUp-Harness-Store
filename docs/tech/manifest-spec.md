@@ -83,7 +83,7 @@ Only the Runtime-provided environment (see architecture §4) is guaranteed. Harn
     "default": {
       "description": "Main reasoning model used for reviews",
       "requirements": { "tools": true, "minContext": 64000, "vision": false, "json": false },
-      "recommended": ["anthropic/claude-sonnet-4-5", "openai/gpt-5", "deepseek/deepseek-chat"]
+      "recommended": ["anthropic/claude-sonnet-5-5", "openai/gpt-5", "deepseek/deepseek-chat"]
     },
     "fast": {
       "description": "Cheap model for summarising diffs",

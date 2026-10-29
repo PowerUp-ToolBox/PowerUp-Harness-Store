@@ -43,7 +43,7 @@ Anything else, including another method on these paths (`HEAD` too), returns `40
 {
   "object": "list",
   "data": [
-    { "id": "default", "object": "model", "created": 0, "owned_by": "harness-store", "resolved_model": "anthropic/claude-sonnet-4-5" },
+    { "id": "default", "object": "model", "created": 0, "owned_by": "harness-store", "resolved_model": "anthropic/claude-sonnet-5-5" },
     { "id": "fast", "object": "model", "created": 0, "owned_by": "harness-store", "resolved_model": null }
   ]
 }
