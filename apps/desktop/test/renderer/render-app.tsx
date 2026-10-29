@@ -3,6 +3,7 @@ import { vi } from 'vitest';
 import { Root } from '../../src/renderer/src/Root.js';
 import type { Locale } from '../../src/shared/i18n/locale.js';
 import type {
+  AuthState,
   ConnectionDraft,
   ConnectionSummary,
   ConnectionTestDraft,
@@ -34,6 +35,14 @@ export const FAKE_DIAGNOSTICS: Diagnostics = {
   version: '4.5.6',
   gateway: { running: true, port: 51234 },
   databasePath: '/profile/harness-store.sqlite',
+};
+
+/** The Publisher `auth.signIn` signs in as. */
+export const FAKE_PUBLISHER: AuthState = {
+  signedIn: true,
+  githubLogin: 'octo-cat',
+  displayName: 'Octo Cat',
+  avatarUrl: null,
 };
 
 /** Four of the Runtime's presets: two cloud ones, a local one and the custom endpoint. */
@@ -142,7 +151,8 @@ export interface FakeApiOptions {
  * `connections.add`, `update`, `remove` and `test` (of a saved Connection) answer
  * `not_implemented`, `connections.testDraft` passes finding no models and `connections.models`
  * lists none; `bindings.setGlobal` sets or clears a Default Model that `bindings.getGlobal` then
- * lists, without checking its Connection; a test changes `app.status`,
+ * lists, without checking its Connection; nobody is signed in to the Store, `auth.signIn` signs
+ * in as `octo-cat` and `auth.signOut` signs out; a test changes `app.status`,
  * `diagnostics.get`, the `connectivity`, `connections` or `bindings` methods before rendering to
  * say otherwise, and pushes events with `emit`.
  */
@@ -231,6 +241,17 @@ export function installFakeApi(
           );
           return Promise.resolve({ ok: true, data: bindings });
         },
+      ),
+    },
+    auth: {
+      whoami: vi.fn((): Promise<IpcResult<AuthState>> =>
+        Promise.resolve({ ok: true, data: { signedIn: false } }),
+      ),
+      signIn: vi.fn((): Promise<IpcResult<AuthState>> =>
+        Promise.resolve({ ok: true, data: FAKE_PUBLISHER }),
+      ),
+      signOut: vi.fn((): Promise<IpcResult<AuthState>> =>
+        Promise.resolve({ ok: true, data: { signedIn: false } }),
       ),
     },
     on: vi.fn((event: string, listener: (payload: unknown) => void) => {

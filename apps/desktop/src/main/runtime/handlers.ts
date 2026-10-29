@@ -1,4 +1,4 @@
-import type { IpcMethodName, IpcOutput, IpcResult } from '../../shared/ipc.js';
+import type { AuthState, IpcMethodName, IpcOutput, IpcResult } from '../../shared/ipc.js';
 import { parseGlobalBindingChange } from './bindings.js';
 import {
   parseConnectionDraft,
@@ -9,6 +9,7 @@ import {
 import { fail, ok } from './ipc-result.js';
 import type { Services } from './services.js';
 import { parseSettingsPatch } from './settings.js';
+import { StoreAuthError } from './store-auth.js';
 
 /**
  * One handler per IPC method. The input arrives as `unknown` because it crossed a process
@@ -106,5 +107,27 @@ export function createHandlers(services: Services): IpcHandlers {
       if (change === null) return fail('invalid_input', { method: 'bindings.setGlobal' });
       return services.bindings.setGlobal(change);
     },
+    'auth.signIn': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'auth.signIn' });
+      return authResult(() => services.auth.signIn());
+    },
+    'auth.signOut': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'auth.signOut' });
+      return authResult(() => services.auth.signOut());
+    },
+    'auth.whoami': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'auth.whoami' });
+      return authResult(() => services.auth.whoami());
+    },
   };
+}
+
+/** The auth call's state, or its {@link StoreAuthError} as that error code; anything else throws. */
+async function authResult(call: () => Promise<AuthState>): Promise<IpcResult<AuthState>> {
+  try {
+    return ok(await call());
+  } catch (error) {
+    if (error instanceof StoreAuthError) return fail(error.code);
+    throw error;
+  }
 }

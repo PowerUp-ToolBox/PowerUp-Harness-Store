@@ -25,6 +25,13 @@ function devContentSecurityPolicy(): Plugin {
 export default defineConfig({
   main: {
     build: { externalizeDeps: false },
+    // The Store's anon key is fixed at build time (connectivity.ts, storeAnonKey): empty means the
+    // local stack's.
+    define: {
+      'process.env.HARNESS_STORE_ANON_KEY': JSON.stringify(
+        process.env.HARNESS_STORE_ANON_KEY ?? '',
+      ),
+    },
   },
   preload: {
     build: {

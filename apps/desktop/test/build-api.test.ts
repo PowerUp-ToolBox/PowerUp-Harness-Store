@@ -7,6 +7,7 @@ describe('buildApi (window.api)', () => {
     const api = buildApi(vi.fn<Invoke>(), vi.fn<Listen>());
     expect(Object.keys(api).sort()).toEqual([
       'app',
+      'auth',
       'bindings',
       'connections',
       'connectivity',
@@ -16,6 +17,7 @@ describe('buildApi (window.api)', () => {
       'settings',
     ]);
     expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit']);
+    expect(Object.keys(api.auth)).toEqual(['signIn', 'signOut', 'whoami']);
     expect(Object.keys(api.bindings)).toEqual(['getGlobal', 'setGlobal']);
     expect(Object.keys(api.connections)).toEqual([
       'detectLocal',
@@ -57,12 +59,12 @@ describe('buildApi (window.api)', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
-  it('subscribes to connectivity.changed', () => {
+  it.each(['connectivity.changed', 'auth.changed'] as const)('subscribes to %s', (event) => {
     const listen = vi.fn<Listen>(() => () => undefined);
     const api = buildApi(vi.fn<Invoke>(), listen);
     const listener = vi.fn();
-    api.on('connectivity.changed', listener);
-    expect(listen).toHaveBeenCalledWith('connectivity.changed', listener);
+    api.on(event, listener);
+    expect(listen).toHaveBeenCalledWith(event, listener);
   });
 
   it('refuses an event name outside the contract', () => {

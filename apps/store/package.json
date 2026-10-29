@@ -8,6 +8,23 @@
     "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
   },
   "scripts": {
-    "test": "node scripts/test.mjs"
+    "build": "tsc --build tsconfig.build.json && node dist/scripts/bundle-manifest.js",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:store": "vitest run --config vitest.store.config.ts",
+    "db:start": "pnpm run build && node dist/scripts/supabase.js start",
+    "db:stop": "pnpm run build && node dist/scripts/supabase.js stop",
+    "db:reset": "pnpm run build && node dist/scripts/supabase.js db reset && node dist/scripts/seed.js",
+    "seed": "node dist/scripts/seed.js",
+    "functions:serve": "pnpm run build && node dist/scripts/supabase.js functions serve"
+  },
+  "devDependencies": {
+    "@harness-store/manifest": "workspace:*",
+    "@supabase/supabase-js": "2.117.3",
+    "fflate": "0.8.3",
+    "supabase": "2.120.0",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
   }
 }

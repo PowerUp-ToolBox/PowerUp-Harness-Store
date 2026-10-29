@@ -91,7 +91,7 @@ Each flow lists steps, decision points and error branches. Screen details are in
 ## F8. Report a Harness
 
 1. Report link on the detail page (and in the Library card menu).
-2. Reason picker: Malicious behaviour, Bypasses the Model Gateway, Misleading listing, Broken, Other. Free-text details. Optional email for follow-up.
+2. Reason picker: Malicious behaviour, Bypasses the Model Gateway, Broken, Inappropriate content, Spam, Other (one per `report_reason` value in `docs/tech/data-model.md`). Free-text details. Optional email for follow-up.
 3. Submit anonymously; confirmation "Thanks, a reviewer will look at this". Repeated reports on the same Harness from the same install are rate limited with a gentle message.
 
 ## F9. Uninstall

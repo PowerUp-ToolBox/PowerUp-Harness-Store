@@ -29,12 +29,12 @@ pnpm install     # install dependencies, then build once; no environment variabl
 pnpm build       # tsc --build of every package that has a build script
 pnpm lint        # ESLint in every TypeScript package and on root-level JS, then Prettier --check
 pnpm typecheck   # tsc --noEmit in every TypeScript package
-pnpm test        # every package's test script (Vitest; apps/store has its own runner)
+pnpm test        # every package's test script (Vitest; no Docker needed)
 ```
 
 On a fresh clone, run `pnpm build` before `pnpm lint`, `pnpm typecheck` or `pnpm test`: packages depend on each other through `workspace:*` and import each other's built `dist/` (a package's own tests may import it by its package name too). Rebuild after changing a package that another one imports.
 
-CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs exactly these commands, in this order, on every push and pull request.
+CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs exactly these commands, in this order, on every push and pull request. A second job, `store`, starts a local Supabase stack in Docker and runs the Store tests against it (see [`apps/store`](./apps/store/README.md)).
 
 To check a Harness Package (a folder or a zip) the way the Store will, build the Manifest package and run its CLI: `pnpm --filter @harness-store/manifest build`, then `node packages/manifest/bin/harness-manifest.js validate <path>`. See [`packages/manifest`](./packages/manifest/README.md#command-line-harness-manifest-validate) for its options, output and exit status.
 
@@ -54,6 +54,6 @@ Layout (pnpm workspaces, see [`pnpm-workspace.yaml`](./pnpm-workspace.yaml)):
 Conventions:
 - Every package defines a `test` script (Vitest for TypeScript packages; a package with no tests yet uses `vitest run --passWithNoTests`). TypeScript packages also define `lint`, `typecheck` and `build`. The root commands fan out with `pnpm --recursive run <script>`, so a new directory under `apps/`, `packages/` or `examples/` with those scripts is picked up without any root change. A new package also needs a name in the `@harness-store/` scope and the root's `engines.node` value; `tools/repo-checks` checks both.
 - Shared configuration lives at the root and is extended, not copied: [`tsconfig.base.json`](./tsconfig.base.json) (strict), [`eslint.config.js`](./eslint.config.js) and [`.prettierrc.json`](./.prettierrc.json). Each TypeScript package has a `tsconfig.json` (type-check sources and tests), a `tsconfig.build.json` (emit `dist/`) and an `eslint.config.js` that imports the root config. The exception is `apps/desktop`: it has `tsconfig.json` (main, preload, shared code and tests) and `tsconfig.web.json` (renderer), both type-check only, and no `tsconfig.build.json`; `electron-vite build` bundles it into `out/` instead of `dist/`.
-- The root [`tsconfig.json`](./tsconfig.json) is the TypeScript project references graph (`tsc --build` from the root builds every emitting package and type-checks `apps/desktop`'s two projects, which emit nothing). `apps/store` is excluded because its Edge Functions run on Deno. `pnpm build` does not use this file; list a new package's `tsconfig.build.json` there only for root `tsc --build` and cross-package editor navigation.
+- The root [`tsconfig.json`](./tsconfig.json) is the TypeScript project references graph (`tsc --build` from the root builds every emitting package and type-checks `apps/desktop`'s two projects, which emit nothing). `apps/store` is excluded because its Edge Functions run on Deno; its own `tsconfig.json` covers its Node scripts, its tests and the plain modules the functions share, not the Deno entry files. `pnpm build` does not use this file; list a new package's `tsconfig.build.json` there only for root `tsc --build` and cross-package editor navigation.
 - Test fixtures live inside the package that owns them (e.g. `packages/manifest/fixtures/`), never at the repo root.
 - Generated sources are checked in and guarded by a drift check: after editing the Manifest schema, run `pnpm --filter @harness-store/manifest generate` and commit `packages/manifest/src/manifest.generated.ts` (`pnpm typecheck` fails while it is stale).

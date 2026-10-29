@@ -3,6 +3,7 @@ import type { BindingsService } from './bindings.js';
 import type { ConnectionsService } from './connections.js';
 import type { ConnectivityService } from './connectivity.js';
 import type { SettingsService } from './settings.js';
+import type { StoreAuth } from './store-auth.js';
 
 /**
  * The service container: everything an IPC handler may use, created once by
@@ -32,4 +33,6 @@ export interface Services {
   readonly connections: ConnectionsService;
   /** The User's Slot Bindings: the Default Models. */
   readonly bindings: BindingsService;
+  /** The Publisher's sign-in to the Store. */
+  readonly auth: Pick<StoreAuth, 'signIn' | 'signOut' | 'whoami'>;
 }

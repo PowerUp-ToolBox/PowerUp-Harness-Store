@@ -13,6 +13,10 @@ const IPC_OWN_CODES = [
   'not_implemented',
   'encryption_unavailable',
   'unexpected_response',
+  'sign_in_failed',
+  'sign_in_timeout',
+  'sign_in_cancelled',
+  'store_unreachable',
 ] as const;
 
 describe('catalog parity (CI)', () => {
@@ -46,6 +50,13 @@ describe('catalog parity (CI)', () => {
     for (const catalog of [en, zhCN]) {
       expect(Object.values(catalog).every((value) => typeof value === 'string')).toBe(true);
     }
+  });
+
+  it('zh-CN names the Store 商店 (docs/ux/screens.md); only the product name keeps "Store"', () => {
+    const bare = Object.entries(zhCN)
+      .filter(([, message]) => /\bStore\b/.test(message.replaceAll('Harness Store', '')))
+      .map(([key]) => key);
+    expect(bare).toEqual([]);
   });
 });
 

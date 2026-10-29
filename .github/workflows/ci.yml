@@ -48,3 +48,65 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  # The Store seam (docs/tech/architecture.md §8, item 4): the Supabase project in apps/store on a
+  # local stack in Docker. Separate from `verify`, whose root `pnpm test` needs no Docker.
+  store:
+    name: Store backend on a local Supabase stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/store
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The seed and the store tests import @harness-store/manifest from its dist/, and the CLI
+      # wrapper (scripts/supabase.ts) runs from apps/store/dist/.
+      - name: Build
+        working-directory: .
+        run: pnpm build
+
+      # Applies every migration to an empty database; any SQL error fails the step. Only the
+      # services the Store uses are started. The wrapper gives the GitHub provider the dummy
+      # values of supabase/.env.example, which point it at the fake GitHub the sign-in tests run.
+      - name: Start the local Supabase stack
+        run: node dist/scripts/supabase.js start -x studio,imgproxy,postgres-meta,mailpit,logflare,vector,supavisor
+
+      # Applies the migrations from empty once more, then runs the seed script.
+      - name: Reset and seed the database
+        run: pnpm run db:reset
+
+      - name: Serve the Edge Functions
+        run: |
+          nohup node dist/scripts/supabase.js functions serve > "$RUNNER_TEMP/functions.log" 2>&1 &
+          for _ in $(seq 120); do
+            grep -q 'Serving functions on' "$RUNNER_TEMP/functions.log" && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/functions.log"
+          exit 1
+
+      - name: Store tests
+        run: pnpm run test:store
+
+      - name: Edge Functions log
+        if: failure()
+        run: cat "$RUNNER_TEMP/functions.log"
+
+      - name: Stop the local Supabase stack
+        if: always()
+        run: node dist/scripts/supabase.js stop --no-backup

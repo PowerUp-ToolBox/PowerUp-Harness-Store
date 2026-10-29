@@ -48,10 +48,10 @@ React single-page app. No business logic beyond view state; every action goes th
 - **Local store**: SQLite database in the app data directory for installs, Slot Bindings, Usage Records, settings and Provider Connection metadata. Secrets (API keys) are encrypted with Electron `safeStorage` and stored as opaque blobs; when OS encryption is unavailable (on Linux also when its backend is `basic_text`), the Runtime refuses to store a key rather than keep it in plaintext.
 
 ### 2.3 Store (Supabase)
-- **Auth**: GitHub OAuth only. Only Publishers sign in; browsing and installing are anonymous.
-- **Postgres**: tables in [`data-model.md`](./data-model.md), protected by RLS; public read of active Harnesses and published Harness Versions.
+- **Auth**: GitHub OAuth only (PKCE, opened in the system browser, back to the app through `harnessstore://auth-callback`). Only Publishers sign in; browsing and installing are anonymous.
+- **Postgres**: tables in [`data-model.md`](./data-model.md), protected by RLS; public read of active Harnesses that have a published version and of published Harness Versions. RPCs `search_harnesses` and `latest_versions` ([`api.md`](./api.md)).
 - **Storage**: private bucket `harness-packages` (downloads via short-lived signed URL), public bucket `harness-assets` (icons, screenshots).
-- **Edge Functions**: `publish` (validate Manifest with the shared `packages/manifest` code, store package, create version), `download` (issue signed URL, increment counters), `report`.
+- **Edge Functions**: `publish` (validate Manifest with the shared `packages/manifest` code, store package, create version), `download` (issue signed URL, increment counters), `unpublish`, `report`, `admin/takedown` (one function named `admin`). Each does its multi-row writes in one service-role SQL function.
 
 ### 2.4 Shared packages
 - `packages/manifest`: Manifest JSON Schema, TypeScript types, `validateManifest()` and `validatePackage()` (structure + file presence). Used by the desktop app, the Publish flow and the `publish` Edge Function. Single source of truth.

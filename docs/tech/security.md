@@ -25,8 +25,8 @@
 ## Store-side controls
 - RLS on all tables; writes only through Edge Functions with server-side validation using the same `packages/manifest` code as the client.
 - Packages in a private bucket; downloads via 60-second signed URLs.
-- Publisher JWT required for publish/unpublish; `is_admin` claim for takedown.
-- Rate limits on `publish` (20/day/publisher) and `report` (5/h/IP).
+- Publisher JWT required for publish/unpublish; takedown requires a caller whose `profiles.is_admin` is set, looked up by the function (not a JWT claim; Publishers cannot write that column). `download` and `report` need no account, and neither stores an IP address or user.
+- Rate limits on `publish` (20 per rolling 24 h per Publisher) and `report` (5/h per IP, best effort in function memory, and 5/h per install id, checked against the stored Reports).
 
 ## Desktop-side controls
 - Gateway binds `127.0.0.1` only, validates `Host`, no CORS.

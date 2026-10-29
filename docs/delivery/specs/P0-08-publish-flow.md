@@ -48,7 +48,7 @@ A Publish screen in the desktop app implementing flow F5 in `docs/ux/flows.md`: 
 
 ## Implementation Decisions
 
-- **Auth**: Supabase Auth GitHub OAuth with a PKCE flow opened in the system browser; the app registers a custom URL scheme to receive the callback. Session tokens are stored via the encrypted secrets mechanism from P0-03 (same `safeStorage` path), never in plain files. Signed-in state is shown only on the Publish screen.
+- **Auth**: Supabase Auth GitHub OAuth with a PKCE flow opened in the system browser; the app registers a custom URL scheme to receive the callback. Session tokens are stored via the encrypted secrets mechanism from P0-03 (same `safeStorage` path), never in plain files. Signed-in state is shown only on the Publish screen. P0-07.2 built the sign-in itself; this screen uses its IPC (`auth.signIn`, `auth.signOut`, `auth.whoami`, and `auth.changed` with `reason: session_expired` for the re-sign-in prompt) and replaces its placeholder Sign in / Sign out on the Publish screen.
 - **Folder validation** uses `validatePackage()` from the Manifest package against the folder (treating it as the archive root), including file existence checks. A file watcher re-validates with a 500 ms debounce; the Re-check button forces it. Problems render as a list ordered by path; messages are looked up by code in the message catalogs with a fallback to the validator's English text.
 - **Pre-flight version check** calls `latest_versions` for the Manifest `id` when signed in; if the Harness exists and the version is not greater, a problem with code `version_not_greater` is added to the list so the same disabled-Continue logic applies. If the Harness does not exist yet, the preview says "New Harness".
 - **Publisher mismatch** is checked locally against the signed-in login before upload with code `publisher_mismatch`, in addition to the server check.
@@ -64,7 +64,7 @@ A Publish screen in the desktop app implementing flow F5 in `docs/ux/flows.md`: 
   any → idle (choose another folder)
   ```
 
-- **My Harnesses** reads the Publisher's Harnesses through PostgREST with the session JWT (RLS lets them see their own Unpublished versions in addition to published ones via a Publisher-only policy added in this spec's migration). Unpublish calls the function and refreshes the list.
+- **My Harnesses** reads the Publisher's Harness Versions through PostgREST with the session JWT: api.md's "Own versions" read, which returns every version of their Harnesses, published, Unpublished or taken down (with the takedown note), through the Publisher-only read policy on `harness_versions` that P0-07.6 added. Each Harness's own status (taken down, nothing published) comes from `latest_versions`; there is no owner policy on `harnesses` (it would leak a Publisher's hidden Harnesses into the public reads made with their session). The pre-flight version check may use the same read for the full version list. Unpublish calls the function and refreshes the list.
 - **Local install** reuses the Runtime's "install from folder" from P0-05; the Publish screen only triggers it and shows the result.
 - **Copy**: every user-facing string exists in `en` and `zh-CN`; the trust block in the preview uses the same component as the Store detail page (P0-09) so wording never diverges.
 
@@ -85,7 +85,7 @@ A Publish screen in the desktop app implementing flow F5 in `docs/ux/flows.md`: 
 
 ## Further Notes
 
-- The Publisher-only RLS policy for reading own Unpublished versions is the only schema change this spec introduces; keep it in its own migration.
+- This spec introduces no schema change: the Publisher-only RLS read policy on own versions (any status, with the takedown note) was added by P0-07.6.
 - A CLI publish path is deliberately not in P0; the folder picker is the single supported path.
 
 ## Blocked by

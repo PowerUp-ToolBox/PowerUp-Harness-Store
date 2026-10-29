@@ -220,8 +220,8 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Let any User flag a Harness for review.
 
-**Elements.** Reason radio list (Malicious behaviour, Bypasses the Model Gateway, Misleading listing, Broken, Other), details text area, optional contact email, Submit.
+**Elements.** Reason radio list (Malicious behaviour, Bypasses the Model Gateway, Broken, Inappropriate content, Spam, Other; one per `report_reason` value), details text area, optional contact email, Submit.
 
 **States.** Submitting. Sent confirmation. Rate limited ("You've already reported this Harness recently").
 
-**Key copy.** Report … / 举报 … · Malicious behaviour / 恶意行为 · Bypasses the Model Gateway / 绕过 Model Gateway · Misleading listing / 描述不实 · Broken / 无法使用 · "Thanks, a reviewer will look at this." / "感谢反馈，审核人员会尽快查看。"
+**Key copy.** Report … / 举报 … · Malicious behaviour / 恶意行为 · Bypasses the Model Gateway / 绕过 Model Gateway · Broken / 无法使用 · Inappropriate content / 不当内容 · Spam / 垃圾信息 · Other / 其他 · "Thanks, a reviewer will look at this." / "感谢反馈，审核人员会尽快查看。"

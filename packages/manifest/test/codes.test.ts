@@ -177,6 +177,7 @@ const EXAMPLES: Record<MessageKey, Example | PackageExample | 'fallback' | 'smal
   'schema_pattern.slotName': [edit({ models: { slots: { default: {}, Fast: {} } } })],
   'schema_pattern.modelId': [edit({ models: { slots: { default: { recommended: ['gpt-5'] } } } })],
   'schema_pattern.domain': [edit(permissions({ network: { domains: ['GitHub.com'] } }))],
+  'schema_pattern.unstorable_character': [edit({ name: 'Hello\u0000Web' })],
   schema_required: [{ ...minimalManifest(), name: undefined }],
   'schema_required.network_access': [edit(permissions({ network: {} }))],
   schema_min_length: [edit({ name: 'x' })],

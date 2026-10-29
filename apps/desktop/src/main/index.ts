@@ -11,6 +11,7 @@ import { createDispatcher } from './runtime/dispatcher.js';
 import { createHandlers } from './runtime/handlers.js';
 import { isAllowedExternalUrl, mainWindowOptions } from './runtime/main-window.js';
 import { createSafeStorageCipher } from './runtime/secret-cipher.js';
+import { AUTH_SCHEME } from './runtime/store-auth.js';
 import { initialWindowBounds } from './runtime/window-state.js';
 
 // A fresh profile for manual runs and E2E: must be set before `ready`.
@@ -27,10 +28,25 @@ let quitState: 'idle' | 'stopping' | 'stopped' = 'idle';
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow === null) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+  // The Store sign-in comes back from the browser as harnessstore://auth-callback. Packaged builds
+  // also declare the scheme in electron-builder.yml; in development the OS must start Electron
+  // with this app's entry script.
+  if (process.defaultApp && process.argv[1] !== undefined) {
+    app.setAsDefaultProtocolClient(AUTH_SCHEME, process.execPath, [resolve(process.argv[1])]);
+  } else {
+    app.setAsDefaultProtocolClient(AUTH_SCHEME);
+  }
+  // macOS hands the URL to the running app.
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    openedWithUrl(url);
+  });
+  // Windows and Linux start a second instance with the URL in its arguments; it quits at once
+  // (no lock) and the running one receives them here.
+  app.on('second-instance', (_event, argv) => {
+    const url = argv.find((argument) => argument.startsWith(`${AUTH_SCHEME}:`));
+    if (url !== undefined) openedWithUrl(url);
+    else focusMainWindow();
   });
   // Quit with the last window on every platform, macOS included (no Harness windows yet).
   app.on('window-all-closed', () => {
@@ -67,6 +83,23 @@ if (!app.requestSingleInstanceLock()) {
     });
 }
 
+function focusMainWindow(): void {
+  if (mainWindow === null) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+}
+
+/**
+ * A `harnessstore:` URL the OS opened the app with: the Store sign-in callback, which completes
+ * the sign-in waiting for it (one that arrives with none waiting is ignored). The app comes to
+ * the front either way, since the User just left the browser for it.
+ */
+function openedWithUrl(url: string): void {
+  focusMainWindow();
+  if (process.platform === 'darwin') app.focus({ steal: true });
+  void runtime?.then((started) => started.auth.handleCallback(url));
+}
+
 /**
  * Starts the Runtime (SQLite, then the Model Gateway) before the window exists, then opens the
  * window. A failed step still opens it: the renderer asks `app.status` first and shows a blocking
@@ -83,6 +116,10 @@ async function start(): Promise<void> {
     },
     // net.fetch goes through Chromium's network stack, so the OS proxy settings apply.
     fetch: (url, init) => net.fetch(url, init),
+    storeFetch: (url, init) => net.fetch(url, init),
+    // The Store's GitHub sign-in opens in the User's own browser, never in a window of the app:
+    // no GitHub password is ever typed into Harness Store.
+    openExternal: (url) => shell.openExternal(url),
     // Connection tests, model listings and local detection use Node's fetch, as the Model
     // Gateway's upstream calls do, so a passing test means the Gateway reaches the same place.
     providerFetch: (input, init) => globalThis.fetch(input, init),
