@@ -1,12 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ConnectionSummary, IpcError, LocalProvider } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
+import { LM_STUDIO_DOWNLOAD_URL, OLLAMA_DOWNLOAD_URL } from '../models/LocalProvidersPanel.js';
+import { providerName } from '../models/names.js';
 import { useMounted } from './use-mounted.js';
 import { WizardActions, type WizardNav } from './WizardActions.js';
-
-const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
-const LM_STUDIO_DOWNLOAD_URL = 'https://lmstudio.ai';
 
 type Detection =
   | { readonly state: 'detecting' }
@@ -21,11 +20,15 @@ export interface DetectLocalStepProps {
 }
 
 /**
- * Looks for Ollama and LM Studio (`connections.detectLocal`) each time the step opens. Every
- * Provider found gets an Add checkbox, on by default; Continue adds the checked ones. While the
- * Runtime looks, Continue waits and Skip stays available. When nothing is found, the step says so
- * and links to both installers instead of showing an empty list. A failed search shows its error
- * above the same links and is treated like an empty one: Continue moves on.
+ * Looks for Ollama and LM Studio (`connections.detectLocal`) each time the step opens, and again
+ * on Detect again. Every Provider found gets an Add checkbox, on by default; Continue adds the
+ * checked ones, which is the User's explicit action: nothing is added before it. A Provider that
+ * already has its Connection (setup run again) shows Added with no checkbox and is not added
+ * again, so Continue neither re-enables a Connection the User disabled nor touches its saved base
+ * URL; the Models page edits it. While the Runtime looks (at most about 1.5 seconds),
+ * Continue waits and Skip stays available. When nothing is found, the step says so, links to both
+ * installers and offers Detect again, instead of showing an empty list. A failed search shows its
+ * error above the same links and is treated like an empty one: Continue moves on.
  */
 export function DetectLocalStep({ nav, added, onAdded }: DetectLocalStepProps) {
   const { t } = useI18n();
@@ -35,21 +38,27 @@ export function DetectLocalStep({ nav, added, onAdded }: DetectLocalStepProps) {
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<IpcError | null>(null);
   const mounted = useMounted();
+  /** Counts the detections started, so only the latest one's answer is shown. */
+  const runs = useRef(0);
+
+  const detect = useCallback(async () => {
+    runs.current += 1;
+    const run = runs.current;
+    setDetection({ state: 'detecting' });
+    const result = await window.api.connections.detectLocal();
+    if (run !== runs.current) return;
+    setDetection(
+      result.ok ? { state: 'done', found: result.data } : { state: 'failed', error: result.error },
+    );
+  }, []);
 
   useEffect(() => {
-    let current = true;
-    void window.api.connections.detectLocal().then((result) => {
-      if (!current) return;
-      setDetection(
-        result.ok
-          ? { state: 'done', found: result.data }
-          : { state: 'failed', error: result.error },
-      );
-    });
+    void detect();
     return () => {
-      current = false;
+      // A detection still running when the step closes answers into nothing.
+      runs.current += 1;
     };
-  }, []);
+  }, [detect]);
 
   const toggle = (providerId: string) => {
     setUnchecked((ids) => {
@@ -65,6 +74,7 @@ export function DetectLocalStep({ nav, added, onAdded }: DetectLocalStepProps) {
     if (detection.state === 'detecting') return;
     const toAdd = found.filter(
       (provider) =>
+        !provider.added &&
         !unchecked.has(provider.providerId) &&
         !added.some((connection) => connection.providerId === provider.providerId),
     );
@@ -102,27 +112,36 @@ export function DetectLocalStep({ nav, added, onAdded }: DetectLocalStepProps) {
         <>
           <p className="wizard-lead">{t('onboarding.detect.found_hint')}</p>
           <ul className="provider-list">
-            {found.map((provider) => (
-              <li key={provider.providerId} className="provider-row">
-                <div className="provider-row-text">
-                  <span className="provider-row-name">{provider.displayName}</span>
-                  <code className="provider-row-detail">
-                    {[provider.baseUrl, ...provider.models].join(' · ')}
-                  </code>
-                </div>
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={!unchecked.has(provider.providerId)}
-                    onChange={() => {
-                      toggle(provider.providerId);
-                    }}
-                    aria-label={t('onboarding.detect.add_named', { name: provider.displayName })}
-                  />
-                  <span aria-hidden="true">{t('onboarding.detect.add')}</span>
-                </label>
-              </li>
-            ))}
+            {found.map((provider) => {
+              const name = providerName(t, provider.providerId, provider.displayName);
+              return (
+                <li key={provider.providerId} className="provider-row">
+                  <div className="provider-row-text">
+                    <span className="provider-row-name">{name}</span>
+                    <code className="provider-row-detail">
+                      {[provider.baseUrl, ...provider.models].join(' · ')}
+                    </code>
+                  </div>
+                  {provider.added ? (
+                    <span className="status-chip" data-status="connected">
+                      {t('onboarding.detect.added')}
+                    </span>
+                  ) : (
+                    <label className="checkbox">
+                      <input
+                        type="checkbox"
+                        checked={!unchecked.has(provider.providerId)}
+                        onChange={() => {
+                          toggle(provider.providerId);
+                        }}
+                        aria-label={t('onboarding.detect.add_named', { name })}
+                      />
+                      <span aria-hidden="true">{t('onboarding.detect.add')}</span>
+                    </label>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </>
       ) : null}
@@ -137,6 +156,9 @@ export function DetectLocalStep({ nav, added, onAdded }: DetectLocalStepProps) {
               {t('onboarding.detect.install_lmstudio')}
             </a>
           </p>
+          <button type="button" className="button-secondary" onClick={() => void detect()}>
+            {t('onboarding.detect.again')}
+          </button>
         </div>
       ) : null}
       {addError === null ? null : <ErrorMessage error={addError} />}

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createDispatcher, UntrustedSenderError } from '../src/main/runtime/dispatcher.js';
 import { createHandlers, type IpcHandlers } from '../src/main/runtime/handlers.js';
 import { createConnectionsStub, providerPresets } from '../src/main/runtime/connections.js';
+import { ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
 import { IPC_METHODS } from '../src/shared/ipc.js';
@@ -31,6 +32,11 @@ const fakeServices: Services = {
   },
   providers: { list: () => providerPresets() },
   connections: createConnectionsStub(),
+  bindings: {
+    getGlobal: () => [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }],
+    setGlobal: (change) =>
+      ok(change.target === null ? [] : [{ slot: change.slot, ...change.target }]),
+  },
 };
 const en = translatorFor('en');
 
@@ -110,11 +116,87 @@ describe('IPC handlers against a fake service container', () => {
     'connectivity.check',
     'providers.list',
     'connections.detectLocal',
+    'connections.list',
+    'bindings.getGlobal',
   ])('%s rejects any input as invalid_input', async (method) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input: {} })).resolves.toMatchObject({
       ok: false,
       error: { code: 'invalid_input', params: { method } },
+    });
+  });
+
+  it.each([undefined, 42, { id: 'anthropic' }])(
+    'connections.remove rejects %j as invalid_input',
+    async (input) => {
+      const { dispatch } = dispatcherFor();
+      await expect(
+        dispatch(MAIN_WINDOW, { method: 'connections.remove', input }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'invalid_input', params: { method: 'connections.remove' } },
+      });
+    },
+  );
+
+  it.each([
+    undefined,
+    'anthropic',
+    { enabled: false },
+    { id: 7 },
+    { id: 'anthropic', enabled: 'no' },
+    { id: 'anthropic', apiKey: null },
+    { id: 'anthropic', secret: 'x' },
+  ])('connections.update rejects %j as invalid_input', async (input) => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'connections.update', input }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input', params: { method: 'connections.update' } },
+    });
+  });
+
+  it.each([
+    ['connections.test', undefined],
+    ['connections.test', 'anthropic'],
+    ['connections.test', { id: 'anthropic', model: 7 }],
+    ['connections.test', { id: 'anthropic', apiKey: 'x' }],
+    ['connections.testDraft', undefined],
+    ['connections.testDraft', { id: 'anthropic' }],
+    ['connections.testDraft', { providerId: 'anthropic', apiKey: null }],
+    ['connections.testDraft', { providerId: 'anthropic', displayName: 'x' }],
+    ['connections.models', undefined],
+    ['connections.models', { id: 'anthropic' }],
+    ['bindings.setGlobal', undefined],
+    ['bindings.setGlobal', { slot: 'default' }],
+    ['bindings.setGlobal', { slot: 'default', target: 'ollama/qwen3:8b' }],
+  ])('%s rejects %j as invalid_input', async (method, input) => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input', params: { method } },
+    });
+  });
+
+  it('bindings.getGlobal returns the global Slot Bindings', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'bindings.getGlobal' })).resolves.toEqual({
+      ok: true,
+      data: [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }],
+    });
+  });
+
+  it('bindings.setGlobal hands a well-formed change to the service', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'bindings.setGlobal',
+        input: { slot: 'fast', target: { connectionId: 'ollama', model: 'qwen3:8b' } },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      data: [{ slot: 'fast', connectionId: 'ollama', model: 'qwen3:8b' }],
     });
   });
 

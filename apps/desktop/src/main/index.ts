@@ -4,12 +4,13 @@
  * unit-tested under plain Node.
  */
 import { join, resolve } from 'node:path';
-import { app, BrowserWindow, ipcMain, net, screen, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, net, safeStorage, screen, session, shell } from 'electron';
 import { IPC_EVENT_CHANNEL, IPC_INVOKE_CHANNEL, type IpcEventMessage } from '../shared/ipc.js';
 import { startRuntime, type Runtime } from './runtime/bootstrap.js';
 import { createDispatcher } from './runtime/dispatcher.js';
 import { createHandlers } from './runtime/handlers.js';
 import { isAllowedExternalUrl, mainWindowOptions } from './runtime/main-window.js';
+import { createSafeStorageCipher } from './runtime/secret-cipher.js';
 import { initialWindowBounds } from './runtime/window-state.js';
 
 // A fresh profile for manual runs and E2E: must be set before `ready`.
@@ -82,6 +83,11 @@ async function start(): Promise<void> {
     },
     // net.fetch goes through Chromium's network stack, so the OS proxy settings apply.
     fetch: (url, init) => net.fetch(url, init),
+    // Connection tests, model listings and local detection use Node's fetch, as the Model
+    // Gateway's upstream calls do, so a passing test means the Gateway reaches the same place.
+    providerFetch: (input, init) => globalThis.fetch(input, init),
+    // safeStorage is usable from `ready` on, which start() runs after.
+    secretCipher: createSafeStorageCipher(safeStorage, process.platform),
     emit: (event, payload) => {
       if (mainWindow === null || mainWindow.isDestroyed()) return;
       const message: IpcEventMessage = { event, payload };

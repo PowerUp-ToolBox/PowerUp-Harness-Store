@@ -1,5 +1,11 @@
 import type { IpcMethodName, IpcOutput, IpcResult } from '../../shared/ipc.js';
-import { parseConnectionDraft } from './connections.js';
+import { parseGlobalBindingChange } from './bindings.js';
+import {
+  parseConnectionDraft,
+  parseConnectionTestDraft,
+  parseConnectionTestRequest,
+  parseConnectionUpdate,
+} from './connections.js';
 import { fail, ok } from './ipc-result.js';
 import type { Services } from './services.js';
 import { parseSettingsPatch } from './settings.js';
@@ -59,10 +65,46 @@ export function createHandlers(services: Services): IpcHandlers {
       if (input !== undefined) return fail('invalid_input', { method: 'connections.detectLocal' });
       return ok(await services.connections.detectLocal());
     },
+    'connections.list': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'connections.list' });
+      return ok(services.connections.list());
+    },
     'connections.add': (input) => {
       const draft = parseConnectionDraft(input);
       if (draft === null) return fail('invalid_input', { method: 'connections.add' });
       return services.connections.add(draft);
+    },
+    'connections.update': (input) => {
+      const update = parseConnectionUpdate(input);
+      if (update === null) return fail('invalid_input', { method: 'connections.update' });
+      return services.connections.update(update);
+    },
+    'connections.test': (input) => {
+      const request = parseConnectionTestRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'connections.test' });
+      return services.connections.test(request);
+    },
+    'connections.testDraft': (input) => {
+      const draft = parseConnectionTestDraft(input);
+      if (draft === null) return fail('invalid_input', { method: 'connections.testDraft' });
+      return services.connections.testDraft(draft);
+    },
+    'connections.models': (input) => {
+      if (typeof input !== 'string') return fail('invalid_input', { method: 'connections.models' });
+      return services.connections.models(input);
+    },
+    'connections.remove': (input) => {
+      if (typeof input !== 'string') return fail('invalid_input', { method: 'connections.remove' });
+      return services.connections.remove(input);
+    },
+    'bindings.getGlobal': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'bindings.getGlobal' });
+      return ok(services.bindings.getGlobal());
+    },
+    'bindings.setGlobal': (input) => {
+      const change = parseGlobalBindingChange(input);
+      if (change === null) return fail('invalid_input', { method: 'bindings.setGlobal' });
+      return services.bindings.setGlobal(change);
     },
   };
 }

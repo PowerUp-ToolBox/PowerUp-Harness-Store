@@ -3,11 +3,18 @@ import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   ConnectionSummary,
+  GlobalBinding,
   IpcResult,
   LocalProvider,
   SettingsPatch,
 } from '../../src/shared/ipc.js';
-import { installFakeApi, renderApp } from './render-app.js';
+import {
+  connectionSummary,
+  FAKE_PRESETS,
+  installFakeApi,
+  renderApp,
+  ZHIPU_PRESET,
+} from './render-app.js';
 
 const WELCOME = 'Run any AI agent on any model you already have.';
 const DETECT = 'Local Providers';
@@ -53,26 +60,27 @@ const OLLAMA: LocalProvider = {
   displayName: 'Ollama',
   baseUrl: 'http://127.0.0.1:11434/v1',
   models: ['qwen3:8b', 'llama3.2:3b'],
+  added: false,
 };
 const LM_STUDIO: LocalProvider = {
   providerId: 'lmstudio',
   displayName: 'LM Studio',
   baseUrl: 'http://127.0.0.1:1234/v1',
   models: ['gemma-3'],
+  added: false,
 };
 
-/** connections.add as P0-03 will answer: the Connection, with the models it lists. */
+/** connections.add as the Runtime answers: the Connection, with the models it lists. */
 function connectionFor(providerId: string, displayName: string, models: string[]) {
   return (): Promise<IpcResult<ConnectionSummary>> =>
     Promise.resolve({
       ok: true,
-      data: {
+      data: connectionSummary({
         id: providerId,
-        providerId,
         displayName,
         local: providerId === 'ollama' || providerId === 'lmstudio',
         models,
-      },
+      }),
     });
 }
 
@@ -308,7 +316,7 @@ describe('Local Providers', () => {
     expect(picker.selectedOptions[0]?.textContent).toBe('qwen3:8b');
     expect(within(picker).getByRole('group', { name: 'Ollama' })).toBeDefined();
 
-    fireEvent.change(picker, { target: { value: '1' } });
+    fireEvent.change(picker, { target: { value: 'ollama/llama3.2:3b' } });
     await click('Continue');
     expect(heading()).toBe(DONE);
     const [connections, defaultModel] = screen.getAllByRole('definition');
@@ -339,7 +347,7 @@ describe('Remote Provider', () => {
     return api;
   }
 
-  it('offers the presets from providers.list, the custom endpoint by name', async () => {
+  it('offers the presets from providers.list without the local ones, the custom endpoint by name', async () => {
     await openCloudStep();
     const provider = screen.getByLabelText<HTMLSelectElement>('Provider');
     expect([...provider.options].map((option) => option.textContent)).toEqual([
@@ -417,6 +425,81 @@ describe('Remote Provider', () => {
     expect(heading()).toBe(DEFAULT_MODEL);
   });
 
+  it('shows a key with a space inside under the key field, without calling the Runtime', async () => {
+    const api = await openCloudStep();
+    const key = screen.getByLabelText<HTMLInputElement>('API key');
+    fireEvent.change(key, { target: { value: 'sk-ant 1' } });
+    await click('Test connection');
+    expect(api.connections.add).not.toHaveBeenCalled();
+    expect(screen.queryByRole('group', { name: 'Connection failed' })).toBeNull();
+    expect(screen.getByText('An API key has no spaces or line breaks.')).toBeDefined();
+    expect(key.getAttribute('aria-invalid')).toBe('true');
+    expect(document.getElementById(key.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
+      'An API key has no spaces or line breaks.',
+    );
+    expect(document.activeElement).toBe(key);
+
+    await click('Continue');
+    expect(heading()).toBe(CLOUD);
+    expect(api.connections.add).not.toHaveBeenCalled();
+
+    // Fixing the key clears the message.
+    fireEvent.change(key, { target: { value: 'sk-ant-1' } });
+    expect(screen.queryByText('An API key has no spaces or line breaks.')).toBeNull();
+    expect(key.getAttribute('aria-invalid')).toBe('false');
+  });
+
+  it('asks the custom endpoint for a base URL with its scheme, without calling the Runtime', async () => {
+    const api = await openCloudStep();
+    fireEvent.change(screen.getByLabelText('Provider'), {
+      target: { value: 'openai-compatible' },
+    });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'vLLM' } });
+    const url = screen.getByLabelText<HTMLInputElement>('Base URL');
+    fireEvent.change(url, { target: { value: 'localhost:8000/v1' } });
+    await click('Test connection');
+    expect(api.connections.add).not.toHaveBeenCalled();
+    expect(screen.queryByRole('group', { name: 'Connection failed' })).toBeNull();
+    expect(screen.getByText('Enter a URL that starts with http:// or https://.')).toBeDefined();
+    expect(url.getAttribute('aria-invalid')).toBe('true');
+    expect(document.activeElement).toBe(url);
+
+    fireEvent.change(url, { target: { value: 'http://localhost:8000/v1' } });
+    await click('Test connection');
+    expect(api.connections.add).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'openai-compatible',
+      displayName: 'vLLM',
+      baseUrl: 'http://localhost:8000/v1',
+    });
+  });
+
+  it('refuses a custom endpoint name a saved Connection already has, ignoring letter case', async () => {
+    const api = await openCloudStep();
+    api.connections.list.mockResolvedValue({
+      ok: true,
+      data: [
+        connectionSummary({
+          id: 'openai-compatible:vllm',
+          displayName: 'vLLM',
+          baseUrl: 'http://10.0.0.2:8000/v1',
+        }),
+      ],
+    });
+    fireEvent.change(screen.getByLabelText('Provider'), {
+      target: { value: 'openai-compatible' },
+    });
+    const name = screen.getByLabelText<HTMLInputElement>('Name');
+    fireEvent.change(name, { target: { value: ' VLLM ' } });
+    fireEvent.change(screen.getByLabelText('Base URL'), {
+      target: { value: 'http://10.0.0.3:8000/v1' },
+    });
+    await click('Test connection');
+    expect(api.connections.add).not.toHaveBeenCalled();
+    expect(screen.getByText('Another Connection already has this name.')).toBeDefined();
+    expect(name.getAttribute('aria-invalid')).toBe('true');
+    expect(document.activeElement).toBe(name);
+  });
+
   it('Continue with an untested key tests it first, and moves on only when it is added', async () => {
     const api = await openCloudStep();
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-ant-1' } });
@@ -429,7 +512,9 @@ describe('Remote Provider', () => {
     );
     await click('Continue');
     expect(heading()).toBe(DEFAULT_MODEL);
-    expect(screen.getByLabelText<HTMLSelectElement>('Default Model').value).toBe('0');
+    expect(screen.getByLabelText<HTMLSelectElement>('Default Model').value).toBe(
+      'anthropic/claude-sonnet-4-5',
+    );
 
     await click('Back');
     expect(screen.getByText('Connected: Anthropic')).toBeDefined();
@@ -520,9 +605,267 @@ describe('Remote Provider', () => {
   });
 });
 
+describe('Remote Provider without a model list', () => {
+  it('asks for the model to test with, and adds the Connection with it', async () => {
+    const api = installFreshProfile();
+    api.providers.list.mockResolvedValue({ ok: true, data: [...FAKE_PRESETS, ZHIPU_PRESET] });
+    api.connections.add.mockImplementation(connectionFor('zhipu', 'Zhipu AI (GLM)', []));
+    await renderApp('');
+    await click('Continue');
+    await click('Skip');
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'zhipu' } });
+    fireEvent.change(screen.getByLabelText('API key'), {
+      target: { value: 'zhipu-key-0123456789' },
+    });
+    const test = screen.getByRole('button', { name: 'Test connection' });
+    expect(test.hasAttribute('disabled')).toBe(true);
+    fireEvent.change(screen.getByLabelText('Model to test with'), {
+      target: { value: 'glm-4.5' },
+    });
+    await click('Test connection');
+    expect(api.connections.add).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'zhipu',
+      apiKey: 'zhipu-key-0123456789',
+      testModel: 'glm-4.5',
+    });
+  });
+});
+
+describe('Remote Provider with a catalogue (Anthropic, Google)', () => {
+  it("tests with the catalogue's model unless the User names another", async () => {
+    const api = installFreshProfile();
+    api.connections.add.mockImplementation(connectionFor('anthropic', 'Anthropic', []));
+    await renderApp('');
+    await click('Continue');
+    await click('Skip');
+    const model = screen.getByLabelText<HTMLInputElement>('Model to test with (optional)');
+    expect(model.placeholder).toBe('claude-haiku-5-5');
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-ant-0123456789' } });
+    fireEvent.change(model, { target: { value: ' claude-sonnet-5-5 ' } });
+    await click('Test connection');
+    expect(api.connections.add).toHaveBeenCalledExactlyOnceWith({
+      providerId: 'anthropic',
+      apiKey: 'sk-ant-0123456789',
+      testModel: 'claude-sonnet-5-5',
+    });
+  });
+});
+
+describe('the Default Model picker', () => {
+  /** The wizard at its Default Model step, with `connection` added on the Remote Provider step. */
+  async function openDefaultStep(connection: ConnectionSummary) {
+    const api = installFreshProfile();
+    api.connections.add.mockResolvedValue({ ok: true, data: connection });
+    await renderApp('');
+    await click('Continue');
+    await click('Skip');
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-ant-0123' } });
+    await click('Continue');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(heading()).toBe(DEFAULT_MODEL);
+    return api;
+  }
+
+  const ANTHROPIC = connectionSummary({
+    id: 'anthropic',
+    models: ['claude-opus-5-5', 'claude-haiku-5-5'],
+  });
+
+  it("annotates the catalogue's models with context window, tool calling and vision", async () => {
+    const api = installFreshProfile();
+    api.connections.models.mockResolvedValue({
+      ok: true,
+      data: [
+        { id: 'claude-opus-5-5', contextWindow: 1_000_000, tools: true, vision: true },
+        { id: 'claude-haiku-5-5', contextWindow: 200_000, tools: true, vision: false },
+      ],
+    });
+    api.connections.add.mockResolvedValue({ ok: true, data: ANTHROPIC });
+    await renderApp('');
+    await click('Continue');
+    await click('Skip');
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-ant-0123' } });
+    await click('Continue');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.connections.models).toHaveBeenCalledWith('anthropic');
+    const picker = screen.getByLabelText<HTMLSelectElement>('Default Model');
+    expect(
+      within(within(picker).getByRole('group', { name: 'Anthropic' }))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual([
+      'claude-opus-5-5 · 1M context · tools · vision',
+      'claude-haiku-5-5 · 200K context · tools',
+    ]);
+  });
+
+  it('accepts any typed model name for a Connection, and keeps it as the choice', async () => {
+    await openDefaultStep(ANTHROPIC);
+    await click('Type a model name');
+    const typed = screen.getByRole('textbox', { name: 'Type a model name' });
+    expect(typed.getAttribute('placeholder')).toBe('provider/model, e.g. ollama/mistral:7b');
+
+    fireEvent.change(typed, { target: { value: 'my-nonsense-model' } });
+    await click('Use');
+    expect(
+      screen.getByText('Type it as provider/model, for example ollama/mistral:7b.'),
+    ).toBeDefined();
+    fireEvent.change(typed, { target: { value: 'groq/llama-4' } });
+    await click('Use');
+    expect(screen.getByText('No enabled Connection is called groq.')).toBeDefined();
+
+    fireEvent.change(typed, { target: { value: 'anthropic/my-nonsense-model:v0' } });
+    await click('Use');
+    const picker = screen.getByLabelText<HTMLSelectElement>('Default Model');
+    expect(picker.value).toBe('anthropic/my-nonsense-model:v0');
+    expect(picker.selectedOptions[0]?.textContent).toBe('my-nonsense-model:v0 (typed)');
+    await click('Continue');
+    expect(heading()).toBe(DONE);
+    expect(screen.getByText('my-nonsense-model:v0 on Anthropic')).toBeDefined();
+  });
+
+  it("says when a Connection's models cannot be listed, with the Provider's text", async () => {
+    const api = installFreshProfile();
+    api.connections.models.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'provider_error',
+        messageKey: 'error.provider_error',
+        params: { detail: 'Invalid API Key' },
+        message: 'The Provider answered with an error: Invalid API Key',
+      },
+    });
+    api.connections.add.mockResolvedValue({ ok: true, data: connectionSummary({ id: 'openai' }) });
+    await renderApp('');
+    await click('Continue');
+    await click('Skip');
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'openai' } });
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-0123' } });
+    await click('Continue');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByText('Could not list the models of OpenAI. You can still type a model name.'),
+    ).toBeDefined();
+    expect(screen.getByRole('alert').textContent).toBe(
+      'The Provider answered with an error: Invalid API Key',
+    );
+    expect(screen.getByRole('button', { name: 'Type a model name' })).toBeDefined();
+  });
+});
+
 describe('Default model and Done', () => {
+  /** The wizard at its Default Model step, with a detected Ollama added on the way. */
+  async function openWithOllama() {
+    const api = installFreshProfile();
+    api.connections.detectLocal.mockResolvedValue({ ok: true, data: [OLLAMA] });
+    api.connections.add.mockImplementation(
+      connectionFor('ollama', 'Ollama', ['qwen3:8b', 'llama3.2:3b']),
+    );
+    await renderApp('');
+    await click('Continue');
+    await click('Continue');
+    await click('Skip');
+    expect(heading()).toBe(DEFAULT_MODEL);
+    return api;
+  }
+
+  it('Continue saves the picked model as the global `default` Slot Binding, then shows it', async () => {
+    const api = await openWithOllama();
+    fireEvent.change(screen.getByLabelText('Default Model'), {
+      target: { value: 'ollama/llama3.2:3b' },
+    });
+    await click('Continue');
+    expect(api.bindings.setGlobal).toHaveBeenCalledExactlyOnceWith({
+      slot: 'default',
+      target: { connectionId: 'ollama', model: 'llama3.2:3b' },
+    });
+    expect(heading()).toBe(DONE);
+    expect(screen.getByText('llama3.2:3b on Ollama')).toBeDefined();
+  });
+
+  it('keeps the Default Model saved in this run in the summary after Back, then Skip', async () => {
+    const api = await openWithOllama();
+    fireEvent.change(screen.getByLabelText('Default Model'), {
+      target: { value: 'ollama/llama3.2:3b' },
+    });
+    await click('Continue');
+    expect(heading()).toBe(DONE);
+    await click('Back');
+    expect(heading()).toBe(DEFAULT_MODEL);
+    expect(screen.getByLabelText<HTMLSelectElement>('Default Model').value).toBe(
+      'ollama/llama3.2:3b',
+    );
+    // Another pick that is never saved does not change what is stored, nor the summary.
+    fireEvent.change(screen.getByLabelText('Default Model'), {
+      target: { value: 'ollama/qwen3:8b' },
+    });
+    await click('Skip');
+    expect(heading()).toBe(DONE);
+    expect(api.bindings.setGlobal).toHaveBeenCalledOnce();
+    expect(screen.getByText('llama3.2:3b on Ollama')).toBeDefined();
+  });
+
+  it('cannot be left with Skip or Back while the Default Model is being saved', async () => {
+    const api = await openWithOllama();
+    let answer: (result: IpcResult<readonly GlobalBinding[]>) => void = () => undefined;
+    api.bindings.setGlobal.mockReturnValueOnce(
+      new Promise<IpcResult<readonly GlobalBinding[]>>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await click('Continue');
+    expect(screen.getByRole('button', { name: 'Skip' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Back' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Continue' }).hasAttribute('disabled')).toBe(true);
+    await click('Skip');
+    expect(heading()).toBe(DEFAULT_MODEL);
+
+    await act(async () => {
+      answer({ ok: true, data: [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }] });
+      await Promise.resolve();
+    });
+    expect(heading()).toBe(DONE);
+    expect(screen.getByText('qwen3:8b on Ollama')).toBeDefined();
+  });
+
+  it('stays on the step with the error when the Default Model cannot be saved', async () => {
+    const api = await openWithOllama();
+    api.bindings.setGlobal.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'provider_not_connected',
+        messageKey: 'error.provider_not_connected',
+        message: 'There is no Connection for this Provider. Add one on the Models page.',
+      },
+    });
+    await click('Continue');
+    expect(heading()).toBe(DEFAULT_MODEL);
+    expect(screen.getByRole('alert').textContent).toBe(
+      'There is no Connection for this Provider. Add one on the Models page.',
+    );
+    await click('Continue');
+    expect(api.bindings.setGlobal).toHaveBeenCalledTimes(2);
+    expect(heading()).toBe(DONE);
+    expect(screen.getByText('qwen3:8b on Ollama')).toBeDefined();
+  });
+
+  it('Skip sets no Default Model, keeping any set before', async () => {
+    const api = await openWithOllama();
+    await click('Skip');
+    expect(heading()).toBe(DONE);
+    expect(api.bindings.setGlobal).not.toHaveBeenCalled();
+    const [, defaultModel] = screen.getAllByRole('definition');
+    expect(defaultModel?.textContent).toBe('None');
+  });
+
   it('says the Default Model can be set later when no Connection was added, and the summary lists nothing', async () => {
-    installFreshProfile();
+    const api = installFreshProfile();
     await renderApp('');
     await click('Continue');
     await click('Continue');
@@ -532,6 +875,7 @@ describe('Default model and Done', () => {
     await click('Continue');
     expect(screen.getAllByText('None')).toHaveLength(2);
     expect(screen.getByText(/^No Connection yet\./)).toBeDefined();
+    expect(api.bindings.setGlobal).not.toHaveBeenCalled();
   });
 
   it('shows the error when onboardingDone cannot be saved, and Open Store still works', async () => {

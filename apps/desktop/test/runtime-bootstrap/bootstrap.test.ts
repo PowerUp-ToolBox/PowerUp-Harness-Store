@@ -18,6 +18,8 @@ import {
 import { MIGRATIONS } from '../../src/main/runtime/database.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
+import { createFakeCipher } from '../support/fake-cipher.js';
+import { offlineProviderFetch } from '../support/provider-fetch.js';
 
 const MAIN_WINDOW = {};
 
@@ -43,6 +45,8 @@ async function launch(options: Partial<RuntimeOptions> = {}): Promise<Runtime> {
     logError: () => undefined,
     // No network in these tests: the Store connectivity check sees a refused connection.
     fetch: () => Promise.reject(new TypeError('fetch failed')),
+    secretCipher: createFakeCipher(),
+    providerFetch: offlineProviderFetch,
     ...options,
   });
   started.push(runtime);
@@ -136,7 +140,13 @@ describe('startRuntime on a clean install', () => {
     expect(databasePath).toBe(join(dataDir, 'harness-store.sqlite'));
     expect(existsSync(databasePath)).toBe(true);
     await runtime.shutdown();
-    expect(tables(databasePath)).toEqual(['settings', 'usage_records']);
+    expect(tables(databasePath)).toEqual([
+      'connections',
+      'secrets',
+      'settings',
+      'slot_bindings',
+      'usage_records',
+    ]);
   });
 
   it('starts the Model Gateway on loopback; a TCP connection to its port succeeds', async () => {

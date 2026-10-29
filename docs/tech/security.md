@@ -6,7 +6,7 @@
 3. **Store** — first-party service; never sees credentials, Usage Records or conversation content.
 
 ## What the platform guarantees in P0
-- **Credential isolation**: Provider credentials are stored encrypted (Electron `safeStorage`, OS keychain-backed) and are never written to a Harness's environment, files or Data Directory. `OPENAI_*` / `ANTHROPIC_*` variables inherited from the User's shell are stripped before spawning.
+- **Credential isolation**: Provider credentials are stored encrypted (Electron `safeStorage`, OS keychain-backed) and are never written to a Harness's environment, files or Data Directory. They are never stored in plaintext: when OS encryption is unavailable (on Linux also the `basic_text` backend, which uses a hard-coded password), adding a key is refused with guidance to enable an OS keyring. Decrypted keys stay in the Runtime's main process; the app's own UI sees only the last 4 characters. `OPENAI_*` / `ANTHROPIC_*` variables inherited from the User's shell are stripped before spawning.
 - **Attribution**: every model call carries a per-launch Gateway Token; tokens are unguessable, loopback-only, and revoked at process exit. A Harness cannot impersonate another Harness.
 - **Package integrity**: the Store records sha256 at publish; the Runtime verifies before unpacking; zip-slip, symlinks and absolute paths are rejected.
 - **Immutability**: a published Harness Version cannot change. Updates are explicit, and re-consent is required when Declared Permissions widen or Entry/runtime kind changes.

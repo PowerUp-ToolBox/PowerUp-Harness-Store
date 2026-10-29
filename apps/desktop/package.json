@@ -19,7 +19,9 @@
     "test:i18n": "vitest run i18n",
     "test:runtime-bootstrap": "vitest run runtime-bootstrap",
     "test:connectivity": "vitest run connectivity",
-    "test:onboarding": "vitest run onboarding"
+    "test:onboarding": "vitest run onboarding",
+    "test:connections": "vitest run connections",
+    "test:bindings": "vitest run bindings"
   },
   "devDependencies": {
     "@formatjs/icu-messageformat-parser": "3.5.21",

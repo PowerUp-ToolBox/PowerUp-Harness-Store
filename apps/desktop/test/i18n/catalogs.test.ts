@@ -1,4 +1,4 @@
-import { GATEWAY_ERROR_STATUS, type GatewayErrorCode } from '@harness-store/gateway';
+import { GATEWAY_ERROR_STATUS, PROVIDERS, type GatewayErrorCode } from '@harness-store/gateway';
 import { interpolate, MESSAGES_EN } from '@harness-store/manifest';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import en from '../../src/shared/i18n/en.json';
@@ -7,7 +7,13 @@ import { translatorFor } from '../../src/shared/i18n/translate.js';
 import type { IpcErrorCode } from '../../src/shared/ipc.js';
 import { argumentsOf, compareCatalogs } from './catalog-check.js';
 
-const IPC_OWN_CODES = ['internal_error', 'invalid_input', 'not_implemented'] as const;
+const IPC_OWN_CODES = [
+  'internal_error',
+  'invalid_input',
+  'not_implemented',
+  'encryption_unavailable',
+  'unexpected_response',
+] as const;
 
 describe('catalog parity (CI)', () => {
   it('zh-CN.json has exactly the keys of en.json, valid ICU with the same arguments', () => {
@@ -82,5 +88,25 @@ describe('error codes in the catalogs', () => {
 
   it('IpcErrorCode is exactly the IPC codes plus the Gateway codes', () => {
     expectTypeOf<IpcErrorCode>().toEqualTypeOf<GatewayErrorCode | (typeof IPC_OWN_CODES)[number]>();
+  });
+});
+
+describe('Provider names in the catalogs', () => {
+  it('every Provider of the Gateway has provider.<id> in en and zh-CN', () => {
+    const missing = PROVIDERS.map((provider) => `provider.${provider.id}`).filter(
+      (key) => !Object.hasOwn(en, key) || !Object.hasOwn(zhCN, key),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it('the en provider.* entries are the Gateway display names, and nothing else', () => {
+    const fromCatalog = Object.fromEntries(
+      Object.entries(en).filter(([key]) => key.startsWith('provider.')),
+    );
+    expect(fromCatalog).toEqual(
+      Object.fromEntries(
+        PROVIDERS.map((provider) => [`provider.${provider.id}`, provider.displayName]),
+      ),
+    );
   });
 });

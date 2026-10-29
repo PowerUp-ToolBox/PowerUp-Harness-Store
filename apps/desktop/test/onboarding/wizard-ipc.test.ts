@@ -2,13 +2,15 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { PROVIDERS } from '@harness-store/gateway';
+import { PROVIDERS, createGateway, type GatewayOptions } from '@harness-store/gateway';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startRuntime, type Runtime } from '../../src/main/runtime/bootstrap.js';
 import { parseConnectionDraft, providerPresets } from '../../src/main/runtime/connections.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { parseSettingsPatch } from '../../src/main/runtime/settings.js';
+import { createFakeCipher } from '../support/fake-cipher.js';
+import { anthropicProviderFetch } from '../support/provider-fetch.js';
 
 const MAIN_WINDOW = {};
 
@@ -26,6 +28,12 @@ afterEach(async () => {
 
 /** One app launch against `dataDir`, without Electron or network. */
 async function launch(): Promise<Runtime> {
+  return (await launchWithGateway()).runtime;
+}
+
+/** {@link launch}, also handing out the callbacks the Runtime gave its Model Gateway. */
+async function launchWithGateway(): Promise<{ runtime: Runtime; gateway: GatewayOptions }> {
+  let gateway: GatewayOptions | undefined;
   const runtime = await startRuntime({
     dataDir,
     version: '1.0.0',
@@ -33,9 +41,17 @@ async function launch(): Promise<Runtime> {
     quit: () => undefined,
     logError: () => undefined,
     fetch: () => Promise.reject(new TypeError('fetch failed')),
+    secretCipher: createFakeCipher(),
+    // The Remote Provider step's Anthropic Connection is tested against a canned reply.
+    providerFetch: anthropicProviderFetch,
+    createGateway: (options) => {
+      gateway = options;
+      return createGateway(options);
+    },
   });
   started.push(runtime);
-  return runtime;
+  if (gateway === undefined) throw new Error('The Runtime did not create a Gateway');
+  return { runtime, gateway };
 }
 
 function call(runtime: Runtime, method: string, input?: unknown) {
@@ -118,24 +134,15 @@ describe('onboarding_done across launches', () => {
 });
 
 describe('providers.list', () => {
-  it("lists the Gateway's Providers in order, without the local ones, the custom endpoint last", async () => {
+  it("lists every Provider of the Gateway's table in order, marking the local and custom ones", async () => {
     const runtime = await launch();
     const result = await call(runtime, 'providers.list');
     expect(result.ok).toBe(true);
     const presets = result.ok ? (result.data as ReturnType<typeof providerPresets>) : [];
-    expect(presets.map((preset) => preset.id)).toEqual([
-      'anthropic',
-      'openai',
-      'google',
-      'openrouter',
-      'deepseek',
-      'qwen',
-      'moonshot',
-      'zhipu',
-      'minimax',
-      'doubao',
-      'groq',
-      'openai-compatible',
+    expect(presets.map((preset) => preset.id)).toEqual(PROVIDERS.map((provider) => provider.id));
+    expect(presets.filter((preset) => preset.local).map((preset) => preset.id)).toEqual([
+      'ollama',
+      'lmstudio',
     ]);
     expect(presets.filter((preset) => preset.custom).map((preset) => preset.id)).toEqual([
       'openai-compatible',
@@ -145,28 +152,58 @@ describe('providers.list', () => {
       displayName: 'Anthropic',
       requiresKey: true,
       custom: false,
+      local: false,
+      baseUrl: 'https://api.anthropic.com/v1',
+      docsUrl: 'https://docs.claude.com/en/api/overview',
+      supportsModelList: false,
       keyPlaceholder: 'sk-ant-...',
+      needsTestModel: false,
+      testModel: 'claude-haiku-5-5',
     });
+    expect(presets.find((preset) => preset.custom)).toMatchObject({ baseUrl: null });
+    // The catalogue's test model, which the User may replace; none where there is no catalogue.
+    expect(presets.find((preset) => preset.id === 'google')).toMatchObject({
+      testModel: 'gemini-3.5-flash-lite',
+    });
+    expect(presets.filter((preset) => preset.testModel !== null).map(({ id }) => id)).toEqual([
+      'anthropic',
+      'google',
+    ]);
+    expect(presets.filter((preset) => preset.needsTestModel).map((preset) => preset.id)).toEqual([
+      'zhipu',
+      'minimax',
+      'doubao',
+    ]);
   });
 
   it('follows the table it is given', () => {
-    expect(providerPresets(PROVIDERS.filter((provider) => provider.id === 'ollama'))).toEqual([]);
+    expect(
+      providerPresets(PROVIDERS.filter((provider) => provider.id === 'ollama')).map(
+        (preset) => preset.id,
+      ),
+    ).toEqual(['ollama']);
   });
 });
 
-describe('connections before P0-03', () => {
-  it('connections.detectLocal finds nothing', async () => {
+describe('connections for the wizard', () => {
+  it('connections.detectLocal finds nothing when neither local Provider answers', async () => {
     const runtime = await launch();
     await expect(call(runtime, 'connections.detectLocal')).resolves.toEqual({ ok: true, data: [] });
   });
 
-  it('connections.add answers not_implemented for a well-formed draft', async () => {
-    const runtime = await launch();
+  it('connections.add saves what the Remote Provider step sends, and the Connection stays after a relaunch', async () => {
+    const first = await launch();
     await expect(
-      call(runtime, 'connections.add', { providerId: 'anthropic', apiKey: 'sk-ant-test' }),
+      call(first, 'connections.add', { providerId: 'anthropic', apiKey: 'sk-ant-test-0123456789' }),
     ).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'not_implemented', messageKey: 'error.not_implemented' },
+      ok: true,
+      data: { id: 'anthropic', providerId: 'anthropic', keyHint: '6789', enabled: true },
+    });
+    await first.shutdown();
+    const second = await launch();
+    await expect(call(second, 'connections.list')).resolves.toMatchObject({
+      ok: true,
+      data: [{ id: 'anthropic', keyHint: '6789' }],
     });
   });
 
@@ -195,5 +232,66 @@ describe('connections before P0-03', () => {
     expect(parseConnectionDraft(custom)).toEqual(custom);
     const local = { providerId: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1' };
     expect(parseConnectionDraft(local)).toEqual(local);
+  });
+});
+
+describe("the wizard's Default Model", () => {
+  it('the calls of a completed wizard leave a working global `default` Slot Binding', async () => {
+    const { runtime, gateway } = await launchWithGateway();
+    // The wizard's calls, in its order: Local Providers finds nothing, the Remote Provider step
+    // adds a Connection, the Default model step saves the picked model, Done ends the wizard.
+    await expect(call(runtime, 'connections.detectLocal')).resolves.toEqual({ ok: true, data: [] });
+    await expect(
+      call(runtime, 'connections.add', {
+        providerId: 'anthropic',
+        apiKey: 'sk-ant-test-0123456789',
+      }),
+    ).resolves.toMatchObject({ ok: true, data: { id: 'anthropic' } });
+    await expect(
+      call(runtime, 'bindings.setGlobal', {
+        slot: 'default',
+        target: { connectionId: 'anthropic', model: 'claude-haiku-5-5' },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      data: [{ slot: 'default', connectionId: 'anthropic', model: 'claude-haiku-5-5' }],
+    });
+    await call(runtime, 'settings.set', { onboardingDone: true });
+
+    // What the Model Gateway asks for a Harness's `default` Slot, and for a Slot nothing else fills.
+    for (const slot of ['default', 'reviewer']) {
+      await expect(gateway.resolveBinding({ harnessId: 'acme/hello', slot })).resolves.toEqual({
+        providerId: 'anthropic',
+        model: 'claude-haiku-5-5',
+        source: 'default',
+      });
+    }
+
+    await runtime.shutdown();
+    const relaunched = await launchWithGateway();
+    await expect(call(relaunched.runtime, 'bindings.getGlobal')).resolves.toEqual({
+      ok: true,
+      data: [{ slot: 'default', connectionId: 'anthropic', model: 'claude-haiku-5-5' }],
+    });
+    await expect(
+      relaunched.gateway.resolveBinding({ harnessId: 'acme/hello', slot: 'default' }),
+    ).resolves.toMatchObject({ providerId: 'anthropic', model: 'claude-haiku-5-5' });
+  });
+
+  it('a Default model step skipped leaves every Slot unbound, the Connection added', async () => {
+    const { runtime, gateway } = await launchWithGateway();
+    await expect(
+      call(runtime, 'connections.add', {
+        providerId: 'anthropic',
+        apiKey: 'sk-ant-test-0123456789',
+      }),
+    ).resolves.toMatchObject({ ok: true, data: { id: 'anthropic', enabled: true } });
+    await expect(call(runtime, 'settings.set', { onboardingDone: true })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(call(runtime, 'bindings.getGlobal')).resolves.toEqual({ ok: true, data: [] });
+    for (const slot of ['default', 'reviewer']) {
+      await expect(gateway.resolveBinding({ harnessId: 'acme/hello', slot })).resolves.toBeNull();
+    }
   });
 });

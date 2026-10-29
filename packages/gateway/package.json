@@ -25,6 +25,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:catalogues": "vitest run catalogue",
+    "test:connection-check": "vitest run connection-check",
     "bench": "node scripts/bench.mjs"
   },
   "dependencies": {

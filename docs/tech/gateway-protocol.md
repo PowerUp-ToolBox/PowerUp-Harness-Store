@@ -73,9 +73,9 @@ Validation (`400 invalid_request`, details in `message`):
 
 `model` is one of:
 - a **Slot name** declared in the Harness Manifest (`default`, `fast`, ...), the normal case;
-- an explicit **`provider/model`** id (see §6), for advanced Harnesses; allowed only if the User has a Connection for that Provider.
+- an explicit **`provider/model`** id (see §6), for advanced Harnesses; allowed only if the User has an enabled Connection for that Provider.
 
-A `model` containing `/` is an explicit id, split at the first `/` (`openrouter/anthropic/claude-sonnet-4-5` is the model `anthropic/claude-sonnet-4-5` at `openrouter`). The Provider part must be a Provider id of §6, or `openai-compatible:<name>` with `<name>` matching `^[a-z0-9][a-z0-9-]*$`, and the model part must be a valid model name for it; otherwise the request gets `404 unknown_slot`. A model name is non-empty, has no whitespace, `?`, `#`, `%` or `\`, and no empty, `.` or `..` segment between its `/`s, so no adapter can turn it into another request URL. A `google` model name, which the adapter puts into the request path, must also be a Gemini model name: `^(?:(?:models|tunedModels)/)?[A-Za-z0-9][A-Za-z0-9._-]*$`. A `model` without `/` is a Slot name (Slot names never contain `/`). An explicit id never consults the Slot Bindings; it needs a Connection for its Provider, else `403 provider_not_connected`.
+A `model` containing `/` is an explicit id, split at the first `/` (`openrouter/anthropic/claude-sonnet-4-5` is the model `anthropic/claude-sonnet-4-5` at `openrouter`). The Provider part must be a Provider id of §6, or `openai-compatible:<name>` with `<name>` matching `^[a-z0-9][a-z0-9-]*$`, and the model part must be a valid model name for it; otherwise the request gets `404 unknown_slot`. A model name is non-empty, has no whitespace, `?`, `#`, `%` or `\`, and no empty, `.` or `..` segment between its `/`s, so no adapter can turn it into another request URL. A `google` model name, which the adapter puts into the request path, must also be a Gemini model name: `^(?:(?:models|tunedModels)/)?[A-Za-z0-9][A-Za-z0-9._-]*$`. A `model` without `/` is a Slot name (Slot names never contain `/`). An explicit id never consults the Slot Bindings; it needs an enabled Connection for its Provider (a disabled Connection counts as none), else `403 provider_not_connected`.
 
 A request is checked in this order: body validation (`400`), then model resolution (`404`, `409`, `403`), then the upstream call (`502`, `504`). Only a request that gets as far as the upstream call reaches a Provider.
 
@@ -101,6 +101,8 @@ For a request with `model = <slot>` from Harness H:
 3. Else, if the User has a **Default Model** for a Slot with the same name → use it.
 4. Else, if the User has a Default Model for `default` → use it.
 5. Else → `409 { "error": { "code": "slot_unbound", "slot": "<slot>", "message": "..." } }`. The Runtime also raises a desktop notification linking to the Models page.
+
+At every step, a binding or Recommended Model whose Connection is disabled or has been removed counts as absent, so resolution falls through to the next step; reachability is the Connection's enabled flag, never the result of its last test. Removing a Connection also deletes every Slot Binding that uses it.
 
 Resolution happens per request, so changing a binding in the app takes effect on the Harness's next call without restart. Model Requirements are advisory: the app warns when a binding does not satisfy them, the Gateway never blocks on them.
 
@@ -145,7 +147,7 @@ There is no automatic fallback between Providers in P0.
 
 ## 6. Provider ids and Connections
 
-A **Provider id** is a fixed string; a **Connection** is the User's credential/endpoint for one Provider. Users may have at most one Connection per Provider in P0, except `openai-compatible` which allows many named endpoints (`openai-compatible:<name>`).
+A **Provider id** is a fixed string; a **Connection** is the User's credential/endpoint for one Provider. Users may have at most one Connection per Provider in P0, except `openai-compatible` which allows many named endpoints (`openai-compatible:<name>`, where `<name>` is a slug made from the endpoint's display name when it is added and never changes on rename).
 
 | Provider id | Adapter | Credential | Notes |
 |---|---|---|---|

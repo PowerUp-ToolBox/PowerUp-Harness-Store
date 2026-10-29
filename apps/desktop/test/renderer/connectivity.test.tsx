@@ -101,7 +101,7 @@ describe('Store routes while the Store is unreachable', () => {
 describe('other routes while the Store is unreachable', () => {
   it.each([
     ['#/library', 'Library', 'Harnesses you install appear here.'],
-    ['#/models', 'Models', 'Your Connections and Default Models appear here.'],
+    ['#/models', 'Models', 'Connections'],
     ['#/usage', 'Usage', 'Tokens your Harnesses use appear here.'],
     ['#/publish', 'Publish', 'Publish a Harness from a local folder here.'],
   ])('%s renders its own content, never the offline panel', async (hash, title, content) => {

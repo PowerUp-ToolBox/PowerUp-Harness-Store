@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import {
+  MAX_CONNECTION_NAME_LENGTH,
+  isNameTaken,
+  parseApiKey,
+  parseBaseUrl,
+  parseConnectionName,
+} from '../../../shared/connection-input.js';
 import type {
   ConnectionDraft,
   ConnectionSummary,
@@ -7,6 +14,7 @@ import type {
 } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
+import { connectionName, CUSTOM_PROVIDER_ID, providerName } from '../models/names.js';
 import { CheckIcon, LockIcon } from '../shell/icons.js';
 import { useMounted } from './use-mounted.js';
 import { WizardActions, type WizardNav } from './WizardActions.js';
@@ -17,6 +25,20 @@ type Test =
   | { readonly state: 'added' }
   | { readonly state: 'failed'; readonly error: IpcError };
 
+/** What is wrong with a field, shown under it with the `models.invalid.*` message. */
+type Problem =
+  'name_too_long' | 'name_taken' | 'key_invalid' | 'base_url_invalid' | 'test_model_invalid';
+
+interface Problems {
+  readonly displayName?: Problem;
+  readonly apiKey?: Problem;
+  readonly baseUrl?: Problem;
+  readonly testModel?: Problem;
+}
+
+/** The fields in the order they are shown, which is the order a problem is focused in. */
+const FIELDS = ['displayName', 'baseUrl', 'apiKey', 'testModel'] as const;
+
 export interface CloudKeyStepProps {
   readonly nav: WizardNav;
   /** The Connections this wizard run added. */
@@ -25,10 +47,15 @@ export interface CloudKeyStepProps {
 }
 
 /**
- * The optional remote Provider: a preset from `providers.list` (the custom OpenAI-compatible
- * endpoint also asks for a name and a base URL), an API key, and Test connection, which adds the
- * Connection when the test succeeds (`connections.add`). A failed test shows the error inline with
- * Retry, Edit and Skip, and keeps what the User typed. Continue with an empty form is Skip;
+ * The optional remote Provider: a preset from `providers.list` other than the local ones (the
+ * custom OpenAI-compatible endpoint also asks for a name and a base URL, and a Provider that lists
+ * no models for the model to test with, which Anthropic and Google take optionally in place of
+ * their catalogue's), an API key, and Test connection, which adds the Connection when the test
+ * succeeds (`connections.add`). Before it
+ * calls the Runtime, the test checks the fields with the rules of shared/connection-input.ts, as
+ * the Models page dialog does, and shows a problem under its field; a custom endpoint's name is
+ * checked against the saved Connections (`connections.list`). A failed test shows the error inline
+ * with Retry, Edit and Skip, and keeps what the User typed. Continue with an empty form is Skip;
  * Continue waits, like Test connection, while a started form misses a field it needs; Continue
  * with an untested complete form runs the test first and moves on only if it succeeds, so a pasted
  * key is never dropped silently. The form is locked while a test runs, so its result always belongs
@@ -42,17 +69,33 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
   const [apiKey, setApiKey] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
+  const [testModel, setTestModel] = useState('');
   const [test, setTest] = useState<Test>({ state: 'idle' });
-  const keyInput = useRef<HTMLInputElement>(null);
+  const [problems, setProblems] = useState<Problems>({});
+  const ids = useId();
+  const fields = {
+    displayName: useRef<HTMLInputElement>(null),
+    baseUrl: useRef<HTMLInputElement>(null),
+    apiKey: useRef<HTMLInputElement>(null),
+    testModel: useRef<HTMLInputElement>(null),
+  };
   const mounted = useMounted();
+
+  // Focuses the first field with a problem once it is shown, after the form is unlocked again.
+  useEffect(() => {
+    const first = FIELDS.find((field) => problems[field] !== undefined);
+    if (first !== undefined) fields[first].current?.focus();
+  }, [problems]);
 
   useEffect(() => {
     let current = true;
     void window.api.providers.list().then((result) => {
       if (!current) return;
       if (result.ok) {
-        setPresets(result.data);
-        setProviderId((id) => (id === '' ? (result.data[0]?.id ?? '') : id));
+        // Local Providers are found by the Local Providers step instead.
+        const remote = result.data.filter((item) => !item.local);
+        setPresets(remote);
+        setProviderId((id) => (id === '' ? (remote[0]?.id ?? '') : id));
       } else {
         setLoadError(result.error);
       }
@@ -63,14 +106,19 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
   }, []);
 
   const preset = presets?.find((item) => item.id === providerId);
+  /** Required where the Provider lists no models; optional where the catalogue names one. */
+  const showTestModel =
+    preset !== undefined && (preset.needsTestModel || preset.testModel !== null);
   /** Only the fields the chosen preset shows count: hidden custom fields are not sent. */
   const formEmpty =
     apiKey.trim() === '' &&
-    (preset?.custom !== true || (displayName.trim() === '' && baseUrl.trim() === ''));
+    (preset?.custom !== true || (displayName.trim() === '' && baseUrl.trim() === '')) &&
+    (!showTestModel || testModel.trim() === '');
   const formComplete =
     preset !== undefined &&
     (!preset.requiresKey || apiKey.trim() !== '') &&
-    (!preset.custom || (displayName.trim() !== '' && baseUrl.trim() !== ''));
+    (!preset.custom || (displayName.trim() !== '' && baseUrl.trim() !== '')) &&
+    (!preset.needsTestModel || testModel.trim() !== '');
   const testing = test.state === 'testing';
   const alreadyAdded = test.state === 'added';
   /** The remote Connections this run added, kept when the User comes back to this step. */
@@ -83,16 +131,58 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
   const edit = (apply: () => void) => {
     apply();
     setTest({ state: 'idle' });
+    setProblems((current) => (Object.keys(current).length === 0 ? current : {}));
+  };
+
+  /**
+   * The problems of a complete form, by the rules the Runtime checks again: without them, a typo
+   * would come back as `invalid_input`, whose message is about an internal error.
+   */
+  const check = async (preset: ProviderPreset): Promise<Problems> => {
+    const found: { -readonly [K in keyof Problems]: Problems[K] } = {};
+    if (parseApiKey(apiKey) === null) found.apiKey = 'key_invalid';
+    if (showTestModel && /\s/.test(testModel.trim())) {
+      found.testModel = 'test_model_invalid';
+    }
+    if (!preset.custom) return found;
+    if (parseBaseUrl(baseUrl) === null) found.baseUrl = 'base_url_invalid';
+    const name = parseConnectionName(displayName);
+    if (name === null) {
+      found.displayName = 'name_too_long';
+    } else {
+      // The saved Connections hold the ones this run added; `added` covers a failed listing.
+      const saved = await window.api.connections.list();
+      const names = [...(saved.ok ? saved.data : []), ...added]
+        .filter((connection) => connection.providerId === CUSTOM_PROVIDER_ID)
+        .map((connection) => connection.displayName);
+      if (isNameTaken(name, names)) found.displayName = 'name_taken';
+    }
+    return found;
   };
 
   const runTest = async (): Promise<boolean> => {
     if (preset === undefined || !formComplete) return false;
+    setProblems({});
+    setTest({ state: 'testing' });
+    const found = await check(preset);
+    if (!mounted.current) return false;
+    if (Object.keys(found).length > 0) {
+      setTest({ state: 'idle' });
+      setProblems(found);
+      return false;
+    }
+    return addConnection(preset);
+  };
+
+  /** Adds the checked form's Connection, which the Runtime tests first; true when it was added. */
+  const addConnection = async (preset: ProviderPreset): Promise<boolean> => {
+    const key = parseApiKey(apiKey) ?? undefined;
     const draft: ConnectionDraft = {
       providerId: preset.id,
-      ...(apiKey.trim() === '' ? {} : { apiKey: apiKey.trim() }),
+      ...(key === undefined ? {} : { apiKey: key }),
       ...(preset.custom ? { displayName: displayName.trim(), baseUrl: baseUrl.trim() } : {}),
+      ...(showTestModel && testModel.trim() !== '' ? { testModel: testModel.trim() } : {}),
     };
-    setTest({ state: 'testing' });
     const result = await window.api.connections.add(draft);
     if (result.ok) onAdded(result.data);
     if (!mounted.current) return false;
@@ -108,8 +198,30 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
     if (await runTest()) nav.next();
   };
 
-  const providerName = (item: ProviderPreset) =>
-    item.custom ? t('onboarding.cloud.custom') : item.displayName;
+  /** The accessibility attributes and message of a field that may have a problem. */
+  const fieldProblem = (field: keyof Problems) => {
+    const problem = problems[field];
+    const errorId = `${ids}-${field}-error`;
+    return {
+      input: {
+        'aria-invalid': problem !== undefined,
+        ...(problem === undefined ? {} : { 'aria-describedby': errorId }),
+      },
+      message:
+        problem === undefined ? null : (
+          <p id={errorId} className="field-error">
+            {t(`models.invalid.${problem}`, { max: MAX_CONNECTION_NAME_LENGTH })}
+          </p>
+        ),
+    };
+  };
+  const nameField = fieldProblem('displayName');
+  const urlField = fieldProblem('baseUrl');
+  const keyField = fieldProblem('apiKey');
+  const testModelField = fieldProblem('testModel');
+
+  const presetName = (item: ProviderPreset) =>
+    item.custom ? t('onboarding.cloud.custom') : providerName(t, item.id, item.displayName);
 
   return (
     <>
@@ -132,7 +244,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
             >
               {presets.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {providerName(item)}
+                  {presetName(item)}
                 </option>
               ))}
             </select>
@@ -145,6 +257,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
                 </label>
                 <input
                   id="onboarding-display-name"
+                  ref={fields.displayName}
                   value={displayName}
                   disabled={testing}
                   onChange={(event) => {
@@ -152,13 +265,17 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
                       setDisplayName(event.target.value);
                     });
                   }}
+                  {...nameField.input}
                 />
+                {nameField.message}
               </div>
               <div className="field">
                 <label htmlFor="onboarding-base-url">{t('onboarding.cloud.base_url')}</label>
                 <input
                   id="onboarding-base-url"
+                  ref={fields.baseUrl}
                   type="url"
+                  spellCheck={false}
                   value={baseUrl}
                   disabled={testing}
                   placeholder={t('onboarding.cloud.base_url_placeholder')}
@@ -167,7 +284,9 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
                       setBaseUrl(event.target.value);
                     });
                   }}
+                  {...urlField.input}
                 />
+                {urlField.message}
               </div>
             </>
           ) : null}
@@ -179,7 +298,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
             </label>
             <input
               id="onboarding-api-key"
-              ref={keyInput}
+              ref={fields.apiKey}
               type="password"
               autoComplete="off"
               spellCheck={false}
@@ -191,8 +310,44 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
                   setApiKey(event.target.value);
                 });
               }}
+              {...keyField.input}
             />
+            {keyField.message}
           </div>
+          {showTestModel ? (
+            <div className="field field-wide">
+              <label htmlFor="onboarding-test-model">
+                {preset.needsTestModel ? t('models.test_model') : t('models.test_model_optional')}
+              </label>
+              <input
+                id="onboarding-test-model"
+                ref={fields.testModel}
+                spellCheck={false}
+                autoComplete="off"
+                value={testModel}
+                placeholder={preset.testModel ?? undefined}
+                disabled={testing}
+                onChange={(event) => {
+                  edit(() => {
+                    setTestModel(event.target.value);
+                  });
+                }}
+                {...testModelField.input}
+                aria-describedby={[
+                  testModelField.input['aria-describedby'],
+                  'onboarding-test-model-hint',
+                ]
+                  .filter((id) => id !== undefined)
+                  .join(' ')}
+              />
+              <p id="onboarding-test-model-hint" className="field-hint">
+                {preset.testModel === null
+                  ? t('models.test_model_hint')
+                  : t('models.test_model_default_hint', { model: preset.testModel })}
+              </p>
+              {testModelField.message}
+            </div>
+          ) : null}
         </div>
       )}
       <div className="wizard-test">
@@ -212,7 +367,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
           {remote.map((connection) => (
             <li key={connection.id}>
               <CheckIcon />
-              {t('onboarding.cloud.added', { name: connection.displayName })}
+              {t('onboarding.cloud.added', { name: connectionName(t, connection) })}
             </li>
           ))}
         </ul>
@@ -232,7 +387,7 @@ export function CloudKeyStep({ nav, added, onAdded }: CloudKeyStepProps) {
               className="button-secondary"
               onClick={() => {
                 setTest({ state: 'idle' });
-                keyInput.current?.focus();
+                fields.apiKey.current?.focus();
               }}
             >
               {t('onboarding.cloud.edit')}

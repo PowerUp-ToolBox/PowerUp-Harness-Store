@@ -5,13 +5,20 @@ import type { Locale } from '../../src/shared/i18n/locale.js';
 import type {
   ConnectionDraft,
   ConnectionSummary,
+  ConnectionTestDraft,
+  ConnectionTestPassed,
+  ConnectionTestRequest,
+  ConnectionUpdate,
   Connectivity,
   ConnectivityState,
   Diagnostics,
+  GlobalBinding,
+  GlobalBindingChange,
   IpcEventName,
   IpcEvents,
   IpcResult,
   LocalProvider,
+  ModelInfo,
   ProviderPreset,
   Settings,
   SettingsPatch,
@@ -29,30 +36,99 @@ export const FAKE_DIAGNOSTICS: Diagnostics = {
   databasePath: '/profile/harness-store.sqlite',
 };
 
-/** Three of the Runtime's presets, the custom endpoint among them. */
+/** Four of the Runtime's presets: two cloud ones, a local one and the custom endpoint. */
 export const FAKE_PRESETS: readonly ProviderPreset[] = [
   {
     id: 'anthropic',
     displayName: 'Anthropic',
     requiresKey: true,
     custom: false,
+    local: false,
+    baseUrl: 'https://api.anthropic.com/v1',
+    docsUrl: 'https://docs.claude.com/en/api/overview',
+    supportsModelList: false,
     keyPlaceholder: 'sk-ant-...',
+    needsTestModel: false,
+    testModel: 'claude-haiku-5-5',
   },
   {
     id: 'openai',
     displayName: 'OpenAI',
     requiresKey: true,
     custom: false,
+    local: false,
+    baseUrl: 'https://api.openai.com/v1',
+    docsUrl: 'https://platform.openai.com/docs/api-reference',
+    supportsModelList: true,
     keyPlaceholder: 'sk-...',
+    needsTestModel: false,
+    testModel: null,
+  },
+  {
+    id: 'ollama',
+    displayName: 'Ollama',
+    requiresKey: false,
+    custom: false,
+    local: true,
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    docsUrl: 'https://docs.ollama.com/api/openai-compatibility',
+    supportsModelList: true,
+    keyPlaceholder: '',
+    needsTestModel: false,
+    testModel: null,
   },
   {
     id: 'openai-compatible',
     displayName: 'OpenAI-compatible endpoint',
     requiresKey: false,
     custom: true,
+    local: false,
+    baseUrl: null,
+    docsUrl: 'https://platform.openai.com/docs/api-reference/chat',
+    supportsModelList: true,
     keyPlaceholder: '',
+    needsTestModel: false,
+    testModel: null,
   },
 ];
+
+/** A Provider that lists no models and has no catalogue: its test needs a model name. */
+export const ZHIPU_PRESET: ProviderPreset = {
+  id: 'zhipu',
+  displayName: 'Zhipu AI (GLM)',
+  requiresKey: true,
+  custom: false,
+  local: false,
+  baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+  docsUrl: 'https://docs.bigmodel.cn/cn/guide/develop/openai/introduction',
+  supportsModelList: false,
+  keyPlaceholder: '',
+  needsTestModel: true,
+  testModel: null,
+};
+
+/** A saved Connection as `connections.list` answers it; `overrides` change any field. */
+export function connectionSummary(
+  overrides: Partial<ConnectionSummary> & Pick<ConnectionSummary, 'id'>,
+): ConnectionSummary {
+  const providerId = overrides.providerId ?? overrides.id.split(':')[0] ?? overrides.id;
+  const preset = FAKE_PRESETS.find((item) => item.id === providerId);
+  return {
+    providerId,
+    displayName: preset?.displayName ?? providerId,
+    local: preset?.local ?? false,
+    enabled: true,
+    baseUrl: preset?.baseUrl ?? '',
+    keyHint: null,
+    lastTestedAt: null,
+    lastTestOk: null,
+    lastTestError: null,
+    lastTestFailure: null,
+    testModel: null,
+    models: [],
+    ...overrides,
+  };
+}
 
 export interface FakeApiOptions {
   /** Whether the first-run wizard already ran; true, a returning User, unless a test says so. */
@@ -62,10 +138,13 @@ export interface FakeApiOptions {
 /**
  * A fake `window.api` whose settings behave like the Runtime's: `osLocale` stands in for
  * `app.getLocale()` and an override set through `settings.set` wins over it. The Runtime started
- * fine, the Store is online, and Connections are the Runtime's stubs (detection finds nothing,
- * adding answers `not_implemented`); a test changes `app.status`, `diagnostics.get`, the
- * `connectivity` or `connections` methods before rendering to say otherwise, and pushes events
- * with `emit`.
+ * fine, the Store is online, there are no Connections or Slot Bindings, detection finds nothing,
+ * `connections.add`, `update`, `remove` and `test` (of a saved Connection) answer
+ * `not_implemented`, `connections.testDraft` passes finding no models and `connections.models`
+ * lists none; `bindings.setGlobal` sets or clears a Default Model that `bindings.getGlobal` then
+ * lists, without checking its Connection; a test changes `app.status`,
+ * `diagnostics.get`, the `connectivity`, `connections` or `bindings` methods before rendering to
+ * say otherwise, and pushes events with `emit`.
  */
 export function installFakeApi(
   osLocale: Locale = 'en',
@@ -74,6 +153,7 @@ export function installFakeApi(
 ) {
   let locale = override;
   let onboardingDone = options.onboardingDone ?? true;
+  let bindings: readonly GlobalBinding[] = [];
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   const current = (): Settings =>
     locale === undefined
@@ -117,16 +197,40 @@ export function installFakeApi(
       detectLocal: vi.fn((): Promise<IpcResult<readonly LocalProvider[]>> =>
         Promise.resolve({ ok: true, data: [] }),
       ),
+      list: vi.fn((): Promise<IpcResult<readonly ConnectionSummary[]>> =>
+        Promise.resolve({ ok: true, data: [] }),
+      ),
       add: vi.fn((draft: ConnectionDraft): Promise<IpcResult<ConnectionSummary>> =>
-        Promise.resolve({
-          ok: false,
-          error: {
-            code: 'not_implemented',
-            messageKey: 'error.not_implemented',
-            params: { method: 'connections.add', providerId: draft.providerId },
-            message: 'This is not available in this version of Harness Store yet.',
-          },
-        }),
+        notImplemented('connections.add', draft.providerId),
+      ),
+      update: vi.fn((update: ConnectionUpdate): Promise<IpcResult<ConnectionSummary>> =>
+        notImplemented('connections.update', update.id),
+      ),
+      remove: vi.fn((id: string): Promise<IpcResult<null>> =>
+        notImplemented('connections.remove', id),
+      ),
+      test: vi.fn((request: ConnectionTestRequest): Promise<IpcResult<ConnectionSummary>> =>
+        notImplemented('connections.test', request.id),
+      ),
+      testDraft: vi.fn<(draft: ConnectionTestDraft) => Promise<IpcResult<ConnectionTestPassed>>>(
+        () => Promise.resolve({ ok: true, data: { models: [] } }),
+      ),
+      models: vi.fn<(id: string) => Promise<IpcResult<readonly ModelInfo[]>>>(() =>
+        Promise.resolve({ ok: true, data: [] }),
+      ),
+    },
+    bindings: {
+      getGlobal: vi.fn((): Promise<IpcResult<readonly GlobalBinding[]>> =>
+        Promise.resolve({ ok: true, data: bindings }),
+      ),
+      setGlobal: vi.fn(
+        (change: GlobalBindingChange): Promise<IpcResult<readonly GlobalBinding[]>> => {
+          const others = bindings.filter((binding) => binding.slot !== change.slot);
+          bindings = sortBindings(
+            change.target === null ? others : [...others, { slot: change.slot, ...change.target }],
+          );
+          return Promise.resolve({ ok: true, data: bindings });
+        },
       ),
     },
     on: vi.fn((event: string, listener: (payload: unknown) => void) => {
@@ -144,6 +248,27 @@ export function installFakeApi(
   };
   Object.defineProperty(window, 'api', { value: api, configurable: true });
   return api;
+}
+
+/** As the Runtime lists them: `default` first, then by Slot name. */
+function sortBindings(bindings: readonly GlobalBinding[]): readonly GlobalBinding[] {
+  return [...bindings].sort(
+    (a, b) =>
+      Number(a.slot !== 'default') - Number(b.slot !== 'default') ||
+      (a.slot < b.slot ? -1 : a.slot > b.slot ? 1 : 0),
+  );
+}
+
+function notImplemented(method: string, subject: string) {
+  return Promise.resolve({
+    ok: false as const,
+    error: {
+      code: 'not_implemented' as const,
+      messageKey: 'error.not_implemented' as const,
+      params: { method, subject },
+      message: 'This is not available in this version of Harness Store yet.',
+    },
+  });
 }
 
 /**
