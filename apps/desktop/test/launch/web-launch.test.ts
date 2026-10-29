@@ -26,7 +26,7 @@ import { removeFolder, WAIT_MS } from '../support/harness-processes.js';
  * the window options (main-window.test.ts) and was checked by hand in Electron.
  *
  * The signal tests run on macOS and Linux only: Windows has no signals (the Supervisor uses
- * taskkill there, untested until CI runs on Windows).
+ * taskkill there; the stop and launch tests run on windows-latest in CI).
  */
 
 const FIXTURES = join(import.meta.dirname, '../fixtures/harnesses');

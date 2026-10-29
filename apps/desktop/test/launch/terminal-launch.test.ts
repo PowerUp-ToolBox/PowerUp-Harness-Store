@@ -34,7 +34,7 @@ import { createTerminalScreens } from '../support/terminal-screen.js';
  * handlers, and reports its terminal ready at once.
  *
  * The signal tests run on macOS and Linux only: Windows has no signals (the Supervisor uses
- * taskkill there, untested until CI runs on Windows).
+ * taskkill there; the stop and launch tests run on windows-latest in CI).
  */
 
 const FIXTURES = join(import.meta.dirname, '../fixtures/harnesses');
