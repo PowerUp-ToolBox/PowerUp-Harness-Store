@@ -7,12 +7,40 @@ import { fail, ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { StoreAuthError } from '../src/main/runtime/store-auth.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
-import { IPC_METHODS } from '../src/shared/ipc.js';
+import {
+  IPC_METHODS,
+  type IpcResult,
+  type StoreDetail,
+  type StoreHomeRequest,
+  type StorePublisherPage,
+  type StoreSearchRequest,
+} from '../src/shared/ipc.js';
 
 const MAIN_WINDOW = { id: 'main window webContents' };
 const quit = vi.fn();
 const stopWatching = vi.fn();
 const cancel = vi.fn();
+const home = vi.fn((request?: StoreHomeRequest) =>
+  Promise.resolve(
+    request?.refresh === true
+      ? fail('store_unreachable')
+      : ok({ platform: 'darwin-arm64' as const, featured: [], mostDownloaded: [], newest: [] }),
+  ),
+);
+const search = vi.fn((request: StoreSearchRequest) =>
+  Promise.resolve(
+    request.q === 'offline'
+      ? fail('store_unreachable')
+      : ok({ platform: 'darwin-arm64' as const, listings: [], hasMore: false }),
+  ),
+);
+const detail = vi.fn<(harnessId: string) => Promise<IpcResult<StoreDetail>>>(() =>
+  Promise.resolve(ok({ platform: 'darwin-arm64', storeStatus: 'not_found', harness: null })),
+);
+const publisher = vi.fn<(login: string) => Promise<IpcResult<StorePublisherPage>>>(() =>
+  Promise.resolve(ok({ platform: 'darwin-arm64', publisher: null })),
+);
+const resolveManifest = vi.fn(() => ok([{ slot: 'default', binding: null }]));
 const fakeServices: Services = {
   app: {
     version: '1.2.3',
@@ -34,6 +62,7 @@ const fakeServices: Services = {
     get: () => ({ state: 'offline' }),
     check: () => Promise.resolve({ state: 'online' }),
   },
+  store: { home, search, detail, publisher },
   providers: { list: () => providerPresets() },
   connections: createConnectionsStub(),
   bindings: {
@@ -44,6 +73,7 @@ const fakeServices: Services = {
     setOverride: (change) => ok([{ slot: change.slot, ...change.target }]),
     clearOverride: () => ok([]),
     resolveAll: () => ok([{ slot: 'default', binding: null }]),
+    resolveManifest,
   },
   auth: {
     signIn: () =>
@@ -163,6 +193,131 @@ describe('IPC handlers against a fake service container', () => {
     });
   });
 
+  it('store.home reads the Store home, again with { refresh: true }', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'store.home' })).resolves.toEqual({
+      ok: true,
+      data: { platform: 'darwin-arm64', featured: [], mostDownloaded: [], newest: [] },
+    });
+    expect(home).toHaveBeenLastCalledWith({});
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'store.home', input: { refresh: true } }),
+    ).resolves.toMatchObject({ ok: false, error: { code: 'store_unreachable' } });
+    expect(home).toHaveBeenLastCalledWith({ refresh: true });
+  });
+
+  it.each([42, 'refresh', [], { refresh: 'yes' }, { refresh: true, extra: 1 }])(
+    'store.home rejects %j as invalid_input',
+    async (input) => {
+      const { dispatch } = dispatcherFor();
+      home.mockClear();
+      await expect(dispatch(MAIN_WINDOW, { method: 'store.home', input })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'invalid_input', params: { method: 'store.home' } },
+      });
+      expect(home).not.toHaveBeenCalled();
+    },
+  );
+
+  it('store.search searches the Store with the request as it came', async () => {
+    const { dispatch } = dispatcherFor();
+    const request = { q: '写作', tags: ['writing', 'coding'], allPlatforms: true, offset: 24 };
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'store.search', input: request }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { platform: 'darwin-arm64', listings: [], hasMore: false },
+    });
+    expect(search).toHaveBeenLastCalledWith(request);
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'store.search',
+        input: { q: 'offline', tags: [], allPlatforms: false, offset: 0 },
+      }),
+    ).resolves.toMatchObject({ ok: false, error: { code: 'store_unreachable' } });
+  });
+
+  const SEARCH = { q: 'notes', tags: ['writing'], allPlatforms: false, offset: 0 };
+  it.each([
+    undefined,
+    'notes',
+    [],
+    { q: 'notes' },
+    { ...SEARCH, extra: 1 },
+    { ...SEARCH, q: 42 },
+    { ...SEARCH, q: 'x'.repeat(201) },
+    { ...SEARCH, tags: 'writing' },
+    { ...SEARCH, tags: ['not-a-tag'] },
+    { ...SEARCH, tags: ['writing', 'writing'] },
+    { ...SEARCH, allPlatforms: 'yes' },
+    { ...SEARCH, offset: -24 },
+    { ...SEARCH, offset: 1.5 },
+    { ...SEARCH, offset: '24' },
+    { ...SEARCH, offset: 2 ** 31 },
+  ])('store.search rejects %j as invalid_input', async (input) => {
+    const { dispatch } = dispatcherFor();
+    search.mockClear();
+    await expect(dispatch(MAIN_WINDOW, { method: 'store.search', input })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input', params: { method: 'store.search' } },
+    });
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it('store.detail reads the detail page of a Harness ID', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'store.detail', input: 'alice/writer' }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { platform: 'darwin-arm64', storeStatus: 'not_found', harness: null },
+    });
+    expect(detail).toHaveBeenLastCalledWith('alice/writer');
+  });
+
+  it.each([undefined, '', 'writer', 42, { harnessId: 'alice/writer' }, `a/${'x'.repeat(256)}`])(
+    'store.detail rejects %j as invalid_input',
+    async (input) => {
+      const { dispatch } = dispatcherFor();
+      detail.mockClear();
+      await expect(dispatch(MAIN_WINDOW, { method: 'store.detail', input })).resolves.toMatchObject(
+        { ok: false, error: { code: 'invalid_input', params: { method: 'store.detail' } } },
+      );
+      expect(detail).not.toHaveBeenCalled();
+    },
+  );
+
+  it('store.publisher reads the page of a Publisher login', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'store.publisher', input: 'alice-1' }),
+    ).resolves.toEqual({ ok: true, data: { platform: 'darwin-arm64', publisher: null } });
+    expect(publisher).toHaveBeenLastCalledWith('alice-1');
+  });
+
+  it.each([undefined, '', 'Alice', '-alice', 'alice/writer', 'a'.repeat(40), 42, { login: 'a' }])(
+    'store.publisher rejects %j as invalid_input',
+    async (input) => {
+      const { dispatch } = dispatcherFor();
+      publisher.mockClear();
+      await expect(
+        dispatch(MAIN_WINDOW, { method: 'store.publisher', input }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'invalid_input', params: { method: 'store.publisher' } },
+      });
+      expect(publisher).not.toHaveBeenCalled();
+    },
+  );
+
+  it('store.search takes 200 characters of text', async () => {
+    const { dispatch } = dispatcherFor();
+    const input = { ...SEARCH, q: 'x'.repeat(200) };
+    await expect(dispatch(MAIN_WINDOW, { method: 'store.search', input })).resolves.toMatchObject({
+      ok: true,
+    });
+  });
+
   it.each([
     'app.status',
     'app.quit',
@@ -260,6 +415,36 @@ describe('IPC handlers against a fake service container', () => {
     ['bindings.clearOverride', { harnessId: 'acme/hello', slot: 'default', target: null }],
     ['bindings.resolveAll', undefined],
     ['bindings.resolveAll', { harnessId: 'acme/hello' }],
+    ['bindings.resolveManifest', undefined],
+    ['bindings.resolveManifest', 'acme/hello'],
+    ['bindings.resolveManifest', { harnessId: 'acme/hello' }],
+    ['bindings.resolveManifest', { harnessId: 'acme/hello', models: { slots: {} } }],
+    ['bindings.resolveManifest', { harnessId: 'acme/hello', models: { slots: { fast: {} } } }],
+    [
+      'bindings.resolveManifest',
+      { harnessId: 'acme/hello', models: { slots: { default: {}, Fast: {} } } },
+    ],
+    [
+      'bindings.resolveManifest',
+      { harnessId: 'acme/hello', models: { slots: { default: { recommended: 'ollama/m' } } } },
+    ],
+    [
+      'bindings.resolveManifest',
+      { harnessId: 'acme/hello', models: { slots: { default: { recommended: [42] } } } },
+    ],
+    [
+      'bindings.resolveManifest',
+      {
+        harnessId: 'acme/hello',
+        models: {
+          slots: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`s${String(i)}`, {}])),
+        },
+      },
+    ],
+    [
+      'bindings.resolveManifest',
+      { harnessId: 'acme/hello', models: { slots: { default: {} } }, extra: 1 },
+    ],
     ['installs.inspectFolder', undefined],
     ['installs.inspectFolder', 'relative/folder'],
     ['installs.inspectFolder', '/folder\u0000'],
@@ -458,6 +643,29 @@ describe('IPC handlers against a fake service container', () => {
     await expect(
       dispatch(MAIN_WINDOW, { method: 'bindings.resolveAll', input: 'acme/hello' }),
     ).resolves.toEqual({ ok: true, data: [{ slot: 'default', binding: null }] });
+  });
+
+  it('bindings.resolveManifest hands the Slots and their Recommended Models to the service', async () => {
+    const { dispatch } = dispatcherFor();
+    const slots = {
+      default: {
+        description: 'Writes.',
+        requirements: { tools: true },
+        recommended: ['ollama/qwen3:8b'],
+      },
+      fast: {},
+    };
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'bindings.resolveManifest',
+        input: { harnessId: 'acme/hello', models: { slots } },
+      }),
+    ).resolves.toEqual({ ok: true, data: [{ slot: 'default', binding: null }] });
+    // Only what resolution reads reaches it.
+    expect(resolveManifest).toHaveBeenLastCalledWith({
+      harnessId: 'acme/hello',
+      models: { slots: { default: { recommended: ['ollama/qwen3:8b'] }, fast: {} } },
+    });
   });
 
   it('installs.chooseFolder returns the folder the picker chose', async () => {

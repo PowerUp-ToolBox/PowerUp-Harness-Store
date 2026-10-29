@@ -17,6 +17,7 @@ const IPC_OWN_CODES = [
   'sign_in_timeout',
   'sign_in_cancelled',
   'store_unreachable',
+  'store_error',
   'package_invalid',
   'file_unreadable',
   'harness_running',

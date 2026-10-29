@@ -82,7 +82,7 @@ export function recommendedTargets(ids: readonly string[]): BindingTarget[] {
 }
 
 /** The Model Slots a Manifest declares: `default` first, then in the Manifest's order. */
-export function declaredSlots(manifest: Manifest): string[] {
+export function declaredSlots(manifest: Pick<Manifest, 'models'>): string[] {
   const names = Object.keys(manifest.models.slots);
   return [DEFAULT_SLOT, ...names.filter((name) => name !== DEFAULT_SLOT)];
 }
@@ -91,7 +91,10 @@ export function declaredSlots(manifest: Manifest): string[] {
  * The Model Slot `slot` of `manifest`, or undefined when it declares none of that name (an own
  * key only, so `constructor` is never a Slot).
  */
-export function declaredSlot(manifest: Manifest | null, slot: string): ModelSlot | undefined {
+export function declaredSlot(
+  manifest: Pick<Manifest, 'models'> | null,
+  slot: string,
+): ModelSlot | undefined {
   if (manifest === null || !Object.hasOwn(manifest.models.slots, slot)) return undefined;
   return manifest.models.slots[slot];
 }

@@ -39,6 +39,13 @@ import type {
   Settings,
   SettingsPatch,
   StartupStatus,
+  ManifestSlotsRequest,
+  StoreDetail,
+  StoreHome,
+  StoreHomeRequest,
+  StorePublisherPage,
+  StoreSearchPage,
+  StoreSearchRequest,
   UnpublishedVersion,
   UnpublishRequest,
 } from '../../src/shared/ipc.js';
@@ -156,6 +163,14 @@ export function connectionSummary(
   };
 }
 
+/** A Store home with no Harness in any row, on a Mac with Apple silicon. */
+export const EMPTY_STORE_HOME: StoreHome = {
+  platform: 'darwin-arm64',
+  featured: [],
+  mostDownloaded: [],
+  newest: [],
+};
+
 export interface FakeApiOptions {
   /** Whether the first-run wizard already ran; true, a returning User, unless a test says so. */
   readonly onboardingDone?: boolean;
@@ -164,21 +179,23 @@ export interface FakeApiOptions {
 /**
  * A fake `window.api` whose settings behave like the Runtime's: `osLocale` stands in for
  * `app.getLocale()` and an override set through `settings.set` wins over it. The Runtime started
- * fine, the Store is online, there are no Connections or Slot Bindings, detection finds nothing,
- * `connections.add`, `update`, `remove` and `test` (of a saved Connection) answer
- * `not_implemented`, `connections.testDraft` passes finding no models and `connections.models`
- * lists none; `bindings.setGlobal` sets or clears a Default Model that `bindings.getGlobal` then
- * lists, without checking its Connection, and `bindings.setOverride` and `clearOverride` do the
- * same for the Model Overrides `bindings.getForHarness` lists, while `bindings.resolveAll` answers
- * `not_implemented`; nobody is signed in to the Store, `auth.signIn` signs
- * in as `octo-cat` and `auth.signOut` signs out; nothing is installed, the folder picker is
- * cancelled, and inspecting or installing a folder answers `not_implemented`; nothing was
- * launched, launching answers `not_implemented`, no Harness has a last Workspace and the
- * Workspace picker is cancelled; validating a folder to publish and publishing answer
+ * fine, the Store is online and its home and every search have no Harnesses, no Harness has a Store
+ * detail page (`store.detail` answers `not_found`) and no login a Publisher page
+ * (`store.publisher` answers `publisher: null`), there are no Connections or Slot Bindings,
+ * detection finds nothing, `connections.add`, `update`, `remove` and `test` (of a saved Connection)
+ * answer `not_implemented`, `connections.testDraft` passes finding no models and
+ * `connections.models` lists none; `bindings.setGlobal` sets or clears a Default Model that
+ * `bindings.getGlobal` then lists, without checking its Connection, and `bindings.setOverride` and
+ * `clearOverride` do the same for the Model Overrides `bindings.getForHarness` lists, while
+ * `bindings.resolveAll` and `resolveManifest` answer `not_implemented`; nobody is signed in to the
+ * Store, `auth.signIn` signs in as `octo-cat` and `auth.signOut` signs out; nothing is installed,
+ * the folder picker is cancelled, and inspecting or installing a folder answers `not_implemented`;
+ * nothing was launched, launching answers `not_implemented`, no Harness has a last Workspace and
+ * the Workspace picker is cancelled; validating a folder to publish and publishing answer
  * `not_implemented`, cancelling an upload does nothing, the Publisher has no Harnesses and
  * Unpublishing answers `not_implemented`, and a dropped file's path is `/dropped/<name>`; a test
- * changes `app.status`, `diagnostics.get`, the `connectivity`, `connections`, `bindings` or `installs`
- * methods before rendering to say otherwise, and pushes events with `emit`.
+ * changes `app.status`, `diagnostics.get`, the `connectivity`, `connections`, `bindings` or
+ * `installs` methods before rendering to say otherwise, and pushes events with `emit`.
  */
 export function installFakeApi(
   osLocale: Locale = 'en',
@@ -221,6 +238,26 @@ export function installFakeApi(
       ),
       check: vi.fn((): Promise<IpcResult<Connectivity>> =>
         Promise.resolve(connectivityResult('online')),
+      ),
+    },
+    store: {
+      home: vi.fn<(request: StoreHomeRequest) => Promise<IpcResult<StoreHome>>>(() =>
+        Promise.resolve({ ok: true, data: EMPTY_STORE_HOME }),
+      ),
+      search: vi.fn<(request: StoreSearchRequest) => Promise<IpcResult<StoreSearchPage>>>(() =>
+        Promise.resolve({
+          ok: true,
+          data: { platform: 'darwin-arm64', listings: [], hasMore: false },
+        }),
+      ),
+      detail: vi.fn<(harnessId: string) => Promise<IpcResult<StoreDetail>>>(() =>
+        Promise.resolve({
+          ok: true,
+          data: { platform: 'darwin-arm64', storeStatus: 'not_found', harness: null },
+        }),
+      ),
+      publisher: vi.fn<(login: string) => Promise<IpcResult<StorePublisherPage>>>(() =>
+        Promise.resolve({ ok: true, data: { platform: 'darwin-arm64', publisher: null } }),
       ),
     },
     providers: {
@@ -295,6 +332,10 @@ export function installFakeApi(
       ),
       resolveAll: vi.fn((harnessId: string): Promise<IpcResult<readonly ResolvedSlot[]>> =>
         notImplemented('bindings.resolveAll', harnessId),
+      ),
+      resolveManifest: vi.fn(
+        (request: ManifestSlotsRequest): Promise<IpcResult<readonly ResolvedSlot[]>> =>
+          notImplemented('bindings.resolveManifest', request.harnessId),
       ),
     },
     auth: {

@@ -76,12 +76,37 @@ describe('Library', () => {
     const [local, fromStore] = cards as [HTMLElement, HTMLElement];
     expect(within(local).getByRole('heading', { name: 'Hello Web' })).toBeDefined();
     expect(within(local).getByText('Local')).toBeDefined();
-    expect(within(local).getByText('octo-cat · 1.0.0')).toBeDefined();
+    expect(local.querySelector('.harness-card-subtitle')?.textContent).toBe('octo-cat · 1.0.0');
     expect(local.querySelector('img')?.getAttribute('src')).toBe(ICON);
     expect(within(local).getByRole('button', { name: 'Launch' })).toBeDefined();
 
     expect(within(fromStore).queryByText('Local')).toBeNull();
-    expect(within(fromStore).getByText('alice · 1.1.0')).toBeDefined();
+    expect(fromStore.querySelector('.harness-card-subtitle')?.textContent).toBe('alice · 1.1.0');
+  });
+
+  it('links each card’s Publisher to their Store page, a local install’s too', async () => {
+    const api = installFakeApi();
+    api.installs.list.mockResolvedValue({
+      ok: true,
+      data: [
+        installed({ harnessId: 'octo-cat/hello-web', name: 'Hello Web', source: 'local' }),
+        installed({ harnessId: 'alice/code-reviewer', name: 'Code Reviewer', version: '1.1.0' }),
+      ],
+    });
+    await renderApp('#/library');
+    const [local, fromStore] = (await screen.findAllByRole('article')) as [
+      HTMLElement,
+      HTMLElement,
+    ];
+    expect(within(local).getByRole('link', { name: 'octo-cat' }).getAttribute('href')).toBe(
+      '#/store/p/octo-cat',
+    );
+    const alice = within(fromStore).getByRole('link', { name: 'alice' });
+    expect(alice.getAttribute('href')).toBe('#/store/p/alice');
+    // Apart from the card's menu: no link inside another.
+    expect(alice.closest('a')?.parentElement?.closest('a')).toBeNull();
+    fireEvent.click(alice);
+    expect(window.location.hash).toBe('#/store/p/alice');
   });
 
   it('a Harness that does not run on this platform says so on a disabled button', async () => {

@@ -55,7 +55,10 @@ function englishWord(): string {
   return Array.from({ length: 12 }, () => String.fromCharCode(97 + randomInt(26))).join('');
 }
 
-/** A random word of four CJK characters, which the `simple` parser keeps as one token. */
+/**
+ * A random word of four CJK characters, which the `simple` parser keeps as one token (all from
+ * U+4E00 to U+9DFF, never U+3000 to U+303F: CJK punctuation splits a run).
+ */
 function chineseWord(): string {
   return Array.from({ length: 4 }, () => String.fromCodePoint(0x4e00 + randomInt(0x5000))).join('');
 }
@@ -136,8 +139,13 @@ describe('text search', () => {
     expect(await ids({ q: '润色' })).toEqual(['bob/xiezuo']);
   });
 
-  it('does not match part of a Chinese word (the `simple` parser does not segment Chinese, P0)', async () => {
-    expect(await ids({ q: '写作' })).toEqual([]);
+  it('finds the seeded Chinese Harness by part of its name, alone and with its tag (P0-09.2)', async () => {
+    // The `simple` parser keeps 写作助手 as one token; the CJK substring match finds it.
+    expect(await ids({ q: '写作' })).toEqual(['bob/xiezuo']);
+    // The zh-CN chip 写作 is the tag `writing`.
+    expect(await ids({ q: '写作', tags: ['writing'] })).toEqual(['bob/xiezuo']);
+    expect(await ids({ q: '写作', tags: ['coding'] })).toEqual([]);
+    expect(await ids({ q: '写作', platform: 'linux-x64' })).toEqual(['bob/xiezuo']);
   });
 
   it('finds the seeded English Harness by its name, whatever the case', async () => {
@@ -180,6 +188,81 @@ describe('text search', () => {
       latest_version: '1.0.0',
       latest_published_at: expect.any(String) as string,
     });
+  });
+});
+
+describe('Chinese substring search (P0-09.2)', () => {
+  let publisher: TestUser;
+  const word = chineseWord();
+  const before = chineseWord();
+  const after = chineseWord();
+  const rows: Record<string, HarnessRow> = {};
+
+  beforeAll(async () => {
+    publisher = await createUser();
+    // The word inside a longer run of CJK characters: a substring, never a token of its own.
+    rows.inSummary = await listed(publisher, {
+      name: '摘要命中',
+      summary: `${before}${word}${after}。`,
+      tags: ['writing'],
+      downloads: 900,
+    });
+    rows.inName = await listed(publisher, {
+      name: `${before}${word}`,
+      tags: ['coding'],
+      platforms: ['win32-x64'],
+      downloads: 1,
+    });
+    // Only the README has it, as a whole token: the full-text match, after the substring ones.
+    rows.inReadme = await listed(publisher, {
+      name: '说明命中',
+      readme: `# 说明\n\n${word} 出现在这里。`,
+      downloads: 5000,
+    });
+    // Holds `x` and `9`, which an unescaped `_` or `%` in the query would match.
+    rows.literal = await listed(publisher, { name: `${after}x9` });
+    // Holds a backslash before the word, as no token of its own (`x`, then the word and `9`).
+    rows.backslash = await listed(publisher, { name: `x\\${after}9` });
+  });
+
+  afterAll(async () => {
+    await deleteUser(publisher);
+  });
+
+  it('finds a part of a Chinese name or summary, the name first, then the summary, then the rest', async () => {
+    expect(await ids({ q: word })).toEqual([
+      rows.inName?.harness_id,
+      rows.inSummary?.harness_id,
+      rows.inReadme?.harness_id,
+    ]);
+    // Two characters of the word: the README's token does not contain them as a token.
+    expect(await ids({ q: word.slice(1, 3) })).toEqual([
+      rows.inName?.harness_id,
+      rows.inSummary?.harness_id,
+    ]);
+    expect(await ids({ q: `  ${word.slice(0, 2)}  ` })).toEqual([
+      rows.inName?.harness_id,
+      rows.inSummary?.harness_id,
+    ]);
+  });
+
+  it('combines the substring match with the tag and platform filters', async () => {
+    expect(await ids({ q: word, tags: ['writing'] })).toEqual([rows.inSummary?.harness_id]);
+    expect(await ids({ q: word, platform: 'win32-x64' })).toEqual([rows.inName?.harness_id]);
+    expect(await ids({ q: word, platform: 'linux-x64' })).toEqual([
+      rows.inSummary?.harness_id,
+      rows.inReadme?.harness_id,
+    ]);
+  });
+
+  it('takes %, _ and \\ in the query literally', async () => {
+    expect(await ids({ q: `${after}x9` })).toEqual([rows.literal?.harness_id]);
+    expect(await ids({ q: `${after}_9` })).toEqual([]);
+    expect(await ids({ q: `${after}%` })).toEqual([]);
+    // Unescaped, `\\` would quote the character after it, and these would match the word anywhere
+    // and `x9`.
+    expect(await ids({ q: `\\${after}` })).toEqual([rows.backslash?.harness_id]);
+    expect(await ids({ q: `${after}\\x` })).toEqual([]);
   });
 });
 

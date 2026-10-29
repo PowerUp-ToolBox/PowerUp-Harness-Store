@@ -72,7 +72,9 @@ describe('terminalWindowOptions', () => {
 describe('isAllowedExternalUrl', () => {
   it.each([
     ['https://ollama.com/download', true],
-    ['http://example.com', false],
+    ['http://example.com', true],
+    ['mailto:someone@example.com', false],
+    ['harnessstore://auth-callback', false],
     ['file:///etc/passwd', false],
     ['javascript:alert(1)', false],
     ['not a url', false],
@@ -83,9 +85,10 @@ describe('isAllowedExternalUrl', () => {
 
 describe('renderer Content Security Policy', () => {
   // index.html: the main window; harness.html: a Harness window's own page.
-  // The main window also shows the signed-in Publisher's GitHub avatar (P0-08.1).
+  // The main window also shows the signed-in Publisher's GitHub avatar (P0-08.1) and the Store's
+  // images through the store-asset: scheme (P0-09.1).
   it.each([
-    ['index.html', "img-src 'self' data: https://avatars.githubusercontent.com"],
+    ['index.html', "img-src 'self' data: store-asset: https://avatars.githubusercontent.com"],
     ['harness.html', "img-src 'self' data:"],
   ])('%s ships the strict production policy', (page, images) => {
     const html = readFileSync(new URL(`../src/renderer/${page}`, import.meta.url), 'utf8');

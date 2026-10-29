@@ -1,7 +1,17 @@
-import { useI18n } from '../i18n/I18nProvider.js';
+import { StoreHome } from '../store/StoreHome.js';
+import { StoreFilters, StoreSearchResults } from '../store/StoreSearch.js';
+import { useStoreSearch } from '../store/StoreSearchProvider.js';
 
-// Placeholder: Store home and search arrive in P0-09.
+/**
+ * The Store tab: the filter row over the Store home (P0-09.1), which the results of a search
+ * replace once it has text or a tag (P0-09.2).
+ */
 export function StorePage() {
-  const { t } = useI18n();
-  return <p className="placeholder">{t('store.placeholder')}</p>;
+  const { state } = useStoreSearch();
+  return (
+    <div className="store-page">
+      <StoreFilters />
+      {state.results === null ? <StoreHome /> : <StoreSearchResults results={state.results} />}
+    </div>
+  );
 }

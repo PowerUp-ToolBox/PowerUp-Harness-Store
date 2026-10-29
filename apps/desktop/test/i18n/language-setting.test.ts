@@ -58,6 +58,12 @@ function launch(osLocale: string) {
       get: () => ({ state: 'online' }),
       check: () => Promise.resolve({ state: 'online' }),
     },
+    store: {
+      home: () => Promise.resolve(fail('not_implemented')),
+      search: () => Promise.resolve(fail('not_implemented')),
+      detail: () => Promise.resolve(fail('not_implemented')),
+      publisher: () => Promise.resolve(fail('not_implemented')),
+    },
     providers: { list: () => providerPresets() },
     connections: createConnectionsStub(),
     bindings: createBindingsStub(),

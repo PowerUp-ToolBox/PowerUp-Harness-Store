@@ -1,16 +1,21 @@
 import { isAbsolute } from 'node:path';
-import type {
-  AuthState,
-  IpcMethodName,
-  IpcOutput,
-  IpcResult,
-  LaunchRequest,
-  PublishRequest,
-  UnpublishRequest,
+import {
+  STORE_SEARCH_MAX_LENGTH,
+  type AuthState,
+  type IpcMethodName,
+  type IpcOutput,
+  type IpcResult,
+  type LaunchRequest,
+  type PublishRequest,
+  type StoreHomeRequest,
+  type StoreSearchRequest,
+  type UnpublishRequest,
 } from '../../shared/ipc.js';
+import { isTag } from '../../shared/tags.js';
 import {
   isHarnessIdInput,
   parseGlobalBindingChange,
+  parseManifestSlotsRequest,
   parseModelOverrideChange,
   parseModelOverrideClear,
 } from './bindings.js';
@@ -71,6 +76,26 @@ export function createHandlers(services: Services): IpcHandlers {
     'connectivity.check': async (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'connectivity.check' });
       return ok(await services.connectivity.check());
+    },
+    'store.home': (input) => {
+      const request = parseStoreHomeRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'store.home' });
+      return services.store.home(request);
+    },
+    'store.search': (input) => {
+      const request = parseStoreSearchRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'store.search' });
+      return services.store.search(request);
+    },
+    'store.detail': (input) => {
+      if (!isHarnessIdInput(input) || !input.includes('/')) {
+        return fail('invalid_input', { method: 'store.detail' });
+      }
+      return services.store.detail(input);
+    },
+    'store.publisher': (input) => {
+      if (!isPublisherLogin(input)) return fail('invalid_input', { method: 'store.publisher' });
+      return services.store.publisher(input);
     },
     'providers.list': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'providers.list' });
@@ -140,6 +165,13 @@ export function createHandlers(services: Services): IpcHandlers {
     'bindings.resolveAll': (input) => {
       if (!isHarnessIdInput(input)) return fail('invalid_input', { method: 'bindings.resolveAll' });
       return services.bindings.resolveAll(input);
+    },
+    'bindings.resolveManifest': (input) => {
+      const request = parseManifestSlotsRequest(input);
+      if (request === null) {
+        return fail('invalid_input', { method: 'bindings.resolveManifest' });
+      }
+      return services.bindings.resolveManifest(request);
     },
     'auth.signIn': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'auth.signIn' });
@@ -234,6 +266,50 @@ export function createHandlers(services: Services): IpcHandlers {
       return services.publish.unpublish(request);
     },
   };
+}
+
+/** `{ refresh? }` with a boolean, nothing else; no input at all is `{}`. */
+function parseStoreHomeRequest(input: unknown): StoreHomeRequest | null {
+  if (input === undefined) return {};
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return null;
+  const { refresh, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0) return null;
+  if (refresh === undefined) return {};
+  return typeof refresh === 'boolean' ? { refresh } : null;
+}
+
+/**
+ * A GitHub login as the Store keeps it, lower-cased: the publisher segment of a Harness ID (the
+ * Manifest schema's `harnessId` pattern).
+ */
+function isPublisherLogin(input: unknown): input is string {
+  return typeof input === 'string' && /^[a-z0-9][a-z0-9-]{0,38}$/.test(input);
+}
+
+/** The greatest `offset` Postgres takes as an `int`. */
+const MAX_SEARCH_OFFSET = 2_147_483_647;
+
+/**
+ * `{ q, tags, allPlatforms, offset }`, nothing else: text of at most 200 characters, curated tags
+ * (each once), a boolean and a whole offset from 0 that Postgres takes as an `int`.
+ */
+function parseStoreSearchRequest(input: unknown): StoreSearchRequest | null {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return null;
+  const { q, tags, allPlatforms, offset, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0) return null;
+  if (typeof q !== 'string' || q.length > STORE_SEARCH_MAX_LENGTH) return null;
+  if (!Array.isArray(tags) || !tags.every(isTag) || new Set(tags).size !== tags.length) {
+    return null;
+  }
+  if (typeof allPlatforms !== 'boolean') return null;
+  if (
+    !Number.isInteger(offset) ||
+    (offset as number) < 0 ||
+    (offset as number) > MAX_SEARCH_OFFSET
+  ) {
+    return null;
+  }
+  return { q, tags, allPlatforms, offset: offset as number };
 }
 
 /** `{ harnessId, version }`, a `<publisher>/<slug>` ID and a version string, nothing else. */

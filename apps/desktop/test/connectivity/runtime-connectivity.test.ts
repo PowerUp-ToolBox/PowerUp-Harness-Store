@@ -12,6 +12,7 @@ import { openDatabase } from '../../src/main/runtime/database.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createSqliteSettingsStore } from '../../src/main/runtime/settings-store.js';
+import type { StoreFetch } from '../../src/main/runtime/store-auth.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
 import { offlineProviderFetch } from '../support/provider-fetch.js';
 
@@ -45,12 +46,12 @@ async function launch(options: Partial<RuntimeOptions> & Pick<RuntimeOptions, 'f
   return runtime;
 }
 
-function call(runtime: Runtime, method: string) {
+function call(runtime: Runtime, method: string, input?: unknown) {
   const dispatch = createDispatcher({
     handlers: createHandlers(runtime.services),
     isTrustedSender: (sender) => sender === MAIN_WINDOW,
   });
-  return dispatch(MAIN_WINDOW, { method });
+  return dispatch(MAIN_WINDOW, { method, input });
 }
 
 /** Stores `store_base_url` in the profile's database, as P0-11's Settings screen will. */
@@ -98,6 +99,44 @@ describe('the Runtime and the Store connectivity', () => {
       ok: true,
       data: { state: 'online' },
     });
+  });
+
+  it('has connectivity checked again at the store_base_url when a Store read gets no answer', async () => {
+    setStoreBaseUrl('http://127.0.0.1:9');
+    let reachable = true;
+    const fetch = vi.fn<FetchLike>(() =>
+      reachable
+        ? Promise.resolve({ status: 200 })
+        : Promise.reject(new TypeError('connect ECONNREFUSED')),
+    );
+    const storeFetch = vi.fn<StoreFetch>(() => Promise.reject(new TypeError('fetch failed')));
+    const runtime = await launch({ fetch, storeFetch });
+    await vi.waitFor(() => {
+      expect(runtime.services.connectivity.get()).toEqual({ state: 'online' });
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+
+    reachable = false;
+    await expect(call(runtime, 'store.home')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'store_unreachable' },
+    });
+    expect(storeFetch.mock.calls[0]?.[0]).toMatch(
+      /^http:\/\/127\.0\.0\.1:9\/rest\/v1\/harnesses\?/,
+    );
+    await vi.waitFor(() => {
+      expect(runtime.services.connectivity.get()).toEqual({ state: 'offline' });
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[1]?.[0]).toBe('http://127.0.0.1:9');
+
+    // Reported, not re-checked: once offline, another failed read checks nothing more (the
+    // offline backoff does that).
+    await expect(call(runtime, 'store.home', { refresh: true })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'store_unreachable' },
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it('does not check the Store when the Runtime failed to start', async () => {

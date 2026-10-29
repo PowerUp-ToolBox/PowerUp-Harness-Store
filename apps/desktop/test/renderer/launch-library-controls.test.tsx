@@ -177,12 +177,13 @@ describe('the card menu', () => {
     return view.getByRole('menu', { name: 'More actions for Hello Term' });
   };
 
-  it('lists Model Overrides, Show logs and Open data folder, the first one focused', async () => {
+  it('lists View in Store, Model Overrides, Show logs and Open data folder, the first one focused', async () => {
     setup();
     await renderApp('#/library');
     const menu = await openMenu();
     const items = within(menu).getAllByRole('menuitem');
     expect(items.map((item) => item.textContent)).toEqual([
+      'View in Store',
       'Model Overrides',
       'Show logs',
       'Open data folder',
@@ -192,7 +193,7 @@ describe('the card menu', () => {
     expect(document.activeElement).toBe(items[1]);
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
-    expect(document.activeElement).toBe(items[2]);
+    expect(document.activeElement).toBe(items[3]);
 
     fireEvent.keyDown(menu, { key: 'Escape' });
     expect((await card()).queryByRole('menu')).toBeNull();

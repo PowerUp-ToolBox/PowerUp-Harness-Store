@@ -1,9 +1,10 @@
 /**
  * Ticket P0-07.5: the Store home rows (Featured, Most downloaded, New) and the Publisher page,
  * which are plain PostgREST reads with the anon key, called exactly as docs/tech/api.md writes
- * them, against the seed catalogue (scripts/seed.ts) plus the Harnesses of one test Publisher:
- * two visible, one Unpublished-only and one taken down, the hidden two Featured with the lowest
- * ranks so that only row-level security can keep them out.
+ * them (with the platforms of the published versions embedded since P0-09.1), against the seed
+ * catalogue (scripts/seed.ts) plus the Harnesses of one test Publisher: two visible, one
+ * Unpublished-only and one taken down, the hidden two Featured with the lowest ranks so that only
+ * row-level security can keep them out.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -17,7 +18,7 @@ import {
 import type { Caller, HarnessRow, TestUser } from './support.ts';
 
 const LIST_COLUMNS =
-  'harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at';
+  'harness_id,name,summary,icon_path,tags,download_count,latest_version,latest_published_at,harness_versions(version,platforms)';
 
 /** The reads of api.md "Reads", word for word. */
 const FEATURED = `harnesses?featured_rank=not.is.null&order=featured_rank&limit=12&select=${LIST_COLUMNS}`;
@@ -130,7 +131,24 @@ describe('Store home', () => {
       download_count: 100,
       latest_version: '1.0.0',
       latest_published_at: expect.any(String) as string,
+      harness_versions: [{ version: '1.0.0', platforms: ['linux-x64'] }],
     });
+  });
+
+  it("embeds the published versions' platforms only, the latest version's among them", async () => {
+    interface Row {
+      harness_id: string;
+      latest_version: string;
+      harness_versions: { version: string; platforms: string[] }[];
+    }
+    const reply = await rest<Row[]>('anon', 'GET', MOST_DOWNLOADED);
+    // alice/hello-web 0.2.0 is Unpublished.
+    const helloWeb = reply.body.find((row) => row.harness_id === 'alice/hello-web');
+    expect(helloWeb?.harness_versions.map((row) => row.version)).toEqual(['0.1.0']);
+    for (const row of reply.body) {
+      const latest = row.harness_versions.find((version) => version.version === row.latest_version);
+      expect(latest?.platforms.length, row.harness_id).toBeGreaterThan(0);
+    }
   });
 });
 

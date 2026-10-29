@@ -96,6 +96,7 @@ export function PublishReview({
           iconUrl={validation.iconDataUrl}
           downloads={0}
           platforms={manifest.platforms}
+          tags={manifest.tags ?? []}
         />
         <h3>{t('publish.preview.detail')}</h3>
         <ListingDetail

@@ -91,6 +91,91 @@ describe('permissionItems', () => {
   });
 });
 
+/**
+ * Ticket P0-09.3's severity rule, the one shared answer of the Store detail page, the consent
+ * dialog and the Publish preview (all three render permissionItems through TrustBlock): red =
+ * `shell: true`, `filesystem.scope` home or paths, or `network.any`; yellow = the Workspace or
+ * named domains; green = no file access beyond the Data Directory, and no network. Low, medium
+ * and high are shown green, yellow and red.
+ */
+describe('permission severity (red, yellow, green)', () => {
+  const COLOUR = { low: 'green', medium: 'yellow', high: 'red' } as const;
+  const colours = (permissions: DeclaredPermissions) =>
+    Object.fromEntries(
+      permissionItems(permissions).map((item) => [
+        en.t(item.messageKey, item.params),
+        COLOUR[item.severity],
+      ]),
+    );
+  const NONE: DeclaredPermissions = {
+    filesystem: { scope: 'none' },
+    shell: false,
+    network: { domains: [] },
+  };
+
+  it.each<[string, DeclaredPermissions, Record<string, string>]>([
+    [
+      'no access',
+      NONE,
+      {
+        'Uses only its own data directory': 'green',
+        'No network access besides the Model Gateway': 'green',
+      },
+    ],
+    [
+      'shell: true',
+      { ...NONE, shell: true },
+      {
+        'Uses only its own data directory': 'green',
+        'Runs shell commands': 'red',
+        'No network access besides the Model Gateway': 'green',
+      },
+    ],
+    [
+      'filesystem.scope home',
+      { ...NONE, filesystem: { scope: 'home' } },
+      {
+        'Accesses your home folder': 'red',
+        'No network access besides the Model Gateway': 'green',
+      },
+    ],
+    [
+      'filesystem.scope paths',
+      { ...NONE, filesystem: { scope: 'paths', paths: ['~/notes'] } },
+      {
+        'Reads and writes these paths: ~/notes': 'red',
+        'No network access besides the Model Gateway': 'green',
+      },
+    ],
+    [
+      'network.any',
+      { ...NONE, network: { any: true } },
+      {
+        'Uses only its own data directory': 'green',
+        'Connects to the internet (any site)': 'red',
+      },
+    ],
+    [
+      'filesystem.scope workspace',
+      { ...NONE, filesystem: { scope: 'workspace' } },
+      {
+        'Reads and writes files in the folder you choose': 'yellow',
+        'No network access besides the Model Gateway': 'green',
+      },
+    ],
+    [
+      'named network.domains',
+      { ...NONE, network: { domains: ['api.github.com'] } },
+      {
+        'Uses only its own data directory': 'green',
+        'Connects to: api.github.com': 'yellow',
+      },
+    ],
+  ])('%s', (_name, permissions, expected) => {
+    expect(colours(permissions)).toEqual(expected);
+  });
+});
+
 describe('harnessFacts', () => {
   it('names the runtime kind, the UI Kind and the Workspace', () => {
     expect(

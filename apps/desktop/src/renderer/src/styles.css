@@ -592,7 +592,193 @@ code {
   white-space: nowrap;
 }
 
-/* README and changelogs, as plain text until P0-09 renders them as Markdown. */
+/* The Store home (P0-09.1): Featured scrolls sideways, New and Most downloaded side by side. */
+.store-home {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.store-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+  align-items: start;
+}
+
+.store-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.store-section h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.store-cards {
+  display: flex;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.store-cards-column {
+  flex-direction: column;
+}
+
+.store-cards-column .listing-card {
+  max-width: none;
+}
+
+.store-cards-row {
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+
+.store-cards-row > li {
+  flex: 0 0 300px;
+}
+
+.store-cards-row .listing-card {
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.skeleton-card {
+  height: 96px;
+  border-radius: 12px;
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+}
+
+.store-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 520px;
+}
+
+.store-error h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+/* The Store's filter row and search results (P0-09.2). */
+.store-page {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.store-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.store-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 420px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 10px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+}
+
+.store-search:focus-within {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.store-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--color-text);
+}
+
+.store-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.filter-chip {
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.filter-chip:hover {
+  background: var(--color-bg-subtle);
+}
+
+.filter-chip[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+  font-weight: 600;
+}
+
+.store-platform-filter {
+  font-size: 13px;
+}
+
+.store-search-results {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.store-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  align-self: stretch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.store-results .listing-card {
+  max-width: none;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.store-no-results {
+  align-items: flex-start;
+}
+
+/* The Publish review's changelog, as the Publisher wrote it (plain text). */
 .listing-text {
   margin: 0;
   overflow-wrap: anywhere;
@@ -601,6 +787,7 @@ code {
 
 /* The Store's listing: its card and detail page (shared with P0-09). */
 .listing-card {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 12px;
@@ -636,6 +823,38 @@ code {
   font-size: 13px;
 }
 
+/* A Store card's name is a link stretched over the whole card; the Publisher's login sits above. */
+.listing-card-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.listing-card-link::after {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  content: '';
+}
+
+.listing-card:has(.listing-card-link:hover) {
+  border-color: var(--color-border-strong);
+}
+
+.listing-card-link:focus-visible {
+  outline: none;
+}
+
+.listing-card-link:focus-visible::after {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.listing-card-publisher {
+  position: relative;
+  z-index: 1;
+  color: inherit;
+}
+
 .platform-badges,
 .tag-chips {
   display: flex;
@@ -652,6 +871,19 @@ code {
   border-radius: 6px;
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+/* This machine's platform: highlighted when declared, greyed and struck through when not. */
+.platform-badges li.current {
+  border-color: var(--color-accent);
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+}
+
+.platform-badges li.unsupported {
+  border-style: dashed;
+  color: var(--color-text-muted);
+  text-decoration: line-through;
 }
 
 .tag-chips li {
@@ -713,6 +945,12 @@ code {
   overflow-wrap: anywhere;
 }
 
+.listing-detail-publisher-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .listing-detail-summary {
   margin: 0;
 }
@@ -769,6 +1007,225 @@ code {
 
 .listing-version {
   font-weight: 600;
+}
+
+.listing-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.listing-detail-actions .error-message,
+.listing-detail-actions .hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.download-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.download-button progress {
+  width: 64px;
+}
+
+/* Screenshots: up to five, side by side, scrolling sideways. */
+.listing-screenshots {
+  display: flex;
+  gap: 12px;
+  margin: 0;
+  padding: 0 0 6px;
+  overflow-x: auto;
+  list-style: none;
+}
+
+.listing-screenshots img {
+  display: block;
+  height: 220px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+/* What a Model Slot would use on this machine. */
+.listing-slot-use {
+  font-size: 13px;
+}
+
+.listing-slot-use[data-reachable='true'] {
+  color: var(--color-success);
+}
+
+.listing-slot-use[data-reachable='false'] {
+  color: var(--color-warning-text);
+}
+
+.listing-versions > li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.listing-version-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.listing-version-date {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.badge-warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+
+/* A Publisher's README and changelogs, rendered from Markdown and sanitised. */
+.markdown {
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 1em 0 0.4em;
+  font-size: 15px;
+}
+
+.markdown h1 {
+  font-size: 18px;
+}
+
+.markdown h2 {
+  font-size: 16px;
+}
+
+.markdown pre {
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: var(--color-bg-subtle);
+}
+
+.markdown code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.markdown blockquote {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--color-border-strong);
+  color: var(--color-text-muted);
+}
+
+.markdown img {
+  max-width: 100%;
+}
+
+.markdown table {
+  border-collapse: collapse;
+}
+
+.markdown th,
+.markdown td {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+}
+
+.markdown a {
+  color: var(--color-accent);
+}
+
+/* The Store detail page: Back above the shared listing. */
+.store-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.page-back {
+  align-self: flex-start;
+}
+
+.skeleton-detail {
+  min-height: 320px;
+  background: var(--color-bg-subtle);
+}
+
+.store-gone {
+  align-items: flex-start;
+}
+
+/* The Publisher page (P0-09.4): Back, the Publisher, then their Harnesses as Store cards. */
+.store-publisher {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 18px;
+}
+
+.publisher-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.avatar.avatar-large {
+  flex-basis: 72px;
+  width: 72px;
+  height: 72px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+}
+
+.publisher-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.publisher-heading h2 {
+  margin: 0;
+  font-size: 22px;
+  overflow-wrap: anywhere;
+}
+
+.publisher-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.publisher-bio {
+  margin: 0;
+  max-width: 640px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .listing-detail-footer {
@@ -2025,6 +2482,10 @@ input[aria-invalid='true'] {
   color: var(--color-text-muted);
   font-size: 13px;
   overflow-wrap: anywhere;
+}
+
+.harness-card-publisher {
+  color: inherit;
 }
 
 .harness-card-actions {

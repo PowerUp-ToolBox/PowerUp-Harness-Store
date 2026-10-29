@@ -109,6 +109,7 @@ Node Harnesses are executed with the Runtime's Node (`<node> <entry>`). In P0 th
 
 ## 6. Data flows
 
+- **Browse**: Renderer → Runtime `store.home` / `store.search` / `store.detail` / `store.publisher` → anonymous PostgREST reads and RPCs at the Store base URL (home rows cached 5 minutes) → cards and detail pages; icons and screenshots through the Runtime's `store-asset:` scheme; Slot reachability from the local resolver over the Store Manifest.
 - **Install**: Renderer → Runtime.install(harnessId, version) → Store `download` function → signed URL → download to temp → sha256 check → unpack → consent screen (permissions, MCP-like commands are not a concept here; only Declared Permissions and Entry) → record install.
 - **Update**: Runtime polls Store for newer published versions of installed Harnesses on app start and every 6 h. If the new Manifest adds a Declared Permission or changes Entry/runtime kind, the update requires re-consent; otherwise one click.
 - **Publish**: Renderer picks a folder → the Runtime builds the deterministic zip from it (leaving out the fixed exclusions and `.harnessignore`) and validates that zip with `packages/manifest`, with the Publisher's login and their earlier versions from the Store → read-only review and listing preview → the same zip to the `publish` Edge Function with upload progress (re-validates, stores, creates immutable Harness Version) → listing visible immediately.
