@@ -42,8 +42,8 @@ Harness Store is a desktop app (Electron + React + TypeScript) that installs **H
 React single-page app. No business logic beyond view state; every action goes through typed IPC to the Runtime. i18n via message catalogs (en, zh-CN) selected from OS locale, overridable in Settings.
 
 ### 2.2 Runtime (Electron main process)
-- **Installer**: downloads a Harness Package from the Store (signed URL), verifies sha256, unpacks into the install directory, records the install, and drives the permission-consent step. Also supports "install from local folder" for Publishers testing their own Harness.
-- **Process Supervisor**: spawns the Harness Entry with the injected environment (§4), owns its window (web or terminal UI Kind), enforces single instance, kills the process when the window closes, and cleans up Gateway Tokens.
+- **Installer**: downloads a Harness Package from the Store (signed URL), verifies sha256, unpacks into the install directory, records the install, and drives the permission-consent step. Also supports "install from local folder" for Publishers testing their own Harness (validate, consent, then copy and record; marked Local).
+- **Process Supervisor**: spawns the Harness Entry with the injected environment (§4), owns its window (web or terminal UI Kind), enforces single instance (a second Launch focuses the window), stops the process when the window closes or the app quits, and cleans up Gateway Tokens. It and the installer are Electron-free and reach windows, dialogs and the OS shell through injected interfaces, so the Supervisor seam (§8) runs without a display.
 - **Model Gateway**: see [`gateway-protocol.md`](./gateway-protocol.md). Implemented in `packages/gateway` as a framework-independent Node HTTP server so it can be tested without Electron and later reused server-side (P2).
 - **Local store**: SQLite database in the app data directory for installs, Slot Bindings, Usage Records, settings and Provider Connection metadata. Secrets (API keys) are encrypted with Electron `safeStorage` and stored as opaque blobs; when OS encryption is unavailable (on Linux also when its backend is `basic_text`), the Runtime refuses to store a key rather than keep it in plaintext.
 
@@ -76,14 +76,15 @@ docs/               this documentation
 
 When the Runtime starts a Harness it:
 
-1. Resolves Entry for the current platform from the Manifest.
-2. Creates (if absent) the Harness's **Data Directory** under the app data root.
-3. If `workspace` is `required`, asks the User to pick a folder (remembering the last one); if `optional`, offers the picker but allows skipping.
-4. Issues a **Gateway Token** bound to (Harness ID, Harness Version, launch id, locale, Workspace if any); see gateway-protocol.md §1.
-5. Picks a free TCP port for web UI Kind.
-6. Spawns the process with `cwd` = Workspace if present, else the Data Directory, and the environment in the table below (inherited environment is passed through, with `OPENAI_*` and `ANTHROPIC_*` variables removed first so a Harness cannot accidentally use the User's own shell credentials).
-7. For `ui.kind = web`: polls `127.0.0.1:<port>` until it accepts a TCP connection (timeout 30 s, configurable in Manifest up to 120 s), then opens a BrowserWindow at `http://127.0.0.1:<port><ui.path ?? "/">`. For `ui.kind = terminal`: opens a window with an embedded terminal attached to the process's pty.
-8. On window close: sends SIGTERM, waits 5 s, then SIGKILL. On process exit: closes the window and shows the exit code if non-zero. Either way the Gateway Token is revoked.
+1. Checks that a model can fill the Harness's `default` Model Slot (gateway-protocol.md §4); if none can, the launch is refused with `slot_unbound` before anything starts and the User is sent to the Models page (flows.md F3). No other Slot is checked.
+2. Resolves Entry for the current platform from the Manifest: the platform must be listed in `platforms` (for every runtime kind) and, for `binary`, have an `entry` key; otherwise the launch fails `platform_unsupported`. A missing Entry file fails `spawn_error`.
+3. Creates (if absent) the Harness's **Data Directory** under the app data root.
+4. Takes the Workspace the User chose. The Runtime asks before the launch (flows.md F3): if `workspace` is `required`, a folder must be picked (the last one is remembered) and none ends the launch `workspace_cancelled`; if `optional`, picking may be skipped; if `none`, nothing is asked.
+5. Issues a **Gateway Token** bound to (Harness ID, Harness Version, launch id, locale, Workspace if any; see gateway-protocol.md §1) and records the launch. Steps 1–4 failing leave no token and no launch record.
+6. Picks a free TCP port on `127.0.0.1` for web UI Kind (bind port 0, release it), never one another running Harness holds.
+7. Spawns the process with `cwd` = Workspace if present, else the Data Directory, and the environment in the table below. The inherited environment is passed through after removing every variable whose name starts with `OPENAI_`, `ANTHROPIC_`, `GOOGLE_API_`, `GEMINI_`, `OPENROUTER_` or `HARNESS_` (case-insensitive), so a Harness cannot accidentally use the User's own shell credentials or a stray contract variable. On macOS/Linux the process leads its own process group, so the shutdown signals reach every process it started.
+8. For `ui.kind = web`: opens the Harness window at once on a Starting state, polls `127.0.0.1:<port>` every 250 ms until it accepts a TCP connection (timeout `ui.readyTimeoutSeconds`, 30 s by default, 5–120, counted from the spawn), then loads `http://127.0.0.1:<port><ui.path ?? "/">` in the window. A timeout stops the process (step 9) and shows the last 50 lines of its output. For `ui.kind = terminal`: opens a window with an embedded terminal, then starts the process in a pty of the terminal's size.
+9. On window close (and on app quit): sends SIGTERM (to the process group; Windows: `taskkill /T`), waits 5 s, then SIGKILL (`taskkill /T /F`) if anything of it remains. On process exit by itself: the window stays open and readable with the exit code (128 + the signal number for a process a signal ended) and Relaunch / Close. Either way the Gateway Token is revoked and the launch record gets its end, exit code and revocation time.
 
 | Variable | Value |
 |---|---|
@@ -100,7 +101,7 @@ When the Runtime starts a Harness it:
 | `HARNESS_PLATFORM` | e.g. `darwin-arm64` |
 | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` | added in P1-03 once the Gateway accepts Anthropic Messages inbound; not set in P0 |
 
-Node Harnesses are executed with the Runtime's bundled Node LTS (`<bundled node> <entry>`). Binary Harnesses are executed directly; the Runtime sets the executable bit on macOS/Linux after unpacking.
+Node Harnesses are executed with the Runtime's Node (`<node> <entry>`). In P0 that is Electron's own Node, the app's executable with `ELECTRON_RUN_AS_NODE=1` (set for Node Harnesses only): Node 24 in Electron 45, although Manifests declare `runtime.node: "22"`; a separately bundled Node LTS is deferred. Binary Harnesses are executed directly; the Runtime sets the executable bit on macOS/Linux on every declared platform's Entry when it installs them. Each launch's stdout/stderr (or pty output) goes to its own log file under `logs/` in the app data root (data-model.md §2), never into the Data Directory.
 
 ## 5. Model resolution (summary; normative text in gateway-protocol.md)
 

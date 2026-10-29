@@ -30,6 +30,8 @@
   --color-info-text: #1e3f8f;
   --color-error-bg: #fbe9e7;
   --color-error-border: #f0c2bc;
+  --color-override-bg: #eee6f7;
+  --color-override-text: #5a3a86;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -54,6 +56,8 @@
     --color-info-text: #c3d3f8;
     --color-error-bg: #3b1f1d;
     --color-error-border: #6a2f2a;
+    --color-override-bg: #2f2640;
+    --color-override-text: #d4c2ef;
   }
 }
 
@@ -1235,6 +1239,151 @@ input[aria-invalid='true'] {
   color: var(--color-warning-text);
 }
 
+/* A Model Requirements check under a binding control: a known failure, or unknown capabilities. */
+.requirement-warning {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  font-size: 12px;
+}
+
+.requirement-unknown {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+/* Per-Harness Overrides (P0-03.5): one expandable card per installed Harness. */
+.override-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.override-card {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  scroll-margin-top: 16px;
+}
+
+.override-card-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  border: none;
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.override-card-icon {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.override-card-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.override-card-count,
+.override-card-caret {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.override-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.override-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.override-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.override-row-slot {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.override-row-description {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.override-row-resolved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.override-row-model {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.override-row-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.override-row-controls .model-picker {
+  flex: 1 1 300px;
+}
+
+/* Why a Slot resolved as it did. */
+.status-chip[data-status='override'] {
+  background: var(--color-override-bg);
+  color: var(--color-override-text);
+}
+
+.status-chip[data-status='recommended'] {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.status-chip[data-status='default'],
+.status-chip[data-status='default_same_name'] {
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+}
+
+.status-chip[data-status='unbound'] {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
 /* A passed Connection test, next to its Test button. */
 .test-passed {
   color: var(--color-success);
@@ -1253,4 +1402,565 @@ input[aria-invalid='true'] {
 
 .connection-row-test .field {
   flex: 0 1 280px;
+}
+
+/* Library (P0-05.1): one card per installed Harness. */
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.harness-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg);
+}
+
+.harness-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.harness-icon {
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+}
+
+.harness-icon.monogram {
+  font-size: 16px;
+}
+
+.harness-card-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.harness-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.harness-card-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.harness-card-subtitle {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.harness-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.badge {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--color-sidebar-active);
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.library-empty {
+  align-items: center;
+  gap: 14px;
+  padding: 64px 16px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.library-empty svg {
+  width: 48px;
+  height: 48px;
+}
+
+.library-empty .empty-panel-title {
+  color: var(--color-text);
+  font-size: 17px;
+}
+
+.library-empty .button-primary {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+/* A launched Harness's state on its card (P0-05.2): the secondary "Show window". */
+.harness-card-actions .button-link {
+  padding: 0 4px;
+}
+
+/* The Workspace sheet before a launch (P0-05.4): the folder, then what the Harness may do there. */
+.workspace-folder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+.workspace-folder-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workspace-folder-path {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.workspace-folder-tag {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.modal .workspace-access {
+  color: var(--color-warning-text);
+  font-size: 13px;
+}
+
+/* A Harness window's own page (P0-05.2): the thin top bar, then the embedded terminal. */
+.harness-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.harness-bar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+}
+
+.harness-bar-icon {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.harness-bar-icon.monogram {
+  font-size: 11px;
+}
+
+.harness-bar-name {
+  font-weight: 600;
+}
+
+.harness-bar-models {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.model-chip:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+.harness-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.harness-bar-status {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.harness-bar-status.failed {
+  color: var(--color-error);
+}
+
+.harness-bar-error {
+  padding: 0 10px;
+}
+
+.harness-terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0 0 6px;
+  background: #1b1c1f;
+}
+
+/*
+ * A web Harness window (P0-05.3): the room main lays the Harness's page over once it is ready, and
+ * the Starting, Crashed and Timed-out states shown there while it is not.
+ */
+.harness-web {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--color-bg);
+}
+
+.harness-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  text-align: center;
+  background: var(--color-bg-subtle);
+}
+
+.harness-overlay-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--color-info-bg);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .harness-overlay-spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+.harness-overlay-title {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.harness-overlay-elapsed {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.harness-overlay-code {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.harness-overlay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.harness-log-tail {
+  box-sizing: border-box;
+  width: min(100%, 860px);
+  max-height: 40vh;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #1b1c1f;
+  color: #ececee;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Publish: "Install this folder locally" (P0-05.1). */
+.install-folder {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.install-folder-title {
+  margin: 0;
+  font-size: 17px;
+}
+
+.install-folder-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.install-folder-path {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.install-folder-done {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-success-bg);
+  color: var(--color-text);
+}
+
+.problem-panel,
+.warning-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-error-border);
+  border-radius: 10px;
+  background: var(--color-error-bg);
+}
+
+.warning-panel {
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-bg);
+}
+
+.problem-panel-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.problem-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.problem-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  overflow-wrap: anywhere;
+}
+
+/* The install consent dialog (shared with P0-10). */
+.permission-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.permission-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.permission-item[data-severity='medium'] {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+
+.permission-item[data-severity='high'] {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.permission-item svg {
+  flex: 0 0 18px;
+  margin-top: 1px;
+}
+
+.permission-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.permission-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.permission-consequence {
+  font-size: 12px;
+}
+
+.fact-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fact-chips li {
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: var(--color-sidebar);
+  font-size: 12px;
+}
+
+.consent-id {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.modal .consent-note {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  font-size: 13px;
+}
+
+.modal .no-sandbox {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/*
+ * A Library card's failed launch and overflow menu (P0-05.6): the error line with Show logs and
+ * Dismiss, and the three-dot menu under the card's top right corner.
+ */
+.harness-card-failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-size: 12px;
+}
+
+.harness-card-failure-text {
+  font-weight: 600;
+}
+
+.harness-card-failure .button-link {
+  min-height: 24px;
+  padding: 0;
+  color: inherit;
+  font-size: 12px;
+}
+
+.card-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.card-menu-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.card-menu-button:hover,
+.card-menu-button[aria-expanded='true'] {
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+}
+
+.card-menu-list {
+  position: absolute;
+  top: 40px;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 10px;
+  background: var(--color-bg);
+  box-shadow: 0 8px 24px rgb(28 29 33 / 16%);
+}
+
+.card-menu-list [role='menuitem'] {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.card-menu-list [role='menuitem']:hover,
+.card-menu-list [role='menuitem']:focus-visible {
+  background: var(--color-bg-subtle);
 }

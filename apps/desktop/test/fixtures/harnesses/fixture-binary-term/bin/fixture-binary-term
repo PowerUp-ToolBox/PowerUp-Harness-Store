@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stands in for a native executable: it becomes fixture-term's script on the Node the test names
+# in $FIXTURE_NODE ($FIXTURE_HARNESSES is the folder of the test's fixture Harnesses).
+exec "$FIXTURE_NODE" "$FIXTURE_HARNESSES/fixture-term/index.mjs" "$@"

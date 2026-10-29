@@ -1,5 +1,17 @@
-import type { AuthState, IpcMethodName, IpcOutput, IpcResult } from '../../shared/ipc.js';
-import { parseGlobalBindingChange } from './bindings.js';
+import { isAbsolute } from 'node:path';
+import type {
+  AuthState,
+  IpcMethodName,
+  IpcOutput,
+  IpcResult,
+  LaunchRequest,
+} from '../../shared/ipc.js';
+import {
+  isHarnessIdInput,
+  parseGlobalBindingChange,
+  parseModelOverrideChange,
+  parseModelOverrideClear,
+} from './bindings.js';
 import {
   parseConnectionDraft,
   parseConnectionTestDraft,
@@ -107,6 +119,26 @@ export function createHandlers(services: Services): IpcHandlers {
       if (change === null) return fail('invalid_input', { method: 'bindings.setGlobal' });
       return services.bindings.setGlobal(change);
     },
+    'bindings.getForHarness': (input) => {
+      if (!isHarnessIdInput(input)) {
+        return fail('invalid_input', { method: 'bindings.getForHarness' });
+      }
+      return ok(services.bindings.getForHarness(input));
+    },
+    'bindings.setOverride': (input) => {
+      const change = parseModelOverrideChange(input);
+      if (change === null) return fail('invalid_input', { method: 'bindings.setOverride' });
+      return services.bindings.setOverride(change);
+    },
+    'bindings.clearOverride': (input) => {
+      const clear = parseModelOverrideClear(input);
+      if (clear === null) return fail('invalid_input', { method: 'bindings.clearOverride' });
+      return services.bindings.clearOverride(clear);
+    },
+    'bindings.resolveAll': (input) => {
+      if (!isHarnessIdInput(input)) return fail('invalid_input', { method: 'bindings.resolveAll' });
+      return services.bindings.resolveAll(input);
+    },
     'auth.signIn': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'auth.signIn' });
       return authResult(() => services.auth.signIn());
@@ -119,7 +151,72 @@ export function createHandlers(services: Services): IpcHandlers {
       if (input !== undefined) return fail('invalid_input', { method: 'auth.whoami' });
       return authResult(() => services.auth.whoami());
     },
+    'installs.chooseFolder': async (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'installs.chooseFolder' });
+      return ok(await services.installs.chooseFolder());
+    },
+    'installs.inspectFolder': (input) => {
+      if (!isAbsolutePath(input)) {
+        return fail('invalid_input', { method: 'installs.inspectFolder' });
+      }
+      return services.installs.inspectFolder(input);
+    },
+    'installs.installFromFolder': (input) => {
+      if (!isAbsolutePath(input)) {
+        return fail('invalid_input', { method: 'installs.installFromFolder' });
+      }
+      return services.installs.installFromFolder(input);
+    },
+    'installs.list': async (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'installs.list' });
+      return ok(await services.installs.list());
+    },
+    'launch.start': (input) => {
+      const request = parseLaunchRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'launch.start' });
+      return services.launch.start(request.harnessId, request.workspace ?? null);
+    },
+    'launch.chooseWorkspace': (input) => {
+      if (!isHarnessIdInput(input)) {
+        return fail('invalid_input', { method: 'launch.chooseWorkspace' });
+      }
+      return services.launch.chooseWorkspace(input);
+    },
+    'launch.lastWorkspace': (input) => {
+      if (!isHarnessIdInput(input))
+        return fail('invalid_input', { method: 'launch.lastWorkspace' });
+      return services.launch.lastWorkspace(input);
+    },
+    'launch.status': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'launch.status' });
+      return ok(services.launch.status());
+    },
+    'launch.openLogs': (input) => {
+      if (!isHarnessIdInput(input)) return fail('invalid_input', { method: 'launch.openLogs' });
+      return services.launch.openLogs(input);
+    },
+    'launch.openDataFolder': (input) => {
+      if (!isHarnessIdInput(input)) {
+        return fail('invalid_input', { method: 'launch.openDataFolder' });
+      }
+      return services.launch.openDataFolder(input);
+    },
   };
+}
+
+/** `{ harnessId, workspace? }`, the Workspace an absolute path or null, nothing else. */
+function parseLaunchRequest(input: unknown): LaunchRequest | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { harnessId, workspace, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0 || !isHarnessIdInput(harnessId)) return null;
+  if (workspace === undefined) return { harnessId };
+  if (workspace !== null && !isAbsolutePath(workspace)) return null;
+  return { harnessId, workspace };
+}
+
+/** An absolute path of this OS, as the folder picker returns it. */
+function isAbsolutePath(input: unknown): input is string {
+  return typeof input === 'string' && !input.includes('\0') && isAbsolute(input);
 }
 
 /** The auth call's state, or its {@link StoreAuthError} as that error code; anything else throws. */

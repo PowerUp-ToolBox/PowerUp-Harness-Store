@@ -1,0 +1,42 @@
+{
+  "manifestVersion": 1,
+  "id": "acme/fixture-slow-ready",
+  "version": "1.0.0",
+  "name": "Fixture Slow Ready",
+  "summary": "A web Harness that starts listening after 2 seconds.",
+  "license": "MIT",
+  "platforms": [
+    "darwin-arm64",
+    "darwin-x64",
+    "linux-x64",
+    "linux-arm64",
+    "win32-x64",
+    "win32-arm64"
+  ],
+  "runtime": {
+    "kind": "node",
+    "node": "22"
+  },
+  "entry": "index.mjs",
+  "ui": {
+    "kind": "web",
+    "readyTimeoutSeconds": 5
+  },
+  "workspace": "none",
+  "models": {
+    "slots": {
+      "default": {
+        "description": "Answers the test's messages."
+      }
+    }
+  },
+  "permissions": {
+    "filesystem": {
+      "scope": "none"
+    },
+    "shell": false,
+    "network": {
+      "domains": []
+    }
+  }
+}

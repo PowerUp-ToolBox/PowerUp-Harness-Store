@@ -7,6 +7,7 @@
  * {@link IpcResult}; one event channel carries `{ event, payload }` from main to the renderer.
  */
 
+import type { DeclaredPermissions, Manifest, Platform, Problem } from '@harness-store/manifest';
 import type { Locale } from './i18n/locale.js';
 
 /**
@@ -36,6 +37,33 @@ export type IpcErrorCode =
   | 'sign_in_cancelled'
   /** The Store did not answer (network error, timeout or a 5xx). */
   | 'store_unreachable'
+  /**
+   * A Harness folder is not (or no longer) a valid Harness Package: it cannot be read, fails
+   * validation, or its Manifest changed since `installs.inspectFolder` showed it. The problems
+   * themselves come from `installs.inspectFolder`, never in the error.
+   */
+  | 'package_invalid'
+  /**
+   * A file of a Harness folder that the User's account is not allowed to open, named in the
+   * `path` param (relative to the folder). Unlike `package_invalid` it does not go away when the
+   * folder is checked again: the User has to fix the file's permissions.
+   */
+  | 'file_unreadable'
+  /** The Harness is running, so it cannot be installed over (or uninstalled) now. */
+  | 'harness_running'
+  /**
+   * An install of the Harness is putting new files in place, so it cannot be launched until the
+   * install is done.
+   */
+  | 'harness_installing'
+  /** No Harness with this ID is installed. */
+  | 'not_installed'
+  /**
+   * The OS could not open a log, logs folder or Data Directory (Electron `shell.openPath`
+   * failed: on Linux, say, no app is set up for it). The `path` param names it, so the User can
+   * open it another way.
+   */
+  | 'open_failed'
   | 'invalid_request'
   | 'invalid_token'
   | 'invalid_host'
@@ -144,6 +172,32 @@ export interface IpcMethods {
    */
   'bindings.setGlobal': { input: GlobalBindingChange; output: readonly GlobalBinding[] };
   /**
+   * The Model Overrides of one Harness, by Slot name: every stored row, including one for a Slot
+   * its Manifest no longer declares (resolution ignores those). Empty for a Harness without any,
+   * installed or not.
+   */
+  'bindings.getForHarness': { input: string; output: readonly ModelOverride[] };
+  /**
+   * Overrides one Model Slot of an installed Harness, and returns its Model Overrides as they now
+   * are. The Model Gateway uses it from that Harness's next request on, ahead of its Recommended
+   * Models and the Default Models. Checked as `bindings.setGlobal` checks a Default Model
+   * (`provider_not_connected`, `invalid_input`); a Slot the Harness's Manifest does not declare is
+   * `invalid_input`, a Harness that is not installed `not_installed`. The model is not checked
+   * against the Slot's Model Requirements: a warning is advisory, never a refusal.
+   */
+  'bindings.setOverride': { input: ModelOverrideChange; output: readonly ModelOverride[] };
+  /**
+   * Removes the Model Override of one Slot of a Harness (nothing to remove is fine), and returns
+   * its Model Overrides as they now are: resolution goes back to the automatic order.
+   */
+  'bindings.clearOverride': { input: ModelOverrideClear; output: readonly ModelOverride[] };
+  /**
+   * What every Model Slot of an installed Harness resolves to right now, and why, exactly as the
+   * Model Gateway would resolve it: `default` first, then the Manifest's order. `not_installed`
+   * for a Harness that is not installed.
+   */
+  'bindings.resolveAll': { input: string; output: readonly ResolvedSlot[] };
+  /**
    * Signs the Publisher in to the Store with GitHub: opens the User's browser (never a window of
    * the app) on the Store's GitHub sign-in, and resolves once the browser comes back through
    * `harnessstore://auth-callback` and the session is stored encrypted. Fails with
@@ -160,6 +214,210 @@ export interface IpcMethods {
    * signed out.
    */
   'auth.whoami': { input: undefined; output: AuthState };
+  /**
+   * Opens the OS folder picker over the main window; the chosen folder's absolute path, or null
+   * when the User cancelled.
+   */
+  'installs.chooseFolder': { input: undefined; output: string | null };
+  /**
+   * Validates the Harness folder at this absolute path with `validatePackage`, reading it without
+   * writing anything: every problem and warning, and, when it is valid, what the consent dialog
+   * shows. A folder that cannot be read answers `package_invalid`.
+   */
+  'installs.inspectFolder': { input: string; output: FolderInspection };
+  /**
+   * Installs the Harness folder at this absolute path as a local install, after the User
+   * consented: validates it again, copies its files into the install layout and records it.
+   * Installing the version already installed replaces it; another version replaces the installed
+   * one. `package_invalid` when the folder no longer validates or its Manifest changed since
+   * `installs.inspectFolder`; `file_unreadable` when a file of the folder cannot be opened while
+   * copying; `harness_running` while that Harness runs.
+   */
+  'installs.installFromFolder': { input: string; output: InstalledVersion };
+  /**
+   * Every installed Harness: the most recently launched first, then the never-launched ones, by
+   * name.
+   */
+  'installs.list': { input: undefined; output: readonly InstalledHarness[] };
+  /**
+   * Launches an installed Harness (docs/tech/architecture.md §4) and answers as soon as its launch
+   * has begun; how it goes arrives as `launch.state` events. One instance per Harness: while it
+   * runs, the answer is `focused` and its window comes to the front instead (a launch that is
+   * stopping is left to stop). `not_installed`; `slot_unbound` when no model can fill its
+   * `default` Model Slot, and nothing starts; `invalid_input` when `workspace` is not an absolute
+   * path, or, for a Harness that takes a Workspace and does not run, not an existing folder (any
+   * more).
+   */
+  'launch.start': { input: LaunchRequest; output: LaunchStarted };
+  /**
+   * Opens the OS folder picker over the main window to choose a Workspace for this installed
+   * Harness, at its last Workspace while that folder exists; the chosen folder's absolute path, or
+   * null when the User cancelled. `not_installed`.
+   */
+  'launch.chooseWorkspace': { input: string; output: string | null };
+  /**
+   * The Workspace this installed Harness was last launched with, for the Workspace sheet; null
+   * when it never had one. `not_installed`.
+   */
+  'launch.lastWorkspace': { input: string; output: LastWorkspace | null };
+  /** The latest launch of every Harness launched since the app started. */
+  'launch.status': { input: undefined; output: readonly LaunchStatus[] };
+  /**
+   * Opens this installed Harness's newest launch log in the OS's app for it: its latest launch's
+   * log, else the most recently written one; its logs folder (created) before it has any. Main
+   * computes the path; `not_installed`, and `open_failed` when the OS could not open it.
+   */
+  'launch.openLogs': { input: string; output: null };
+  /**
+   * Opens this installed Harness's Data Directory in the OS file browser, creating it when
+   * missing. Main computes the path; `not_installed`, and `open_failed` when the OS could not
+   * open it.
+   */
+  'launch.openDataFolder': { input: string; output: null };
+}
+
+/** Which installed Harness to launch, and with which Workspace. */
+export interface LaunchRequest {
+  readonly harnessId: string;
+  /**
+   * The absolute path of the Workspace the User chose (`launch.chooseWorkspace`); null or absent
+   * when they chose none: a Harness whose Manifest requires one then fails
+   * `workspace_cancelled`, an optional one launches without. Ignored for a Harness whose Manifest
+   * declares no Workspace.
+   */
+  readonly workspace?: string | null;
+}
+
+/** A Harness's last Workspace (`installs.last_workspace`), which may be gone since. */
+export interface LastWorkspace {
+  /** Absolute. */
+  readonly path: string;
+  /** Whether it is still a folder. */
+  readonly exists: boolean;
+}
+
+/** A launch that began (`started`), or the running one whose window was focused instead. */
+export interface LaunchStarted {
+  readonly outcome: 'started' | 'focused';
+  readonly launchId: string;
+}
+
+/**
+ * Where a launch is (P0-05 spec, launch state machine). A Harness never launched since the app
+ * started is idle and has no status. `preparing`: resolving its Entry and Data Directory, issuing
+ * its Gateway Token; `spawning`: its window is open and the process is being started;
+ * `waiting-ready`: a web Harness's process runs, its port does not answer yet (P0-05.3); `ready`:
+ * it runs; `stopping`: it was asked to stop (SIGTERM, then SIGKILL after 5 s); `stopped` and
+ * `failed`: it has ended, and its Gateway Token is revoked.
+ */
+export type LaunchState =
+  'preparing' | 'spawning' | 'waiting-ready' | 'ready' | 'stopping' | 'stopped' | 'failed';
+
+/**
+ * Why a launch failed: the process could not be started (`spawn_error`), never became ready
+ * (`ready_timeout`, web), exited on its own with a code other than 0 (`exit_nonzero`), the
+ * Harness does not run on this platform (`platform_unsupported`), or the User cancelled the
+ * Workspace picker of a Harness that requires one (`workspace_cancelled`).
+ */
+export type LaunchFailure =
+  'spawn_error' | 'ready_timeout' | 'exit_nonzero' | 'platform_unsupported' | 'workspace_cancelled';
+
+/** One launch of a Harness, as `launch.status` lists it and `launch.state` reports it. */
+export interface LaunchStatus {
+  readonly harnessId: string;
+  readonly launchId: string;
+  readonly state: LaunchState;
+  /** Present exactly when `state` is `failed`. */
+  readonly reason?: LaunchFailure;
+  /**
+   * How the process ended, once it has: its exit code, or 128 + the signal number for a process
+   * a signal ended (137 after SIGKILL). Absent before, and when it never started.
+   */
+  readonly exitCode?: number;
+  /** ISO-8601 UTC. */
+  readonly startedAt: string;
+  /**
+   * The last 50 lines of the launch's log (`<ISO-8601> [out|err|runtime] <text>`), present only on
+   * `failed(ready_timeout)`, for the Timed-out state.
+   */
+  readonly logTail?: readonly string[];
+}
+
+/** A route of the main window to show, such as `/models?harness=acme%2Fhello`. */
+export interface AppNavigate {
+  readonly path: string;
+}
+
+/** Where an installed Harness Package came from: the Store, or a local folder. */
+export type InstallSource = 'store' | 'local';
+
+/** The facts of a valid Manifest that the install consent dialog shows. */
+export interface ManifestSummary {
+  readonly harnessId: string;
+  readonly version: string;
+  readonly name: string;
+  readonly runtimeKind: Manifest['runtime']['kind'];
+  readonly uiKind: Manifest['ui']['kind'];
+  /** The Manifest's `workspace`, `none` when absent. */
+  readonly workspace: NonNullable<Manifest['workspace']>;
+  readonly platforms: readonly Platform[];
+  /**
+   * The Entry the Runtime runs: the path for a Node Harness; for a binary one, the path for this
+   * platform, null when the Harness does not declare it.
+   */
+  readonly entry: string | null;
+  readonly permissions: DeclaredPermissions;
+  /** Whether the Harness declares this platform (and, binary, has an Entry for it). */
+  readonly platformSupported: boolean;
+}
+
+/** What `validatePackage` found in a Harness folder. */
+export interface FolderInspection {
+  /** Whether it has no problem, so it can be installed. */
+  readonly valid: boolean;
+  /** Present exactly when `valid`. */
+  readonly manifestSummary: ManifestSummary | null;
+  /** Every problem, as `validatePackage` returned it: shown by `manifest.<messageKey>`. */
+  readonly problems: readonly Problem[];
+  /** Findings that do not block installing, such as an ignored key. */
+  readonly warnings: readonly Problem[];
+}
+
+/** The Harness and version an install put in place. */
+export interface InstalledVersion {
+  readonly harnessId: string;
+  readonly version: string;
+}
+
+/** An installed Harness, as the Library and the Models page show it. */
+export interface InstalledHarness {
+  readonly harnessId: string;
+  readonly version: string;
+  /** The Manifest's display name. */
+  readonly name: string;
+  /** The Publisher: the Harness ID's publisher segment. */
+  readonly publisher: string;
+  readonly source: InstallSource;
+  /** The installed Manifest. */
+  readonly manifest: Manifest;
+  /** The absolute path of the installed files, `harnesses/<publisher>/<slug>/<version>/`. */
+  readonly installPath: string;
+  /** ISO-8601 UTC. */
+  readonly installedAt: string;
+  /** ISO-8601 UTC; null until it is first launched. */
+  readonly lastLaunchedAt: string | null;
+  /**
+   * The Harness's `assets/icon.png` as a `data:` URL (the renderer may load no file), null when
+   * it cannot be read.
+   */
+  readonly iconDataUrl: string | null;
+  /** Whether it can run on this platform: listed in `platforms`, with an Entry. */
+  readonly platformSupported: boolean;
+}
+
+/** Which installed Harness changed: installed, replaced by another version, or removed. */
+export interface InstallsChanged {
+  readonly harnessId: string;
 }
 
 /** Whether a Publisher is signed in to the Store, and as whom. */
@@ -348,6 +606,8 @@ export interface ModelInfo {
   readonly tools?: boolean;
   /** Whether it accepts images. */
   readonly vision?: boolean;
+  /** Whether it has a JSON output mode. No source states it yet: the catalogue leaves it out. */
+  readonly json?: boolean;
 }
 
 /** A saved Connection as the renderer sees it; its secret never leaves the Runtime. */
@@ -409,6 +669,50 @@ export interface BindingTarget {
   readonly model: string;
 }
 
+/** A Model Override: the model one Harness uses for one of its Model Slots. */
+export interface ModelOverride {
+  readonly slot: string;
+  readonly connectionId: string;
+  /** The model name at that Connection's Provider, without the Provider prefix. */
+  readonly model: string;
+}
+
+/** A Model Override to set. */
+export interface ModelOverrideChange {
+  /** The installed Harness. */
+  readonly harnessId: string;
+  /** One of its Manifest's Model Slots. */
+  readonly slot: string;
+  readonly target: BindingTarget;
+}
+
+/** A Model Override to remove. */
+export interface ModelOverrideClear {
+  readonly harnessId: string;
+  readonly slot: string;
+}
+
+/**
+ * Why a Model Slot resolved to its model: the Harness's Model Override, one of its Recommended
+ * Models, the Default Model of the same Slot name, or the Default Model of `default` (which the
+ * `default` Slot's own Default Model also reports). The UI shows the last two as "Default".
+ */
+export type BindingSource = 'override' | 'recommended' | 'default_same_name' | 'default';
+
+/** The model a Model Slot resolves to, and why. */
+export interface ResolvedBinding {
+  readonly connectionId: string;
+  /** The model name at that Connection's Provider, without the Provider prefix. */
+  readonly model: string;
+  readonly source: BindingSource;
+}
+
+/** One Model Slot of a Harness and what it resolves to; null when nothing can fill it. */
+export interface ResolvedSlot {
+  readonly slot: string;
+  readonly binding: ResolvedBinding | null;
+}
+
 /** A change to the Default Model of one Slot name. */
 export interface GlobalBindingChange {
   /** The Model Slot name, as a Manifest declares it (`default`, `fast`, …). */
@@ -443,9 +747,23 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'connections.remove': true,
   'bindings.getGlobal': true,
   'bindings.setGlobal': true,
+  'bindings.getForHarness': true,
+  'bindings.setOverride': true,
+  'bindings.clearOverride': true,
+  'bindings.resolveAll': true,
   'auth.signIn': true,
   'auth.signOut': true,
   'auth.whoami': true,
+  'installs.chooseFolder': true,
+  'installs.inspectFolder': true,
+  'installs.installFromFolder': true,
+  'installs.list': true,
+  'launch.start': true,
+  'launch.chooseWorkspace': true,
+  'launch.lastWorkspace': true,
+  'launch.status': true,
+  'launch.openLogs': true,
+  'launch.openDataFolder': true,
 };
 
 /** The method names at runtime; the preload builds `window.api` from this list. */
@@ -461,6 +779,15 @@ export interface IpcEvents {
   'connectivity.changed': Connectivity;
   /** The Store sign-in state changed; `session_expired` asks the screen in use to sign in again. */
   'auth.changed': AuthChanged;
+  /** An installed Harness was installed, replaced or removed; lists read `installs.list` again. */
+  'installs.changed': InstallsChanged;
+  /** A launch changed state; sent on every change, `launch.status` lists the latest ones. */
+  'launch.state': LaunchStatus;
+  /**
+   * Shows a route in the main window: a Harness window's model indicator opens the Models page
+   * at that Harness's card.
+   */
+  'app.navigate': AppNavigate;
   [event: `progress:${string}`]: unknown;
 }
 
@@ -482,15 +809,37 @@ export const IPC_INVOKE_CHANNEL = 'harness-store:invoke';
 export const IPC_EVENT_CHANNEL = 'harness-store:event';
 
 export function isIpcEventName(name: string): name is IpcEventName {
-  return name === 'connectivity.changed' || name === 'auth.changed' || /^progress:.+$/.test(name);
+  return (
+    name === 'connectivity.changed' ||
+    name === 'auth.changed' ||
+    name === 'installs.changed' ||
+    name === 'launch.state' ||
+    name === 'app.navigate' ||
+    /^progress:.+$/.test(name)
+  );
 }
 
 type Domain<M extends string> = M extends `${infer D}.${string}` ? D : never;
 type Verb<M extends string, D extends string> = M extends `${D}.${infer V}` ? V : never;
 
-type MethodFunction<M extends IpcMethodName> = [IpcInput<M>] extends [undefined]
-  ? () => Promise<IpcResult<IpcOutput<M>>>
-  : (input: IpcInput<M>) => Promise<IpcResult<IpcOutput<M>>>;
+type MethodFunction<T> = T extends { input: infer I; output: infer O }
+  ? [I] extends [undefined]
+    ? () => Promise<IpcResult<O>>
+    : (input: I) => Promise<IpcResult<O>>
+  : never;
+
+/**
+ * The calls of a bridge built from a method table (`'<domain>.<verb>'` → input and output):
+ * `bridge.<domain>.<verb>(input)`. `window.api` is the one over {@link IpcMethods}; a Harness
+ * window's `window.harness` (./harness-ipc.ts) is another.
+ */
+export type BridgeCalls<Methods> = {
+  readonly [D in Domain<keyof Methods & string>]: {
+    readonly [V in Verb<keyof Methods & string, D>]: MethodFunction<
+      Methods[Extract<`${D}.${V}`, keyof Methods>]
+    >;
+  };
+};
 
 /** Subscribes to one event; returns the function that unsubscribes. */
 export type IpcSubscribe = <E extends IpcEventName>(
@@ -499,8 +848,4 @@ export type IpcSubscribe = <E extends IpcEventName>(
 ) => () => void;
 
 /** The only object the renderer sees: `window.api.<domain>.<verb>(input)` plus `on`. */
-export type DesktopApi = {
-  readonly [D in Domain<IpcMethodName>]: {
-    readonly [V in Verb<IpcMethodName, D>]: MethodFunction<Extract<`${D}.${V}`, IpcMethodName>>;
-  };
-} & { readonly on: IpcSubscribe };
+export type DesktopApi = BridgeCalls<IpcMethods> & { readonly on: IpcSubscribe };

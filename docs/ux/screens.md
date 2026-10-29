@@ -37,11 +37,11 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Everything installed; launch, update, uninstall, open per-Harness settings.
 
-**Elements.** Grid or list of cards: icon, name, Publisher, installed version, primary action button (see design-principles §3), overflow menu (Show in Store, Model Overrides, Show logs, Uninstall). Sort: recently used, name. Filter: Updates available, Running, Local installs.
+**Elements.** Grid or list of cards: icon, name, Publisher, installed version, primary action button (see design-principles §3), overflow menu (Show in Store, Model Overrides, Show logs, Open data folder, Uninstall). Sort: recently used, name. Filter: Updates available, Running, Local installs. P0-05 builds the cards (ordered recently launched first, then name), Model Overrides, Show logs and Open data folder; P0-10 adds the rest.
 
-**States.** Loading skeleton. Empty: illustration, "Nothing installed yet" with "Browse the Store". Card error: "Exited with an error" with Show logs. Card note: "No longer available in the Store" for unpublished or taken-down versions. Local install badge: "Local".
+**States.** Loading skeleton. Empty: illustration, "Nothing installed yet" with "Browse the Store". Card error: "Exited with an error" (or "Did not start in time", "Could not start") with Show logs and Dismiss; the button stays Launch. No error for a cancelled Workspace, an unsupported platform or a missing model. Card note: "No longer available in the Store" for unpublished or taken-down versions. Local install badge: "Local".
 
-**Key copy.** Launch / 启动 · Update / 更新 · Running… / 运行中… · Show window / 显示窗口 · Uninstall / 卸载 · "Nothing installed yet" / "还没有安装任何 Harness" · "Browse the Store" / "去商店看看" · "Close the Harness to update" / "请先关闭该 Harness 再更新".
+**Key copy.** Launch / 启动 · Update / 更新 · Running… / 运行中… · Show window / 显示窗口 · Stopping… / 正在停止… · Uninstall / 卸载 · Local / 本地 · Model Overrides / 槽位覆盖 · Show logs / 查看日志 · Open data folder / 打开数据目录 · Dismiss / 忽略 · "Exited with an error" / "异常退出" · "Did not start in time" / "启动超时" · "Could not start" / "无法启动" · "Nothing installed yet" / "还没有安装任何 Harness" · "Browse the Store" / "去商店看看" · "Close the Harness to update" / "请先关闭该 Harness 再更新".
 
 ---
 
@@ -99,9 +99,9 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 ## Install consent dialog — owner P0-10
 
-**Purpose.** Informed consent before a downloaded package is installed.
+**Purpose.** Informed consent before a downloaded package, or a local folder ("Install this folder locally"), is installed. A minimal version ships with P0-05 for local installs; P0-10 reuses it.
 
-**Elements.** Title with Harness name and version. Declared Permissions list with icon, colour and plain sentence per item. Facts row: runtime kind, UI Kind, Workspace, platform. Standing no-sandbox sentence. Buttons: Cancel, Install (enabled after one second).
+**Elements.** Title with Harness name and version. Declared Permissions list with icon, colour and plain sentence per item. Facts row: runtime kind, UI Kind, Workspace, platforms, plus the Harness ID, version and Entry. A note when the Harness does not run on this platform (it installs but cannot launch). For a local folder, its validation warnings. Standing no-sandbox sentence. Buttons: Cancel, Install (enabled after one second).
 
 **States.** Only one; long permission lists scroll inside the dialog.
 
@@ -125,9 +125,9 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Choose the folder a Harness works in, when its Manifest asks for one.
 
-**Elements.** Native folder dialog preceded by a small sheet: why the Harness needs a folder (from the Manifest description if present), last used folder preselected, Choose folder, and for `optional` a "Continue without a folder" button.
+**Elements.** A small modal sheet in the main window: last used folder preselected, Choose folder (opens the native folder dialog, starting at the last folder while it exists), the read/write sentence, Cancel, Continue, and for `optional` a "Continue without a folder" button. There is no line saying why the Harness needs a folder: the Manifest has no field for it.
 
-**States.** Required (Cancel aborts launch). Optional. Last folder missing → note "The last folder no longer exists".
+**States.** Required (Cancel aborts launch). Optional. Last folder missing → note "The last folder no longer exists" / "上次使用的目录已不存在". Relaunch from a Harness window reuses that launch's folder without the sheet.
 
 **Key copy.** "Choose a folder for Code Reviewer" / "为 Code Reviewer 选择工作目录" · Choose folder / 选择文件夹 · Continue without a folder / 不选择目录继续 · "The Harness can read and write files in this folder." / "该 Harness 可以读写此目录中的文件。"
 
@@ -137,11 +137,11 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Host a web UI Kind Harness as its own app window.
 
-**Elements.** Window title "Harness name — Harness Store". Thin top bar: Harness icon and name, model indicator per Slot in use (updates live, click opens Models page for this Harness), Reload, Open logs. Content area is the Harness's page.
+**Elements.** Window title "Harness name — Harness Store". Thin top bar: Harness icon and name, model indicator per declared Slot ("Model · default: qwen3:8b" or "Not set"; read again whenever the window gains focus; click opens the Models page for this Harness), Reload (reloads the page; the process keeps running), Open logs. Content area is the Harness's page, sized to the Manifest's `ui.window` hints (default 1100×760).
 
-**States.** Starting (centered "Starting Hello Web…" with elapsed seconds and Cancel). Ready. Crashed (overlay "Hello Web stopped unexpectedly" with Show logs, Relaunch, Close). Timed out (same overlay with the timeout message).
+**States.** Starting (centered "Starting Hello Web…" with elapsed seconds and Cancel, which closes the window and stops the Harness). Ready. Crashed (overlay "Hello Web stopped unexpectedly" with the exit code, Show logs, Relaunch, Close). Exited (code 0 by itself: same overlay titled "Hello Web has exited"). Could not start (same overlay, "Hello Web could not start"). Timed out (same overlay with the timeout message and the last 50 lines of output in a scrolling monospace block). The window stays open in every ended state until the User closes it.
 
-**Key copy.** Starting … / 正在启动 … · "did not start in time" / "启动超时" · Show logs / 查看日志 · Relaunch / 重新启动 · Model: … / 模型：….
+**Key copy.** Starting … / 正在启动 … · "did not start in time" / "启动超时" · "stopped unexpectedly" / "意外停止" · "has exited" / "已退出" · "could not start" / "无法启动" · Show logs / 查看日志 · Relaunch / 重新启动 · Reload / 重新加载 · Model · default: … / 模型 · default：… · Not set / 未设置.
 
 ---
 
@@ -149,7 +149,7 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Host a terminal UI Kind Harness.
 
-**Elements.** Window title with Harness name and, on exit, the exit code. Embedded terminal filling the window; same thin top bar as the web window (model indicator, logs). Font size follows Settings.
+**Elements.** Window title with Harness name and, on exit, the exit code. Embedded terminal filling the window (960×640 by default, 5000 lines of scrollback); same thin top bar as the web window (model indicator, Open logs). Font size follows Settings (fixed at 13 px until P0-11 adds the setting). Copy and paste: the Edit menu on macOS, Ctrl+Shift+C / Ctrl+Shift+V on Windows and Linux, where Ctrl+C goes to the Harness.
 
 **States.** Running. Exited (terminal stays readable, top bar shows "Exited with code N", buttons Relaunch, Close).
 
@@ -161,7 +161,7 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Manage Connections, Default Models and per-Harness Model Overrides.
 
-**Elements.** Section Connections (list with status, Test, Edit, Enable/Disable, Remove; Add Connection opens a dialog with a preset picker, then the Provider's fields, Test connection and Save, enabled once the test passed; a saved key shows only as "Key stored encrypted on this machine" with its last 4 characters). Local Providers panel (Ollama and LM Studio found on this machine, each with Add, or "Added" when it already has a Connection; Detect again). Section Default Models (`default` first and always, then every other globally bound Slot name, each with a picker that includes "Not set", and requirement warnings; the resolution order is explained above the rows). Section Per-Harness Overrides (expandable per installed Harness: Slots, description, requirements, resolution reason, picker, Clear override). Every picker has "Type a model name".
+**Elements.** Section Connections (list with status, Test, Edit, Enable/Disable, Remove; Add Connection opens a dialog with a preset picker, then the Provider's fields, Test connection and Save, enabled once the test passed; a saved key shows only as "Key stored encrypted on this machine" with its last 4 characters). Local Providers panel (Ollama and LM Studio found on this machine, each with Add, or "Added" when it already has a Connection; Detect again). Section Default Models (`default` first and always, then every other Slot name that is bound globally or declared by an installed Harness, each with a picker that includes "Not set", and requirement warnings; the resolution order is explained above the rows). Section Per-Harness Overrides (expandable per installed Harness: Slots, description, requirements, Recommended Models, resolved model with its source badge, picker with "No override", Clear override; `models?harness=<id>` opens and scrolls to that Harness). Every picker has "Type a model name".
 
 **States.** Empty Connections: "Add a Connection to run Harnesses". Detecting local Providers (inline spinner in the Local Providers panel; nothing found → install guidance and Detect again). Status of a Connection, in order: Disabled, Connection failed (with the Provider's message), Local, Connected, Not tested. A Default Model whose Connection is disabled is kept and marked "Connection disabled". OS encryption unavailable → adding a key is refused with guidance to enable an OS keyring. Test in progress / succeeded / failed with Provider message. Requirement warning (yellow, non-blocking). Remove Connection confirmation naming affected Slots.
 
@@ -180,7 +180,7 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Elements.** Signed-out: GitHub sign-in card. Signed-in: tabs "New version" and "My Harnesses". New version: folder drop zone, validation problem list (path, message), Continue, metadata review (read-only facts from Manifest, changelog), listing preview, Publish with progress. Secondary: "Install this folder locally". My Harnesses: list of own Harnesses and versions with download counts and Unpublish per version.
 
-**States.** Signed out. Validating. Problems present (Continue disabled). Uploading (cancel). Rejected by server (verbatim message, Retry). Success (listing link). Offline (Publish disabled with explanation). Unpublish confirmation.
+**States.** Signed out ("Install this folder locally" still works, offline too). Validating. Problems present (Continue disabled). Installed locally (inline "Installed Hello Web 0.1.0 from the folder. It is marked Local in the Library." with Open Library). Uploading (cancel). Rejected by server (verbatim message, Retry). Success (listing link). Offline (Publish disabled with explanation). Unpublish confirmation.
 
 **Key copy.**
 - "Only Publishers need to sign in. Browsing and installing never require an account." / "只有发布者需要登录，浏览和安装永远不需要账号。"
@@ -188,7 +188,7 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 - "1 problem must be fixed before publishing" / "发布前需修复 1 个问题" · Re-check / 重新检查
 - "Version 0.1.0 is not greater than the last published version 0.2.0" / "版本 0.1.0 不高于已发布的 0.2.0"
 - Publish / 发布 · "Published! Versions are immutable; publish a new version to change anything." / "发布成功！已发布版本不可修改，如需变更请发布新版本。"
-- Install this folder locally / 本地安装此文件夹 · Unpublish / 撤下 · "Existing installs keep working." / "已安装的用户不受影响。"
+- Install this folder locally / 本地安装此文件夹 · "Installed Hello Web 0.1.0 from the folder. It is marked Local in the Library." / "已从文件夹安装 Hello Web 0.1.0，在资源库中标记为「本地」。" · Unpublish / 撤下 · "Existing installs keep working." / "已安装的用户不受影响。"
 
 ---
 

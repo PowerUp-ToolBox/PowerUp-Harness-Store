@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { formatBytes, formatDate, formatNumber } from '../../../shared/i18n/format.js';
+import { formatBytes, formatDate, formatList, formatNumber } from '../../../shared/i18n/format.js';
 import { translatorFor, type Translator } from '../../../shared/i18n/translate.js';
+import type { Locale } from '../../../shared/i18n/locale.js';
 import type { IpcResult, Settings, SettingsPatch } from '../../../shared/ipc.js';
 
 /** Everything a component needs to render text: `t()` plus Intl formatting in the UI locale. */
@@ -9,6 +10,7 @@ export interface I18n extends Translator {
   readonly formatNumber: (value: number, options?: Intl.NumberFormatOptions) => string;
   readonly formatDate: (value: Date | number, options?: Intl.DateTimeFormatOptions) => string;
   readonly formatBytes: (bytes: number) => string;
+  readonly formatList: (items: readonly string[]) => string;
 }
 
 export interface SettingsState {
@@ -54,15 +56,7 @@ export function I18nProvider({ children }: { readonly children: ReactNode }) {
   }, [locale]);
 
   const i18n = useMemo<I18n | null>(
-    () =>
-      locale === undefined
-        ? null
-        : {
-            ...translatorFor(locale),
-            formatNumber: (value, options) => formatNumber(locale, value, options),
-            formatDate: (value, options) => formatDate(locale, value, options),
-            formatBytes: (bytes) => formatBytes(locale, bytes),
-          },
+    () => (locale === undefined ? null : i18nFor(locale)),
     [locale],
   );
 
@@ -83,6 +77,34 @@ export function I18nProvider({ children }: { readonly children: ReactNode }) {
       <I18nContext.Provider value={i18n}>{children}</I18nContext.Provider>
     </SettingsContext.Provider>
   );
+}
+
+/**
+ * Provides a fixed locale's translator, without the settings: a Harness window's page, whose
+ * locale comes with its launch (`window.info`) and which has no `window.api`.
+ */
+export function LocaleProvider({
+  locale,
+  children,
+}: {
+  readonly locale: Locale;
+  readonly children: ReactNode;
+}) {
+  const i18n = useMemo(() => i18nFor(locale), [locale]);
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+  return <I18nContext.Provider value={i18n}>{children}</I18nContext.Provider>;
+}
+
+function i18nFor(locale: Locale): I18n {
+  return {
+    ...translatorFor(locale),
+    formatNumber: (value, options) => formatNumber(locale, value, options),
+    formatDate: (value, options) => formatDate(locale, value, options),
+    formatBytes: (bytes) => formatBytes(locale, bytes),
+    formatList: (items) => formatList(locale, items),
+  };
 }
 
 /** The `t(key, params)` hook and Intl formatters for the current UI locale. */

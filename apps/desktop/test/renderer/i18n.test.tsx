@@ -24,7 +24,7 @@ describe('UI language', () => {
     await renderApp('#/library');
     expect(sidebarLabels('主导航')).toEqual(ZH_SECTIONS);
     expect(screen.getByRole('heading', { level: 1, name: '资源库' })).toBeDefined();
-    expect(screen.getByText('你安装的 Harness 会显示在这里。')).toBeDefined();
+    expect(await screen.findByText('还没有安装任何 Harness')).toBeDefined();
     expect(document.documentElement.lang).toBe('zh-CN');
   });
 

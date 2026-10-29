@@ -6,7 +6,7 @@
 3. **Store** — first-party service; never sees credentials, Usage Records or conversation content.
 
 ## What the platform guarantees in P0
-- **Credential isolation**: Provider credentials are stored encrypted (Electron `safeStorage`, OS keychain-backed) and are never written to a Harness's environment, files or Data Directory. They are never stored in plaintext: when OS encryption is unavailable (on Linux also the `basic_text` backend, which uses a hard-coded password), adding a key is refused with guidance to enable an OS keyring. Decrypted keys stay in the Runtime's main process; the app's own UI sees only the last 4 characters. `OPENAI_*` / `ANTHROPIC_*` variables inherited from the User's shell are stripped before spawning.
+- **Credential isolation**: Provider credentials are stored encrypted (Electron `safeStorage`, OS keychain-backed) and are never written to a Harness's environment, files or Data Directory. They are never stored in plaintext: when OS encryption is unavailable (on Linux also the `basic_text` backend, which uses a hard-coded password), adding a key is refused with guidance to enable an OS keyring. Decrypted keys stay in the Runtime's main process; the app's own UI sees only the last 4 characters. Variables inherited from the User's shell whose names start with `OPENAI_`, `ANTHROPIC_`, `GOOGLE_API_`, `GEMINI_`, `OPENROUTER_` or `HARNESS_` are stripped (case-insensitively) before spawning; the environment and the Gateway Token are never written to launch logs.
 - **Attribution**: every model call carries a per-launch Gateway Token; tokens are unguessable, loopback-only, and revoked at process exit. A Harness cannot impersonate another Harness.
 - **Package integrity**: the Store records sha256 at publish; the Runtime verifies before unpacking; zip-slip, symlinks and absolute paths are rejected.
 - **Immutability**: a published Harness Version cannot change. Updates are explicit, and re-consent is required when Declared Permissions widen or Entry/runtime kind changes.
@@ -30,7 +30,8 @@
 
 ## Desktop-side controls
 - Gateway binds `127.0.0.1` only, validates `Host`, no CORS.
-- Context isolation and no Node integration in renderer and Harness web windows. The Harness web window is a plain BrowserWindow loading `http://127.0.0.1:<port>`; it gets no preload and no IPC.
+- Context isolation and no Node integration in renderer and Harness web windows. A Harness window's top bar is an app page with its own preload, which exposes only calls about that window's own launch (main checks the sender), never the main window's API. The Harness's own page loads `http://127.0.0.1:<port>` in a separate sandboxed view of that window with no preload and no IPC, in a session per Harness (`persist:harness:<publisher>/<slug>`) that denies every permission request. Navigation, redirects and `window.open` stay in the view only for that exact origin; other http(s) URLs (`localhost:<port>` included) open in the User's browser, and other schemes are blocked.
+- Paths the app opens in the OS (logs, Data Directory) are computed in main from the Harness ID, never taken from a renderer.
 - Installs are unpacked under the app data root; the Runtime never executes files from a Workspace.
 
 ## Later phases

@@ -32,6 +32,8 @@ export interface ModelPickerProps {
    * empty picker only asks to choose a model.
    */
   readonly onClear?: () => void;
+  /** The text of the choice that calls `onClear`. Default: "Not set". */
+  readonly clearLabel?: string;
   /** While the choice is being saved: the controls wait. */
   readonly disabled?: boolean;
 }
@@ -56,6 +58,7 @@ export function ModelPicker({
   value,
   onChange,
   onClear,
+  clearLabel,
   disabled = false,
 }: ModelPickerProps) {
   const i18n = useI18n();
@@ -147,7 +150,7 @@ export function ModelPicker({
           }}
         >
           {onClear !== undefined ? (
-            <option value="">{t('models.picker.not_set')}</option>
+            <option value="">{clearLabel ?? t('models.picker.not_set')}</option>
           ) : value === null ? (
             <option value="" disabled>
               {loading ? t('models.picker.loading') : t('models.picker.choose')}

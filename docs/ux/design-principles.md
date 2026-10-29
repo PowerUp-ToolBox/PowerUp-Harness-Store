@@ -38,7 +38,9 @@ The button in the header and on Library cards is one control with mutually exclu
 | Installed | Launch / 启动 | Installed, no newer version |
 | Update available | Update / 更新 (secondary: Launch) | Newer published version |
 | Needs re-consent | Review update / 查看更新 | Newer version changed permissions or Entry |
+| Starting | Starting… / 正在启动… (disabled) | Launch in progress, not ready yet |
 | Running | Running… / 运行中… (secondary: Show window) | Process alive |
+| Stopping | Stopping… / 正在停止… (disabled) | Window closed, process being stopped |
 | Requires Connection | Set up a model first / 先设置模型 | No Connection can fill the `default` Slot |
 
 Buttons never change meaning mid-hover; state transitions animate the label, not the position.

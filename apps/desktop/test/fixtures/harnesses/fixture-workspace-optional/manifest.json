@@ -1,0 +1,41 @@
+{
+  "manifestVersion": 1,
+  "id": "acme/fixture-workspace-optional",
+  "version": "1.0.0",
+  "name": "Fixture Workspace Optional",
+  "summary": "A terminal Harness whose Workspace is optional, for the Runtime's tests.",
+  "license": "MIT",
+  "platforms": [
+    "darwin-arm64",
+    "darwin-x64",
+    "linux-x64",
+    "linux-arm64",
+    "win32-x64",
+    "win32-arm64"
+  ],
+  "runtime": {
+    "kind": "node",
+    "node": "22"
+  },
+  "entry": "index.mjs",
+  "ui": {
+    "kind": "terminal"
+  },
+  "workspace": "optional",
+  "models": {
+    "slots": {
+      "default": {
+        "description": "Answers the test's messages."
+      }
+    }
+  },
+  "permissions": {
+    "filesystem": {
+      "scope": "workspace"
+    },
+    "shell": false,
+    "network": {
+      "domains": []
+    }
+  }
+}

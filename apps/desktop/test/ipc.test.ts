@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { createDispatcher, UntrustedSenderError } from '../src/main/runtime/dispatcher.js';
 import { createHandlers, type IpcHandlers } from '../src/main/runtime/handlers.js';
 import { createConnectionsStub, providerPresets } from '../src/main/runtime/connections.js';
-import { ok } from '../src/main/runtime/ipc-result.js';
+import { createInstallsStub } from '../src/main/runtime/installer.js';
+import { fail, ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { StoreAuthError } from '../src/main/runtime/store-auth.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
@@ -37,6 +38,10 @@ const fakeServices: Services = {
     getGlobal: () => [{ slot: 'default', connectionId: 'ollama', model: 'qwen3:8b' }],
     setGlobal: (change) =>
       ok(change.target === null ? [] : [{ slot: change.slot, ...change.target }]),
+    getForHarness: () => [],
+    setOverride: (change) => ok([{ slot: change.slot, ...change.target }]),
+    clearOverride: () => ok([]),
+    resolveAll: () => ok([{ slot: 'default', binding: null }]),
   },
   auth: {
     signIn: () =>
@@ -49,6 +54,29 @@ const fakeServices: Services = {
         displayName: 'Octo Cat',
         avatarUrl: null,
       }),
+  },
+  installs: { ...createInstallsStub(), chooseFolder: () => Promise.resolve('/Users/me/hello') },
+  launch: {
+    start: (harnessId, workspace) =>
+      Promise.resolve(
+        ok({ outcome: 'started', launchId: `launch-of-${harnessId}-in-${String(workspace)}` }),
+      ),
+    chooseWorkspace: (harnessId) => Promise.resolve(ok(`/Users/me/${harnessId}`)),
+    lastWorkspace: () => Promise.resolve(ok({ path: '/Users/me/project', exists: false })),
+    status: () => [
+      {
+        harnessId: 'acme/hello',
+        launchId: 'launch-1',
+        state: 'failed',
+        reason: 'exit_nonzero',
+        exitCode: 3,
+        startedAt: '2026-10-28T09:00:00.000Z',
+      },
+    ],
+    openLogs: (harnessId) =>
+      Promise.resolve(harnessId === 'acme/hello' ? ok(null) : fail('not_installed')),
+    openDataFolder: (harnessId) =>
+      Promise.resolve(harnessId === 'acme/hello' ? ok(null) : fail('not_installed')),
   },
 };
 const en = translatorFor('en');
@@ -134,6 +162,9 @@ describe('IPC handlers against a fake service container', () => {
     'auth.signIn',
     'auth.signOut',
     'auth.whoami',
+    'installs.chooseFolder',
+    'installs.list',
+    'launch.status',
   ])('%s rejects any input as invalid_input', async (method) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input: {} })).resolves.toMatchObject({
@@ -187,12 +218,115 @@ describe('IPC handlers against a fake service container', () => {
     ['bindings.setGlobal', undefined],
     ['bindings.setGlobal', { slot: 'default' }],
     ['bindings.setGlobal', { slot: 'default', target: 'ollama/qwen3:8b' }],
+    ['bindings.getForHarness', undefined],
+    ['bindings.getForHarness', ''],
+    ['bindings.getForHarness', { harnessId: 'acme/hello' }],
+    ['bindings.setOverride', undefined],
+    ['bindings.setOverride', { harnessId: 'acme/hello', slot: 'default' }],
+    ['bindings.setOverride', { harnessId: 'acme/hello', slot: 'default', target: null }],
+    [
+      'bindings.setOverride',
+      { harnessId: 7, slot: 'default', target: { connectionId: 'ollama', model: 'm' } },
+    ],
+    [
+      'bindings.setOverride',
+      { harnessId: 'acme/hello', slot: 'default', target: { connectionId: 'ollama' } },
+    ],
+    [
+      'bindings.setOverride',
+      {
+        harnessId: 'acme/hello',
+        slot: 'default',
+        target: { connectionId: 'ollama', model: 'm' },
+        scope: 'global',
+      },
+    ],
+    ['bindings.clearOverride', undefined],
+    ['bindings.clearOverride', { harnessId: 'acme/hello' }],
+    ['bindings.clearOverride', { harnessId: 'acme/hello', slot: 'default', target: null }],
+    ['bindings.resolveAll', undefined],
+    ['bindings.resolveAll', { harnessId: 'acme/hello' }],
+    ['installs.inspectFolder', undefined],
+    ['installs.inspectFolder', 'relative/folder'],
+    ['installs.inspectFolder', '/folder\u0000'],
+    ['installs.installFromFolder', { path: '/folder' }],
+    ['installs.installFromFolder', ''],
+    ['launch.start', undefined],
+    ['launch.start', 'acme/hello'],
+    ['launch.start', { harnessId: '' }],
+    ['launch.start', { harnessId: 'acme/hello', workspace: 'relative/folder' }],
+    ['launch.start', { harnessId: 'acme/hello', workspace: 42 }],
+    ['launch.start', { harnessId: 'acme/hello', workspace: '/Users/me', extra: true }],
+    ['launch.chooseWorkspace', undefined],
+    ['launch.chooseWorkspace', { harnessId: 'acme/hello' }],
+    ['launch.lastWorkspace', ''],
+    ['launch.openLogs', undefined],
+    ['launch.openLogs', { harnessId: 'acme/hello' }],
+    ['launch.openDataFolder', ''],
+    ['launch.openDataFolder', 'a'.repeat(257)],
   ])('%s rejects %j as invalid_input', async (method, input) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input })).resolves.toMatchObject({
       ok: false,
       error: { code: 'invalid_input', params: { method } },
     });
+  });
+
+  it('launch.start starts the Harness named and answers the launch', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'launch.start', input: { harnessId: 'acme/hello' } }),
+    ).resolves.toEqual({
+      ok: true,
+      data: { outcome: 'started', launchId: 'launch-of-acme/hello-in-null' },
+    });
+  });
+
+  it('launch.start passes the Workspace on, an absolute path or null', async () => {
+    const { dispatch } = dispatcherFor();
+    for (const workspace of ['/Users/me/project', null]) {
+      await expect(
+        dispatch(MAIN_WINDOW, {
+          method: 'launch.start',
+          input: { harnessId: 'acme/hello', workspace },
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        data: { launchId: `launch-of-acme/hello-in-${String(workspace)}` },
+      });
+    }
+  });
+
+  it('launch.chooseWorkspace and launch.lastWorkspace answer for the Harness named', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'launch.chooseWorkspace', input: 'acme/hello' }),
+    ).resolves.toEqual({ ok: true, data: '/Users/me/acme/hello' });
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'launch.lastWorkspace', input: 'acme/hello' }),
+    ).resolves.toEqual({ ok: true, data: { path: '/Users/me/project', exists: false } });
+  });
+
+  it('launch.status lists the latest launches', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'launch.status' })).resolves.toMatchObject({
+      ok: true,
+      data: [{ harnessId: 'acme/hello', state: 'failed', reason: 'exit_nonzero', exitCode: 3 }],
+    });
+  });
+
+  it('launch.openLogs and launch.openDataFolder act on the Harness named', async () => {
+    const { dispatch } = dispatcherFor();
+    for (const method of ['launch.openLogs', 'launch.openDataFolder']) {
+      await expect(dispatch(MAIN_WINDOW, { method, input: 'acme/hello' })).resolves.toEqual({
+        ok: true,
+        data: null,
+      });
+      await expect(dispatch(MAIN_WINDOW, { method, input: 'acme/other' })).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'not_installed' },
+      });
+    }
   });
 
   it('bindings.getGlobal returns the global Slot Bindings', async () => {
@@ -213,6 +347,40 @@ describe('IPC handlers against a fake service container', () => {
     ).resolves.toEqual({
       ok: true,
       data: [{ slot: 'fast', connectionId: 'ollama', model: 'qwen3:8b' }],
+    });
+  });
+
+  it('bindings.setOverride, clearOverride and resolveAll hand well-formed input to the service', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'bindings.setOverride',
+        input: {
+          harnessId: 'acme/hello',
+          slot: 'fast',
+          target: { connectionId: 'ollama', model: 'qwen3:8b' },
+        },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      data: [{ slot: 'fast', connectionId: 'ollama', model: 'qwen3:8b' }],
+    });
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'bindings.clearOverride',
+        input: { harnessId: 'acme/hello', slot: 'fast' },
+      }),
+    ).resolves.toEqual({ ok: true, data: [] });
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'bindings.resolveAll', input: 'acme/hello' }),
+    ).resolves.toEqual({ ok: true, data: [{ slot: 'default', binding: null }] });
+  });
+
+  it('installs.chooseFolder returns the folder the picker chose', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(dispatch(MAIN_WINDOW, { method: 'installs.chooseFolder' })).resolves.toEqual({
+      ok: true,
+      data: '/Users/me/hello',
     });
   });
 

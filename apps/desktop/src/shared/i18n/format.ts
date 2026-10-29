@@ -21,6 +21,11 @@ export function formatDate(
   return new Intl.DateTimeFormat(locale, options).format(value);
 }
 
+/** A list joined as the locale joins one: `tool calling and vision`, `工具调用和视觉`. */
+export function formatList(locale: Locale, items: readonly string[]): string {
+  return new Intl.ListFormat(locale, { style: 'long', type: 'conjunction' }).format(items);
+}
+
 const BYTE_UNITS = [
   ['byte', 1],
   ['kilobyte', 1e3],

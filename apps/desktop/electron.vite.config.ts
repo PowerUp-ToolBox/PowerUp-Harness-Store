@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
 import type { Plugin } from 'vite';
@@ -19,12 +20,17 @@ function devContentSecurityPolicy(): Plugin {
   };
 }
 
-// Main and preload bundle every JS dependency, workspace packages included: only `electron` and
-// Node built-ins stay external (electron-vite's preset), so the packaged app needs no
-// node_modules. The preload is CommonJS because a sandboxed preload cannot be an ES module.
+// Main and preload bundle every JS dependency, workspace packages included: only `electron`, Node
+// built-ins (electron-vite's preset) and node-pty, a native module that ships with the app
+// (electron-builder.yml), stay external. The preloads are CommonJS because a sandboxed preload
+// cannot be an ES module, and each is one self-contained file, as a sandboxed preload can require
+// nothing of its own: the main window's (index) and the Harness windows' (harness).
 export default defineConfig({
   main: {
-    build: { externalizeDeps: false },
+    build: {
+      externalizeDeps: false,
+      rolldownOptions: { external: ['node-pty'] },
+    },
     // The Store's anon key is fixed at build time (connectivity.ts, storeAnonKey): empty means the
     // local stack's.
     define: {
@@ -36,12 +42,26 @@ export default defineConfig({
   preload: {
     build: {
       externalizeDeps: false,
+      isolatedEntries: true,
       rolldownOptions: {
+        input: {
+          index: resolve(import.meta.dirname, 'src/preload/index.ts'),
+          harness: resolve(import.meta.dirname, 'src/preload/harness.ts'),
+        },
         output: { format: 'cjs', entryFileNames: '[name].cjs' },
       },
     },
   },
+  // Two pages: the main window (index.html) and the Harness windows' own (harness.html).
   renderer: {
     plugins: [react(), devContentSecurityPolicy()],
+    build: {
+      rolldownOptions: {
+        input: {
+          index: resolve(import.meta.dirname, 'src/renderer/index.html'),
+          harness: resolve(import.meta.dirname, 'src/renderer/harness.html'),
+        },
+      },
+    },
   },
 });

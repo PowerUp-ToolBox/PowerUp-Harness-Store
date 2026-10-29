@@ -1,8 +1,9 @@
 import type { GatewayOptions } from '@harness-store/gateway';
+import { resolveHarnessSlot } from './bindings.js';
 import type { ConnectionStore } from './connection-store.js';
 import { decryptSecret } from './connections.js';
+import type { InstallStore } from './install-store.js';
 import type { SecretCipher } from './secret-cipher.js';
-import { resolveSlotBinding } from './slot-resolver.js';
 
 /** The Model Gateway's callbacks that read the User's local data. */
 export type GatewayHost = Pick<GatewayOptions, 'resolveBinding' | 'getConnection' | 'getManifest'>;
@@ -10,8 +11,8 @@ export type GatewayHost = Pick<GatewayOptions, 'resolveBinding' | 'getConnection
 export interface GatewayHostOptions {
   readonly store: ConnectionStore;
   readonly cipher: SecretCipher;
-  /** The installed Manifest of a Harness. Default: none (P0-05 installs Harnesses). */
-  readonly getManifest?: GatewayOptions['getManifest'];
+  /** The installed Harnesses (the `installs` table), whose Manifests declare the Model Slots. */
+  readonly installs: Pick<InstallStore, 'get'>;
 }
 
 /**
@@ -24,31 +25,19 @@ export interface GatewayHostOptions {
  * null when there is none or it is disabled (403 `provider_not_connected`). A key that cannot be
  * decrypted rejects, which the Gateway answers with 500 `internal_error`.
  *
- * `resolveBinding` runs the normative order ({@link resolveSlotBinding}) over the global Slot
- * Bindings and the enabled Connections as they are now, so a Default Model set, changed or
- * cleared, or a Connection disabled or removed, applies to the next request. Model Overrides and
- * Recommended Models join it in P0-03.5; until then they are absent. `getManifest` knows no
- * Harness until installs do (P0-05), so in the app a Slot name still ends in `unknown_slot`;
- * explicit `provider/model` ids already reach the User's Connections.
+ * `resolveBinding` runs the normative order ({@link resolveHarnessSlot}) over the Harness's Model
+ * Overrides, the Recommended Models of its installed Manifest, the Default Models and the enabled
+ * Connections as they are now, so an override or Default Model set, changed or cleared, or a
+ * Connection disabled or removed, applies to the next request. `getManifest` answers the installed
+ * Manifest, read from the `installs` table on every request, so a Harness installed or replaced
+ * declares its Slots from its next request on.
  */
 export function createGatewayHost(options: GatewayHostOptions): GatewayHost {
-  const { store, cipher } = options;
+  const { store, cipher, installs } = options;
+  const manifestOf = (harnessId: string) => installs.get(harnessId)?.manifest ?? null;
   return {
-    resolveBinding: ({ slot }) =>
-      Promise.resolve(
-        resolveSlotBinding({
-          slot,
-          override: null,
-          recommended: [],
-          global: store.globalBindings(),
-          enabledConnections: new Set(
-            store
-              .all()
-              .filter((row) => row.enabled)
-              .map((row) => row.id),
-          ),
-        }),
-      ),
+    resolveBinding: ({ harnessId, slot }) =>
+      Promise.resolve(resolveHarnessSlot(store, manifestOf(harnessId), harnessId, slot)),
     async getConnection(providerId) {
       const row = store.get(providerId);
       if (!row?.enabled) return null;
@@ -59,6 +48,6 @@ export function createGatewayHost(options: GatewayHostOptions): GatewayHost {
         ...(row.baseUrl === null ? {} : { baseUrl: row.baseUrl }),
       };
     },
-    getManifest: options.getManifest ?? (() => Promise.resolve(null)),
+    getManifest: (harnessId) => Promise.resolve(manifestOf(harnessId)),
   };
 }

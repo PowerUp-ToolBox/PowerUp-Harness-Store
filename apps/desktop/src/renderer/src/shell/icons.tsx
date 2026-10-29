@@ -103,3 +103,44 @@ export function LockIcon() {
     </Icon>
   );
 }
+
+/** A ticked circle: a low-severity Declared Permission. */
+export function SeverityLowIcon() {
+  return (
+    <Icon>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8 12l3 3 5-6" />
+    </Icon>
+  );
+}
+
+/** A circle with an exclamation mark: a medium-severity Declared Permission. */
+export function SeverityMediumIcon() {
+  return (
+    <Icon>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v6M12 16.5v.5" />
+    </Icon>
+  );
+}
+
+/** A warning triangle: a high-severity Declared Permission. */
+export function SeverityHighIcon() {
+  return (
+    <Icon>
+      <path d="M12 3l10 18H2L12 3z" />
+      <path d="M12 10v5M12 18v.5" />
+    </Icon>
+  );
+}
+
+/** Three dots: a menu of more actions. */
+export function MoreIcon() {
+  return (
+    <Icon>
+      <circle cx="5" cy="12" r="1" />
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+    </Icon>
+  );
+}

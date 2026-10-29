@@ -1,10 +1,14 @@
 import type { Binding } from '@harness-store/gateway';
 import { describe, expect, it } from 'vitest';
 import {
+  declaredSlot,
+  declaredSlots,
+  recommendedTargets,
   resolveSlotBinding,
   type SlotResolutionInput,
 } from '../../src/main/runtime/slot-resolver.js';
 import type { BindingTarget, GlobalBinding } from '../../src/shared/ipc.js';
+import { manifestWith } from '../support/manifest.js';
 
 const DEFAULT: GlobalBinding = {
   slot: 'default',
@@ -106,36 +110,171 @@ describe('resolveSlotBinding: the Default Model tail', () => {
   });
 });
 
-describe('resolveSlotBinding: the steps ahead of the Default Models (inputs filled in P0-03.5)', () => {
-  const override: BindingTarget = { connectionId: 'ollama', model: 'llama3.2:3b' };
-  const recommended: BindingTarget[] = [
-    { connectionId: 'google', model: 'gemini-x' },
-    { connectionId: 'anthropic', model: 'claude-haiku' },
-  ];
+describe('resolveSlotBinding: the full order', () => {
+  const OVERRIDE: BindingTarget = { connectionId: 'ollama', model: 'llama3.2:3b' };
+  /** Recommended Models as a Manifest lists them, mapped as the Runtime maps them. */
+  const recommended = (...ids: string[]) => recommendedTargets(ids);
+  const REC = recommended('google/gemini-x', 'anthropic/claude-haiku');
+  const ALL = new Set(['anthropic', 'ollama', 'google']);
 
-  it('a Model Override with an enabled Connection comes first', () => {
-    expect(resolveSlotBinding({ ...defaultsOnly('fast', [FAST]), override, recommended })).toEqual({
-      providerId: 'ollama',
-      model: 'llama3.2:3b',
-      source: 'override',
-    });
-  });
-
-  it('then the first Recommended Model with an enabled Connection', () => {
-    expect(resolveSlotBinding({ ...defaultsOnly('fast', [FAST]), recommended })).toEqual({
-      providerId: 'anthropic',
-      model: 'claude-haiku',
-      source: 'recommended',
-    });
-  });
-
-  it('a disabled override and unreachable recommendations fall through to the Default Models', () => {
-    expect(
-      resolveSlotBinding({
+  it.each<{ case: string; input: SlotResolutionInput; expected: Binding | null }>([
+    {
+      case: 'an override with an enabled Connection wins over everything',
+      input: {
+        ...defaultsOnly('fast', [DEFAULT, FAST], ALL),
+        override: OVERRIDE,
+        recommended: REC,
+      },
+      expected: { providerId: 'ollama', model: 'llama3.2:3b', source: 'override' },
+    },
+    {
+      case: 'an override wins on the `default` Slot too',
+      input: { ...defaultsOnly('default', [DEFAULT], ALL), override: OVERRIDE },
+      expected: { providerId: 'ollama', model: 'llama3.2:3b', source: 'override' },
+    },
+    {
+      case: 'an override whose Connection is disabled: the first reachable Recommended Model',
+      input: {
+        ...defaultsOnly('fast', [DEFAULT, FAST], new Set(['anthropic'])),
+        override: OVERRIDE,
+        recommended: REC,
+      },
+      expected: { providerId: 'anthropic', model: 'claude-haiku', source: 'recommended' },
+    },
+    {
+      case: 'an override whose Connection was removed (no such id) falls through the same way',
+      input: {
+        ...defaultsOnly('fast', [DEFAULT, FAST], new Set(['anthropic'])),
+        override: { connectionId: 'openai-compatible:gone', model: 'm' },
+        recommended: REC,
+      },
+      expected: { providerId: 'anthropic', model: 'claude-haiku', source: 'recommended' },
+    },
+    {
+      case: 'Recommended Models in Manifest order: the first reachable one, not the first listed',
+      input: {
+        ...defaultsOnly('fast', [DEFAULT, FAST], new Set(['anthropic', 'ollama'])),
+        recommended: REC,
+      },
+      expected: { providerId: 'anthropic', model: 'claude-haiku', source: 'recommended' },
+    },
+    {
+      case: 'both Recommended Models reachable: the first listed',
+      input: { ...defaultsOnly('fast', [DEFAULT, FAST], ALL), recommended: REC },
+      expected: { providerId: 'google', model: 'gemini-x', source: 'recommended' },
+    },
+    {
+      case: "a Recommended Model wins over the `default` Slot's own Default Model",
+      input: {
+        ...defaultsOnly('default', [DEFAULT], ALL),
+        recommended: recommended('ollama/qwen3:8b'),
+      },
+      expected: { providerId: 'ollama', model: 'qwen3:8b', source: 'recommended' },
+    },
+    {
+      case: 'given recommended [anthropic/x, ollama/y] and only an Ollama Connection: ollama/y',
+      input: {
+        ...defaultsOnly('default', [], new Set(['ollama'])),
+        recommended: recommended('anthropic/x', 'ollama/y'),
+      },
+      expected: { providerId: 'ollama', model: 'y', source: 'recommended' },
+    },
+    {
+      case: 'no Recommended Model reachable: the Default Model of the same Slot name',
+      input: {
+        ...defaultsOnly('fast', [DEFAULT, FAST], new Set(['ollama', 'anthropic'])),
+        recommended: recommended('google/gemini-x'),
+      },
+      expected: as(FAST, 'default_same_name'),
+    },
+    {
+      case: 'no Recommended Model reachable, no same-name Default Model: `default`',
+      input: {
+        ...defaultsOnly('summarize', [DEFAULT, FAST], ALL),
+        recommended: recommended('openai/gpt-x'),
+      },
+      expected: as(DEFAULT, 'default'),
+    },
+    {
+      case: 'unknown Provider ids among the Recommended Models are skipped, not a crash',
+      input: {
+        ...defaultsOnly('fast', [DEFAULT], ALL),
+        recommended: recommended('acme-ai/model', 'not a provider/x', 'ollama/qwen3:8b'),
+      },
+      expected: { providerId: 'ollama', model: 'qwen3:8b', source: 'recommended' },
+    },
+    {
+      case: 'only unknown Provider ids: on to the Default Models',
+      input: { ...defaultsOnly('fast', [DEFAULT], ALL), recommended: recommended('acme-ai/model') },
+      expected: as(DEFAULT, 'default'),
+    },
+    {
+      case: 'a disabled override and unreachable Recommended Models fall through to the Default Models',
+      input: {
         ...defaultsOnly('fast', [FAST], new Set(['ollama'])),
         override: { connectionId: 'anthropic', model: 'claude-opus' },
-        recommended,
-      }),
-    ).toEqual(as(FAST, 'default_same_name'));
+        recommended: REC,
+      },
+      expected: as(FAST, 'default_same_name'),
+    },
+    {
+      case: 'everything unreachable: unbound',
+      input: {
+        ...defaultsOnly('fast', [DEFAULT, FAST], new Set(['openai'])),
+        override: OVERRIDE,
+        recommended: REC,
+      },
+      expected: null,
+    },
+  ])('$case', ({ input, expected }) => {
+    expect(resolveSlotBinding(input)).toEqual(expected);
+  });
+});
+
+describe('recommendedTargets', () => {
+  it('splits each id at its first slash into a Connection id and a model, in order', () => {
+    expect(
+      recommendedTargets([
+        'openrouter/anthropic/claude-sonnet',
+        'ollama/qwen3:8b',
+        'openai-compatible:vllm/meta/llama-4',
+      ]),
+    ).toEqual([
+      { connectionId: 'openrouter', model: 'anthropic/claude-sonnet' },
+      { connectionId: 'ollama', model: 'qwen3:8b' },
+      { connectionId: 'openai-compatible:vllm', model: 'meta/llama-4' },
+    ]);
+  });
+
+  it.each([
+    ['a Provider id the Gateway does not serve', 'acme-ai/model'],
+    ['the generic openai-compatible id, which no Connection has', 'openai-compatible/llama'],
+    ['no slash', 'ollama'],
+    ['nothing before the slash', '/qwen3:8b'],
+    ['an empty model', 'ollama/'],
+    ['a model the Gateway would not send', 'ollama/../x'],
+    ['a Google model outside the Gemini names', 'google/models/../x'],
+  ])('skips %s', (_case, id) => {
+    expect(recommendedTargets([id, 'ollama/ok'])).toEqual([
+      { connectionId: 'ollama', model: 'ok' },
+    ]);
+  });
+});
+
+describe('declaredSlots and declaredSlot', () => {
+  it('lists `default` first, then the Manifest order', () => {
+    expect(declaredSlots(manifestWith({ fast: {}, default: {}, summarize: {} }))).toEqual([
+      'default',
+      'fast',
+      'summarize',
+    ]);
+  });
+
+  it('finds own Slots only', () => {
+    const manifest = manifestWith({ default: { description: 'Chat' } });
+    expect(declaredSlot(manifest, 'default')).toEqual({ description: 'Chat' });
+    expect(declaredSlot(manifest, 'constructor')).toBeUndefined();
+    expect(declaredSlot(manifest, 'fast')).toBeUndefined();
+    expect(declaredSlot(null, 'default')).toBeUndefined();
   });
 });

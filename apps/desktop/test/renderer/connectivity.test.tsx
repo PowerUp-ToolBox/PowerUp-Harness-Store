@@ -100,7 +100,7 @@ describe('Store routes while the Store is unreachable', () => {
 
 describe('other routes while the Store is unreachable', () => {
   it.each([
-    ['#/library', 'Library', 'Harnesses you install appear here.'],
+    ['#/library', 'Library', 'Nothing installed yet'],
     ['#/models', 'Models', 'Connections'],
     ['#/usage', 'Usage', 'Tokens your Harnesses use appear here.'],
     ['#/publish', 'Publish', 'Publish a Harness from a local folder here.'],
@@ -108,7 +108,7 @@ describe('other routes while the Store is unreachable', () => {
     installOfflineApi();
     await renderApp(hash);
     expect(screen.getByRole('heading', { level: 1, name: title })).toBeDefined();
-    expect(screen.getByText(content)).toBeDefined();
+    expect(await screen.findByText(content)).toBeDefined();
     expect(screen.queryByRole('region', { name: "Can't reach the Store" })).toBeNull();
   });
 

@@ -7,10 +7,12 @@ import { createBindingsStub } from '../../src/main/runtime/bindings.js';
 import { openDatabase } from '../../src/main/runtime/database.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
+import { createInstallsStub } from '../../src/main/runtime/installer.js';
 import { createConnectionsStub, providerPresets } from '../../src/main/runtime/connections.js';
 import type { Services } from '../../src/main/runtime/services.js';
 import { createSqliteSettingsStore } from '../../src/main/runtime/settings-store.js';
 import { createSettingsService, parseSettingsPatch } from '../../src/main/runtime/settings.js';
+import { createSupervisorStub } from '../../src/main/runtime/supervisor.js';
 
 const MAIN_WINDOW = {};
 
@@ -63,6 +65,8 @@ function launch(osLocale: string) {
       signOut: () => Promise.resolve({ signedIn: false }),
       whoami: () => Promise.resolve({ signedIn: false }),
     },
+    installs: createInstallsStub(),
+    launch: createSupervisorStub(),
   };
   const dispatch = createDispatcher({
     handlers: createHandlers(services),

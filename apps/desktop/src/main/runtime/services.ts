@@ -2,13 +2,14 @@ import type { Diagnostics, ProviderPreset, StartupStatus } from '../../shared/ip
 import type { BindingsService } from './bindings.js';
 import type { ConnectionsService } from './connections.js';
 import type { ConnectivityService } from './connectivity.js';
+import type { InstallsService } from './installer.js';
 import type { SettingsService } from './settings.js';
 import type { StoreAuth } from './store-auth.js';
+import type { Supervisor } from './supervisor.js';
 
 /**
  * The service container: everything an IPC handler may use, created once by
  * {@link startRuntime} (./bootstrap.ts) and passed to {@link createHandlers}. Tests pass a fake.
- * Later specs add the Supervisor here.
  */
 export interface Services {
   readonly app: {
@@ -31,8 +32,15 @@ export interface Services {
   };
   /** The User's Connections, with their encrypted secrets, and local Provider detection. */
   readonly connections: ConnectionsService;
-  /** The User's Slot Bindings: the Default Models. */
+  /** The User's Slot Bindings: the Default Models and the Model Overrides. */
   readonly bindings: BindingsService;
   /** The Publisher's sign-in to the Store. */
   readonly auth: Pick<StoreAuth, 'signIn' | 'signOut' | 'whoami'>;
+  /** The installed Harnesses, and installing one from a local folder. */
+  readonly installs: InstallsService;
+  /** Launching installed Harnesses (the Process Supervisor), and how their launches are going. */
+  readonly launch: Pick<
+    Supervisor,
+    'start' | 'chooseWorkspace' | 'lastWorkspace' | 'status' | 'openLogs' | 'openDataFolder'
+  >;
 }

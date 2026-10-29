@@ -13,14 +13,25 @@ import type {
   Connectivity,
   ConnectivityState,
   Diagnostics,
+  FolderInspection,
   GlobalBinding,
+  InstalledHarness,
+  InstalledVersion,
   GlobalBindingChange,
   IpcEventName,
   IpcEvents,
   IpcResult,
+  LastWorkspace,
+  LaunchRequest,
+  LaunchStarted,
+  LaunchStatus,
   LocalProvider,
   ModelInfo,
+  ModelOverride,
+  ModelOverrideChange,
+  ModelOverrideClear,
   ProviderPreset,
+  ResolvedSlot,
   Settings,
   SettingsPatch,
   StartupStatus,
@@ -151,10 +162,15 @@ export interface FakeApiOptions {
  * `connections.add`, `update`, `remove` and `test` (of a saved Connection) answer
  * `not_implemented`, `connections.testDraft` passes finding no models and `connections.models`
  * lists none; `bindings.setGlobal` sets or clears a Default Model that `bindings.getGlobal` then
- * lists, without checking its Connection; nobody is signed in to the Store, `auth.signIn` signs
- * in as `octo-cat` and `auth.signOut` signs out; a test changes `app.status`,
- * `diagnostics.get`, the `connectivity`, `connections` or `bindings` methods before rendering to
- * say otherwise, and pushes events with `emit`.
+ * lists, without checking its Connection, and `bindings.setOverride` and `clearOverride` do the
+ * same for the Model Overrides `bindings.getForHarness` lists, while `bindings.resolveAll` answers
+ * `not_implemented`; nobody is signed in to the Store, `auth.signIn` signs
+ * in as `octo-cat` and `auth.signOut` signs out; nothing is installed, the folder picker is
+ * cancelled, and inspecting or installing a folder answers `not_implemented`; nothing was
+ * launched, launching answers `not_implemented`, no Harness has a last Workspace and the
+ * Workspace picker is cancelled; a test changes
+ * `app.status`, `diagnostics.get`, the `connectivity`, `connections`, `bindings` or `installs`
+ * methods before rendering to say otherwise, and pushes events with `emit`.
  */
 export function installFakeApi(
   osLocale: Locale = 'en',
@@ -164,6 +180,7 @@ export function installFakeApi(
   let locale = override;
   let onboardingDone = options.onboardingDone ?? true;
   let bindings: readonly GlobalBinding[] = [];
+  const overrides = new Map<string, readonly ModelOverride[]>();
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   const current = (): Settings =>
     locale === undefined
@@ -242,6 +259,35 @@ export function installFakeApi(
           return Promise.resolve({ ok: true, data: bindings });
         },
       ),
+      getForHarness: vi.fn((harnessId: string): Promise<IpcResult<readonly ModelOverride[]>> =>
+        Promise.resolve({ ok: true, data: overrides.get(harnessId) ?? [] }),
+      ),
+      setOverride: vi.fn(
+        (change: ModelOverrideChange): Promise<IpcResult<readonly ModelOverride[]>> => {
+          const others = (overrides.get(change.harnessId) ?? []).filter(
+            (row) => row.slot !== change.slot,
+          );
+          overrides.set(
+            change.harnessId,
+            [...others, { slot: change.slot, ...change.target }].sort((a, b) =>
+              a.slot < b.slot ? -1 : 1,
+            ),
+          );
+          return Promise.resolve({ ok: true, data: overrides.get(change.harnessId) ?? [] });
+        },
+      ),
+      clearOverride: vi.fn(
+        (clear: ModelOverrideClear): Promise<IpcResult<readonly ModelOverride[]>> => {
+          const rest = (overrides.get(clear.harnessId) ?? []).filter(
+            (row) => row.slot !== clear.slot,
+          );
+          overrides.set(clear.harnessId, rest);
+          return Promise.resolve({ ok: true, data: rest });
+        },
+      ),
+      resolveAll: vi.fn((harnessId: string): Promise<IpcResult<readonly ResolvedSlot[]>> =>
+        notImplemented('bindings.resolveAll', harnessId),
+      ),
     },
     auth: {
       whoami: vi.fn((): Promise<IpcResult<AuthState>> =>
@@ -252,6 +298,40 @@ export function installFakeApi(
       ),
       signOut: vi.fn((): Promise<IpcResult<AuthState>> =>
         Promise.resolve({ ok: true, data: { signedIn: false } }),
+      ),
+    },
+    installs: {
+      chooseFolder: vi.fn((): Promise<IpcResult<string | null>> =>
+        Promise.resolve({ ok: true, data: null }),
+      ),
+      inspectFolder: vi.fn((path: string): Promise<IpcResult<FolderInspection>> =>
+        notImplemented('installs.inspectFolder', path),
+      ),
+      installFromFolder: vi.fn((path: string): Promise<IpcResult<InstalledVersion>> =>
+        notImplemented('installs.installFromFolder', path),
+      ),
+      list: vi.fn((): Promise<IpcResult<readonly InstalledHarness[]>> =>
+        Promise.resolve({ ok: true, data: [] }),
+      ),
+    },
+    launch: {
+      start: vi.fn((request: LaunchRequest): Promise<IpcResult<LaunchStarted>> =>
+        notImplemented('launch.start', request.harnessId),
+      ),
+      chooseWorkspace: vi.fn<(harnessId: string) => Promise<IpcResult<string | null>>>(() =>
+        Promise.resolve({ ok: true, data: null }),
+      ),
+      lastWorkspace: vi.fn<(harnessId: string) => Promise<IpcResult<LastWorkspace | null>>>(() =>
+        Promise.resolve({ ok: true, data: null }),
+      ),
+      status: vi.fn((): Promise<IpcResult<readonly LaunchStatus[]>> =>
+        Promise.resolve({ ok: true, data: [] }),
+      ),
+      openLogs: vi.fn<(harnessId: string) => Promise<IpcResult<null>>>(() =>
+        Promise.resolve({ ok: true, data: null }),
+      ),
+      openDataFolder: vi.fn<(harnessId: string) => Promise<IpcResult<null>>>(() =>
+        Promise.resolve({ ok: true, data: null }),
       ),
     },
     on: vi.fn((event: string, listener: (payload: unknown) => void) => {

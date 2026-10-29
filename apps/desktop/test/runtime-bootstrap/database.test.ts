@@ -67,6 +67,9 @@ describe('openDatabase', () => {
     expect(schemaVersion(db)).toBe(MIGRATIONS.length);
     expect(schema(db).map(({ type, name }) => `${type} ${name}`)).toEqual([
       'table connections',
+      'table installs',
+      'table launches',
+      'index launches_harness_id_started_at',
       'table secrets',
       'table settings',
       'table slot_bindings',
@@ -94,6 +97,42 @@ describe('openDatabase', () => {
       'harness_id',
       'timestamp',
     ]);
+    expect(columns(db, 'installs')).toEqual([
+      'harness_id',
+      'version',
+      'manifest',
+      'install_path',
+      'data_dir',
+      'installed_at',
+      'last_launched_at',
+      'last_workspace',
+      'consented_permissions',
+      'available_version',
+      'source',
+    ]);
+    expect(columns(db, 'launches')).toEqual([
+      'launch_id',
+      'harness_id',
+      'version',
+      'started_at',
+      'ended_at',
+      'exit_code',
+      'token_revoked_at',
+    ]);
+    const launches = db.prepare("PRAGMA index_info('launches_harness_id_started_at')").all();
+    expect(launches.map((column) => (column as { name: string }).name)).toEqual([
+      'harness_id',
+      'started_at',
+    ]);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO installs (harness_id, version, manifest, install_path, data_dir,
+             installed_at, consented_permissions, source) VALUES ('a/b', '1.0.0', '{}', '/i', '/d',
+             '2026-01-01T00:00:00.000Z', '{}', 'elsewhere')`,
+        )
+        .run(),
+    ).toThrow(/CHECK constraint failed/);
   });
 
   it('opens in WAL mode with foreign keys on', () => {
