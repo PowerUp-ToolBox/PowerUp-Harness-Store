@@ -8,6 +8,7 @@ import type { PublishService } from './publish.js';
 import type { SettingsService } from './settings.js';
 import type { StoreAuth } from './store-auth.js';
 import type { StoreCatalogue } from './store-catalogue.js';
+import type { StoreReporter } from './store-report.js';
 import type { Supervisor } from './supervisor.js';
 import type { UsageService } from './usage.js';
 
@@ -35,6 +36,8 @@ export interface Services {
   readonly connectivity: Pick<ConnectivityService, 'get' | 'check'>;
   /** The Store's public catalogue, read anonymously: the Store tab's lists and pages. */
   readonly store: Omit<StoreCatalogue, 'clearCache'>;
+  /** Reporting a Harness to the Store, anonymously, with the client-side rate limit. */
+  readonly reports: StoreReporter;
   readonly providers: {
     /** Every Provider of the Gateway's table. */
     readonly list: () => readonly ProviderPreset[];

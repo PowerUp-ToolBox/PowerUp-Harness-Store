@@ -15,6 +15,7 @@ import { isLaunchActive, useLaunchStatus } from '../library/LaunchAction.js';
 import { UninstallDialog } from '../library/UninstallDialog.js';
 import { ListingDetail, type SlotUse } from '../listing/ListingDetail.js';
 import { connectionName } from '../models/names.js';
+import { ReportDialog, type ReportTarget } from '../report/ReportDialog.js';
 import { BackButton } from '../store/BackButton.js';
 import { ActionError, DetailAction } from '../store/DetailAction.js';
 import { primaryActionState } from '../store/primary-action.js';
@@ -49,6 +50,11 @@ const UNANSWERED: IpcError = {
  * installed Manifest, with Launch and the note "No longer available in the Store" (flows F4 step
  * 4). Back returns to where the User came from (the Store's search keeps its text, tags and
  * platform toggle), or to the Store home when the page was opened directly.
+ *
+ * The footer's Report opens the Report dialog (flows F8) for the version in the page's header:
+ * the Store's latest, or the installed one on a page built from the install, which offers Report
+ * only for a Store install (the Store may not know a local one). The "no longer available" page
+ * has no Report.
  */
 export function HarnessDetailPage() {
   const { t } = useI18n();
@@ -56,6 +62,7 @@ export function HarnessDetailPage() {
   const [state, setState] = useState<DetailState>({ status: 'loading' });
   const [error, setError] = useState<IpcError | null>(null);
   const [uninstalling, setUninstalling] = useState(false);
+  const [reporting, setReporting] = useState(false);
   const install = useInstall(harnessId);
   const launch = useLaunchStatus(harnessId);
   const installJobs = useInstallJobs();
@@ -204,14 +211,35 @@ export function HarnessDetailPage() {
     );
   }
 
-  const report = (
-    // The Report dialog arrives with P0-12 (flows F8).
-    <button type="button" className="button-link" disabled>
-      {t('listing.report')}
-    </button>
-  );
+  // The Harness and version the page's header shows.
+  const reportTarget: ReportTarget | null =
+    harness !== null
+      ? { harnessId, name: harness.manifest.name, version: harness.manifest.version }
+      : install?.source === 'store'
+        ? { harnessId, name: install.name, version: install.version }
+        : null;
+  const report =
+    reportTarget === null ? null : (
+      <button
+        type="button"
+        className="button-link"
+        onClick={() => {
+          setReporting(true);
+        }}
+      >
+        {t('listing.report')}
+      </button>
+    );
   return (
     <div className="store-detail">
+      {reporting && reportTarget !== null ? (
+        <ReportDialog
+          target={reportTarget}
+          onClose={() => {
+            setReporting(false);
+          }}
+        />
+      ) : null}
       <BackButton />
       {harness !== null ? (
         <ListingDetail

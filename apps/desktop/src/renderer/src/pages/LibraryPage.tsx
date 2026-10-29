@@ -13,6 +13,7 @@ import { useI18n } from '../i18n/I18nProvider.js';
 import { downloadPercent, useInstallJobs } from '../install/InstallJobsProvider.js';
 import { isLaunchActive, LaunchAction, useLaunch } from '../library/LaunchAction.js';
 import { UninstallDialog } from '../library/UninstallDialog.js';
+import { ReportDialog, type ReportTarget } from '../report/ReportDialog.js';
 import { LibraryIcon, MoreIcon, SearchIcon } from '../shell/icons.js';
 import { ActionError, DownloadAction, UpdateButton } from '../store/DetailAction.js';
 import { offeredUpdate } from '../store/primary-action.js';
@@ -34,7 +35,7 @@ const SKELETON_CARDS = 3;
  * (icon, name, Publisher, version, the Local badge, the primary button with its launch states,
  * the error line of a failed launch) and its overflow menu's Model Overrides, Show logs and Open
  * data folder; P0-09.3 adds View in Store; P0-10.2 the update states; P0-10.3 Uninstall, the last
- * launched date and the controls above the cards.
+ * launched date and the controls above the cards; P0-12.1 Report, for a Store install.
  *
  * The controls narrow and order the list already loaded, in the renderer, with no call to main: a
  * name filter that narrows as the User types (case-insensitive, anywhere in the name), the views
@@ -45,7 +46,8 @@ const SKELETON_CARDS = 3;
  *
  * The uninstall confirmation a card's menu opens is the page's, not the card's: it stays open
  * when the view hides its card meanwhile (the Harness it asked to close stops, so it leaves the
- * Running view), and closes by itself once the Harness is no longer installed.
+ * Running view), and closes by itself once the Harness is no longer installed. So is the Report
+ * dialog, which keeps the Harness and version it was opened for until it closes.
  */
 export function LibraryPage() {
   const { t } = useI18n();
@@ -87,6 +89,8 @@ export function LibraryPage() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [sort, setSort] = useState<LibrarySort>('recent');
+  /** The Harness, and its installed version, whose Report dialog is open; null when none is. */
+  const [reporting, setReporting] = useState<ReportTarget | null>(null);
   /** The Harness whose uninstall confirmation is open; null when none is. */
   const [uninstalling, setUninstalling] = useState<string | null>(null);
   const uninstallTarget =
@@ -210,6 +214,13 @@ export function LibraryPage() {
               onUninstall={() => {
                 setUninstalling(install.harnessId);
               }}
+              onReport={() => {
+                setReporting({
+                  harnessId: install.harnessId,
+                  name: install.name,
+                  version: install.version,
+                });
+              }}
             />
           </li>
         ))}
@@ -220,6 +231,14 @@ export function LibraryPage() {
           running={isLaunchActive(launches.get(uninstallTarget.harnessId))}
           onClose={() => {
             setUninstalling(null);
+          }}
+        />
+      )}
+      {reporting === null ? null : (
+        <ReportDialog
+          target={reporting}
+          onClose={() => {
+            setReporting(null);
           }}
         />
       )}
@@ -273,7 +292,9 @@ const dismissedFailures = new Set<string>();
  * One installed Harness: icon, name, Publisher, version, the Local badge, when it was last
  * launched (nothing when it never was), the primary button ({@link LaunchAction}, shared with the
  * Store detail page) and its overflow menu: View in Store, Model Overrides, Show logs, Open data
- * folder and Uninstall, which opens the page's {@link UninstallDialog}. A launch that
+ * folder, Report (a Store install only: the Store may not know a local one), which opens the
+ * page's {@link ReportDialog} for the installed version, and Uninstall, which opens the page's
+ * {@link UninstallDialog}. A launch that
  * failed shows why ("Exited with an error", "Did not start in time", "Could not start") with Show
  * logs and Dismiss, and Launch retries; the paths Show logs and Open data folder open are computed
  * in main. View in Store opens the Harness's Store detail page, which says so when the Store no
@@ -290,11 +311,14 @@ function HarnessCard({
   install,
   launch,
   onUninstall,
+  onReport,
 }: {
   readonly install: InstalledHarness;
   readonly launch: LaunchStatus | undefined;
   /** Opens the uninstall confirmation. */
   readonly onUninstall: () => void;
+  /** Opens the Report dialog for the installed version. */
+  readonly onReport: () => void;
 }) {
   const { t, formatDate } = useI18n();
   const navigate = useNavigate();
@@ -376,6 +400,9 @@ function HarnessCard({
                 reveal(window.api.launch.openDataFolder);
               },
             },
+            ...(install.source === 'store'
+              ? [{ label: t('library.menu.report'), onSelect: onReport }]
+              : []),
             {
               label: t('library.menu.uninstall'),
               danger: true,

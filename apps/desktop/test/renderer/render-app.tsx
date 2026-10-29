@@ -36,6 +36,8 @@ import type {
   OwnHarness,
   ProviderPreset,
   PublishedVersion,
+  ReportInfo,
+  ReportRequest,
   PublishRequest,
   ResolvedSlot,
   Settings,
@@ -84,6 +86,9 @@ export const NO_USAGE: UsageRow = {
   unknownCount: 0,
   lastUsedAt: null,
 };
+
+/** The random install ID `store.reportInfo` answers. */
+export const FAKE_INSTALL_ID = '7f1c2a9e-0b4d-4c55-8a3e-2d6f9b1e4c70';
 
 /** The Publisher `auth.signIn` signs in as. */
 export const FAKE_PUBLISHER: AuthState = {
@@ -205,7 +210,9 @@ export interface FakeApiOptions {
  * `app.getLocale()` and an override set through `settings.set` wins over it. The Runtime started
  * fine, the Store is online and its home and every search have no Harnesses, no Harness has a Store
  * detail page (`store.detail` answers `not_found`) and no login a Publisher page
- * (`store.publisher` answers `publisher: null`), there are no Connections or Slot Bindings,
+ * (`store.publisher` answers `publisher: null`), every Report is taken, up to 3 per Harness, as
+ * main limits them (`store.reportInfo` then says `rateLimited`, and `store.report` answers
+ * `rate_limited`), there are no Connections or Slot Bindings,
  * detection finds nothing, `connections.add`, `update`, `remove` and `test` (of a saved Connection)
  * answer `not_implemented`, `connections.testDraft` passes finding no models and
  * `connections.models` lists none; `bindings.setGlobal` sets or clears a Default Model that
@@ -238,6 +245,8 @@ export function installFakeApi(
   let bindings: readonly GlobalBinding[] = [];
   const overrides = new Map<string, readonly ModelOverride[]>();
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  /** Harness ID → Reports of it the fake Store took. */
+  const reported = new Map<string, number>();
   const current = (): Settings => ({
     ...(locale === undefined ? {} : { locale }),
     resolvedLocale: locale ?? osLocale,
@@ -307,6 +316,32 @@ export function installFakeApi(
       publisher: vi.fn<(login: string) => Promise<IpcResult<StorePublisherPage>>>(() =>
         Promise.resolve({ ok: true, data: { platform: 'darwin-arm64', publisher: null } }),
       ),
+      reportInfo: vi.fn((harnessId: string): Promise<IpcResult<ReportInfo>> =>
+        Promise.resolve({
+          ok: true,
+          data: {
+            installId: FAKE_INSTALL_ID,
+            platform: 'darwin-arm64',
+            appVersion: '4.5.6',
+            rateLimited: (reported.get(harnessId) ?? 0) >= 3,
+          },
+        }),
+      ),
+      report: vi.fn((request: ReportRequest): Promise<IpcResult<null>> => {
+        const count = reported.get(request.harnessId) ?? 0;
+        if (count >= 3) {
+          return Promise.resolve({
+            ok: false,
+            error: {
+              code: 'rate_limited',
+              messageKey: 'error.rate_limited',
+              message: 'Rate limited.',
+            },
+          });
+        }
+        reported.set(request.harnessId, count + 1);
+        return Promise.resolve({ ok: true, data: null });
+      }),
     },
     providers: {
       list: vi.fn((): Promise<IpcResult<readonly ProviderPreset[]>> =>

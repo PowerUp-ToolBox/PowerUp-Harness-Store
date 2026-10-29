@@ -1435,7 +1435,7 @@ button {
   color: var(--color-accent-hover);
 }
 
-input:not([type='checkbox']) {
+input:not([type='checkbox'], [type='radio']) {
   min-height: 32px;
   padding: 4px 10px;
   border: 1px solid var(--color-border-strong);
@@ -2127,8 +2127,69 @@ input[type='password'] {
   font-size: 13px;
 }
 
-input[aria-invalid='true'] {
+input[aria-invalid='true'],
+textarea[aria-invalid='true'] {
   border-color: var(--color-error);
+}
+
+/* The Report dialog (P0-12): reasons, details, and what is sent with the Report. */
+.report-reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.report-reasons legend {
+  margin-bottom: 4px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.report-details {
+  min-height: 96px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  resize: vertical;
+}
+
+.report-sent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--color-bg-subtle);
+  font-size: 13px;
+}
+
+.report-info {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.report-info dt {
+  color: var(--color-text-muted);
+}
+
+.report-info dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.report-limited {
+  font-weight: 600;
 }
 
 .preset-grid {

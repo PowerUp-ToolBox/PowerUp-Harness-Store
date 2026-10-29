@@ -85,6 +85,15 @@ function launch(osLocale: string) {
       detail: () => Promise.resolve(fail('not_implemented')),
       publisher: () => Promise.resolve(fail('not_implemented')),
     },
+    reports: {
+      info: () => ({
+        installId: '',
+        platform: 'linux-x64',
+        appVersion: '1.0.0',
+        rateLimited: false,
+      }),
+      report: () => Promise.resolve(fail('not_implemented')),
+    },
     providers: { list: () => providerPresets() },
     connections: createConnectionsStub(),
     bindings: createBindingsStub(),

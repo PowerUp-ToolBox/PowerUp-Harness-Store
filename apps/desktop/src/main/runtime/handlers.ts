@@ -31,6 +31,7 @@ import { fail, ok } from './ipc-result.js';
 import type { Services } from './services.js';
 import { parseSettingsPatch } from './settings.js';
 import { StoreAuthError } from './store-auth.js';
+import { parseReportRequest } from './store-report.js';
 import { parseUsageFilter, parseUsageQuery } from './usage.js';
 
 /**
@@ -110,6 +111,17 @@ export function createHandlers(services: Services): IpcHandlers {
     'store.publisher': (input) => {
       if (!isPublisherLogin(input)) return fail('invalid_input', { method: 'store.publisher' });
       return services.store.publisher(input);
+    },
+    'store.reportInfo': (input) => {
+      if (!isHarnessIdInput(input) || !input.includes('/')) {
+        return fail('invalid_input', { method: 'store.reportInfo' });
+      }
+      return ok(services.reports.info(input));
+    },
+    'store.report': (input) => {
+      const request = parseReportRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'store.report' });
+      return services.reports.report(request);
     },
     'providers.list': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'providers.list' });

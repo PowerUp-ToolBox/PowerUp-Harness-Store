@@ -188,14 +188,25 @@ describe('the Library cards', () => {
     expect(within(gone).getByText('No longer available in the Store')).toBeDefined();
     expect(actions('Gone From Store')).toEqual(['Launch']);
 
-    // Every card's menu has the same five items, Uninstall last.
-    for (const name of ['Installed', 'Local Copy', 'Running Now']) {
+    // Every card's menu has the same items, Uninstall last; Report only for a Store install.
+    for (const [name, report] of [
+      ['Installed', ['Report']],
+      ['Local Copy', []],
+      ['Running Now', ['Report']],
+    ] as const) {
       const menu = await openMenu(name);
       expect(
         within(menu)
           .getAllByRole('menuitem')
           .map((item) => item.textContent),
-      ).toEqual(['View in Store', 'Model Overrides', 'Show logs', 'Open data folder', 'Uninstall']);
+      ).toEqual([
+        'View in Store',
+        'Model Overrides',
+        'Show logs',
+        'Open data folder',
+        ...report,
+        'Uninstall',
+      ]);
       fireEvent.keyDown(menu, { key: 'Escape' });
     }
   });

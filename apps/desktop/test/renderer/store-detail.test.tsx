@@ -270,7 +270,10 @@ describe('Harness detail page', () => {
     expect(within(footer).getByRole('link', { name: 'Source' }).getAttribute('href')).toBe(
       'http://git.example.com/alice/writer',
     );
-    expect(within(footer).getByRole('button', { name: 'Report' })).toHaveProperty('disabled', true);
+    expect(within(footer).getByRole('button', { name: 'Report' })).toHaveProperty(
+      'disabled',
+      false,
+    );
   });
 
   it('shows shell commands in red, with the concrete sentence and the no-sandbox sentence', async () => {

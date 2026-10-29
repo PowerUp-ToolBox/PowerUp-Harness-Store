@@ -86,6 +86,15 @@ const fakeServices: Services = {
     check: () => Promise.resolve({ state: 'online' }),
   },
   store: { home, search, detail, publisher },
+  reports: {
+    info: () => ({
+      installId: '7f1c2a9e-0b4d-4c55-8a3e-2d6f9b1e4c70',
+      platform: 'darwin-arm64',
+      appVersion: '1.2.3',
+      rateLimited: false,
+    }),
+    report: () => Promise.resolve(ok(null)),
+  },
   providers: { list: () => providerPresets() },
   connections: createConnectionsStub(),
   bindings: {
