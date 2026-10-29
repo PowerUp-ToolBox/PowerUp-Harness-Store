@@ -161,6 +161,8 @@ describe('createLocalDetector', () => {
     const started = performance.now();
     await expect(detect()).resolves.toEqual([]);
     const elapsed = performance.now() - started;
+    // AbortSignal.timeout starts at the event loop's cached time, which can be a little earlier
+    // than `started`: the 50 ms are for that.
     expect(elapsed).toBeGreaterThanOrEqual(DETECT_TIMEOUT_MS - 50);
     // Both probes share the window: well under two timeouts back to back.
     expect(elapsed).toBeLessThan(DETECT_TIMEOUT_MS + 1000);

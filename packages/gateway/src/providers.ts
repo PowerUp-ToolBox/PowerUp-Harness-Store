@@ -239,7 +239,7 @@ export type ModelRef =
 /**
  * Reads a request's `model`. A value containing `/` is an explicit id, split at the first `/`:
  * the Provider part must be a Provider id and the model part a model name for it ({@link
- * isModelName}; `openrouter/anthropic/claude-sonnet-4-5` keeps `anthropic/claude-sonnet-4-5` as
+ * isModelName}; `openrouter/anthropic/claude-sonnet-5-5` keeps `anthropic/claude-sonnet-5-5` as
  * the model).
  * Anything else is a Slot name; Slot names never contain `/`, so the two forms cannot overlap.
  * Returns `null` for a malformed explicit id.

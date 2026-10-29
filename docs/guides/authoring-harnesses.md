@@ -297,10 +297,10 @@ What else a Harness can rely on at launch:
 - **Working directory.** The process starts in the Workspace when there is one, else in the **Data Directory**, never in the installed Harness folder. Find your own files relative to the Entry (`import.meta.dirname`), or, like the reference Harnesses, bundle everything into the Entry.
 - **Data Directory.** `HARNESS_DATA_DIR` is yours for state, created before the launch and deleted when the User uninstalls the Harness. Keep settings, caches and history there, not in the Workspace.
 - **Environment.** Inherited variables whose names start with `OPENAI_`, `ANTHROPIC_`, `GOOGLE_API_`, `GEMINI_`, `OPENROUTER_` or `HARNESS_` are removed before the table's are set, so a Harness never picks up the User's own keys by accident.
-- **Node.** A `node` Harness runs as `<node> <entry>` with the Runtime's Node: in P0 that is Electron's Node 24, although Manifests declare `"22"`. Write code that runs on both. No system Node, Python or shell is guaranteed.
+- **Node.** A `node` Harness runs as `<node> <entry>` with the Runtime's Node: in P0 that is Electron's Node 24, although Manifests declare `"22"`. Write code that runs on both. On macOS and Linux it is Electron's executable acting as Node (BoringSSL, Electron's native-module ABI); on Windows it is the stock `node.exe` of the same Node version, which the app ships (OpenSSL, Node's own ABI). A native addon must use N-API to load on both, and TLS or crypto edge cases may differ between them. No system Node, Python or shell is guaranteed.
 - **UI Kind `web`.** The window opens at once on a Starting state and shows `http://127.0.0.1:$HARNESS_PORT/` (plus `ui.path`) as soon as the port accepts a connection; listen within `ui.readyTimeoutSeconds` or the launch fails. Listen on `127.0.0.1`, not `localhost`, which may resolve to `::1`. The page runs in a sandboxed view locked to that origin; links to other sites open in the User's browser.
 - **UI Kind `terminal`.** The process runs in a pty the size of the embedded terminal.
-- **Stopping.** Closing the window (or quitting the app) sends SIGTERM to the Harness's process group (on Windows `taskkill /T`), then SIGKILL after 5 seconds. When the process exits by itself, the window stays open with its exit code and offers Relaunch. Either way the Gateway Token is revoked.
+- **Stopping.** Closing the window (or quitting the app) sends SIGTERM to the Harness's process group (on Windows `taskkill /T`), then SIGKILL after 5 seconds. On Windows there is no grace period for a console program, which is what every terminal Harness and every Node Harness is: `taskkill /T` cannot ask it to close, so it is ended forcefully at once. Save state as you go rather than on exit. When the process exits by itself, the window stays open with its exit code and offers Relaunch. Either way the Gateway Token is revoked.
 - **Logs.** stdout and stderr (or the pty output) go to a log file per launch, which the User opens with "Show logs". The environment and the Gateway Token are never logged.
 
 ## 5. Using the SDK
@@ -596,7 +596,7 @@ A code reviewer needs a strong model with tool calling for the review itself, an
       "default": {
         "description": "Reviews the change, reading files with tools",
         "requirements": { "tools": true, "minContext": 64000 },
-        "recommended": ["anthropic/claude-sonnet-4-5", "openai/gpt-5", "ollama/qwen3-coder:30b"]
+        "recommended": ["anthropic/claude-sonnet-5-5", "openai/gpt-5", "ollama/qwen3-coder:30b"]
       },
       "fast": {
         "description": "Summarises each changed file before the review",
@@ -612,7 +612,7 @@ What each Slot resolves to, for three Users who have set no Model Override:
 
 | The User has | `default` resolves to | `fast` resolves to |
 |---|---|---|
-| An Anthropic Connection and Ollama; Default Model `ollama/llama3.2` | `anthropic/claude-sonnet-4-5` (first Recommended Model with a Connection) | `ollama/qwen3:8b` (first Recommended Model with a Connection) |
+| An Anthropic Connection and Ollama; Default Model `ollama/llama3.2` | `anthropic/claude-sonnet-5-5` (first Recommended Model with a Connection) | `ollama/qwen3:8b` (first Recommended Model with a Connection) |
 | Only Ollama; Default Model `ollama/llama3.2` | `ollama/qwen3-coder:30b` (third Recommended Model); fails with `provider_error` until the User pulls it | `ollama/qwen3:8b` |
 | Only DeepSeek; Default Model `deepseek/deepseek-chat` | `deepseek/deepseek-chat` (no Recommended Model has a Connection, so the Default Model) | `deepseek/deepseek-chat` (no Default Model for `fast`, so the one for `default`) |
 

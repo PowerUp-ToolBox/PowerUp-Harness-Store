@@ -17,8 +17,8 @@ import type { HarnessWindows, NodeCommand } from './supervisor.js';
  * expects it echoed back with one Usage Record, then exits 0, or 1 on any failure. Everything but
  * the windows is the real Runtime: the installer, Connections, Default Models, the Process
  * Supervisor, the pty (node-pty), the Model Gateway and the Node a Node Harness runs on (the app's
- * own executable with `ELECTRON_RUN_AS_NODE`), so a build whose native module or Node runtime is
- * missing or broken fails here. apps/desktop/scripts/smoke.mjs starts the fake Provider and the
+ * own executable with `ELECTRON_RUN_AS_NODE`, or on Windows the node.exe the build ships:
+ * node-runtime.ts), so a build whose native module or Node runtime is missing or broken fails here. apps/desktop/scripts/smoke.mjs starts the fake Provider and the
  * built app; src/main/index.ts gives the run a fresh profile and exits with its result.
  *
  * Only environment variables start it, never a command-line argument, so a `harnessstore:` URL the
@@ -114,8 +114,8 @@ export interface SmokeOptions extends SmokeRequest {
   /** Prints one line of progress (stdout in the app). */
   readonly log: (line: string) => void;
   /**
-   * How the Node Harness runs. Default: this process's executable with `ELECTRON_RUN_AS_NODE=1`,
-   * as the app runs every Node Harness.
+   * How the Node Harness runs. Default: the Node command the app runs every Node Harness with
+   * (node-runtime.ts, `nodeRuntimeOfThisProcess`).
    */
   readonly nodeCommand?: NodeCommand;
   /** Starts the Harness in a pty. Default: node-pty. */
@@ -147,6 +147,11 @@ export async function runSmoke(options: SmokeOptions): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   /** Set once the run failed or timed out: a wait still polling then stops. */
   let abandoned = false;
+  const launchLogPath = (harnessId: string, launchId: string) =>
+    join(harnessPaths(options.dataDir).logsDir(harnessId), `${launchId}.log`);
+  /** A launch's log as written so far; empty when there is none. */
+  const launchLog = (harnessId: string, launchId: string) =>
+    readFile(launchLogPath(harnessId, launchId), 'utf8').catch(() => '');
   const timeoutMs = options.timeoutMs ?? SMOKE_TIMEOUT_MS;
   const timedOut = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
@@ -229,6 +234,9 @@ export async function runSmoke(options: SmokeOptions): Promise<boolean> {
 
     await waitFor('its prompt', () => showsPrompt(windows.screen(launchId)));
     step(`Launched ${launchId}; the Harness printed its prompt`);
+    // The program the Supervisor started, Node runtime included, as its launch log names it.
+    const started = /\[runtime\] (Started .*)/.exec(await launchLog(harnessId, launchId))?.[1];
+    if (started !== undefined) step(started);
     const nonce = randomUUID();
     const message = `smoke ${nonce}`;
     supervisor.window(launchId)?.terminalInput(`${message}\r`);
@@ -260,13 +268,14 @@ export async function runSmoke(options: SmokeOptions): Promise<boolean> {
     }
     const { harnessId, launch } = state;
     if (harnessId !== undefined && launch !== undefined) {
-      const path = join(harnessPaths(options.dataDir).logsDir(harnessId), `${launch.launchId}.log`);
-      const text = await readFile(path, 'utf8').catch(() => '(no launch log)');
-      step(`Launch log ${path}:\n${text}`);
+      const text = (await launchLog(harnessId, launch.launchId)) || '(no launch log)';
+      step(`Launch log ${launchLogPath(harnessId, launch.launchId)}:\n${text}`);
     }
   } finally {
     clearTimeout(timer);
-    // Stops the Harness (the shutdown sequence) and closes the database.
+    // Stops the Harness (the shutdown sequence) and closes the database. The next step's time
+    // shows how long that took.
+    if (state.runtime !== undefined) step('Stopping the Harness and the Runtime');
     await state.runtime?.shutdown();
   }
   step(passed ? 'PASSED' : 'The smoke run failed');

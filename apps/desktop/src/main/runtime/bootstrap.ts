@@ -36,6 +36,7 @@ import { createInstaller, createInstallsStub, type InstallsService } from './ins
 import { fail, ok } from './ipc-result.js';
 import { createLaunchStore, type LaunchStore } from './launch-store.js';
 import { createLocalDetector, type LocalProbeTarget } from './local-detection.js';
+import { nodeRuntimeOfThisProcess } from './node-runtime.js';
 import type { PipedSpawner } from './piped-process.js';
 import { createPublishService } from './publish.js';
 import { spawnNodePty, type PtySpawner } from './pty.js';
@@ -150,8 +151,9 @@ export interface RuntimeOptions {
   /** Clears a web Harness's browser session when it is uninstalled (see createInstaller). */
   readonly clearHarnessSession?: (harnessId: string) => Promise<void>;
   /**
-   * How a Node Harness is run. Default: this process's executable with `ELECTRON_RUN_AS_NODE=1`,
-   * which is Electron acting as Node in the app, and Node itself under plain Node.
+   * How a Node Harness is run. Default: {@link nodeRuntimeOfThisProcess}, which in the app is its
+   * own executable with `ELECTRON_RUN_AS_NODE=1` on macOS and Linux and the node.exe it ships on
+   * Windows, and under plain Node is Node itself.
    */
   readonly nodeCommand?: NodeCommand;
   /** Starts a terminal Harness in a pty. Default: node-pty. */
@@ -341,6 +343,15 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           }),
           ...(options.now === undefined ? {} : { now: options.now }),
         });
+  // The Node of Node Harnesses (node-runtime.ts), decided once. A node.exe that is missing is
+  // logged now, and each launch of a Node Harness then fails with a spawn error.
+  const nodeRuntime =
+    options.nodeCommand === undefined
+      ? nodeRuntimeOfThisProcess()
+      : { command: options.nodeCommand, nodeVersion: undefined, warning: undefined };
+  if (nodeRuntime.warning !== undefined) {
+    logError('The Node runtime of Node Harnesses', new Error(nodeRuntime.warning));
+  }
   const supervisor: Supervisor =
     sqlite === null ||
     gateway === null ||
@@ -369,10 +380,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           spawnPty: options.spawnPty ?? spawnNodePty,
           ...(options.spawnProcess === undefined ? {} : { spawnProcess: options.spawnProcess }),
           ...(options.freePort === undefined ? {} : { freePort: options.freePort }),
-          nodeCommand: options.nodeCommand ?? {
-            path: process.execPath,
-            env: { ELECTRON_RUN_AS_NODE: '1' },
-          },
+          nodeCommand: nodeRuntime.command,
           ...(options.harnessEnvironment === undefined
             ? {}
             : { environment: options.harnessEnvironment }),
@@ -509,6 +517,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
         version: options.version,
         dataRoot: options.dataDir,
         databasePath,
+        ...(nodeRuntime.nodeVersion === undefined ? {} : { nodeVersion: nodeRuntime.nodeVersion }),
         gatewayPort: () => gatewayPort,
         probe: options.probeGateway ?? ((port) => probeGateway(port)),
         storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),

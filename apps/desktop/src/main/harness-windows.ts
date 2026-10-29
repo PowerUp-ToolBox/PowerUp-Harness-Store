@@ -133,6 +133,9 @@ export function createHarnessWindows(): ElectronHarnessWindows {
     });
     harnessSession.setPermissionCheckHandler(() => false);
     harnessSession.setDevicePermissionHandler(() => false);
+    // Downloads stay allowed, through Electron's save dialog, so the User picks where each file
+    // goes. Blocking them would protect nothing (the Harness process already runs unsandboxed
+    // with the User's permissions) and would break a web Harness's Export.
   };
 
   return {

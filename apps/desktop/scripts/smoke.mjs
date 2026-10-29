@@ -1,14 +1,21 @@
 #!/usr/bin/env node
 /**
- * `node scripts/smoke.mjs [executable]`: the post-build smoke test of a packaged app (P0-13.3).
- * It starts the fake Provider on a port the OS picks, serving `qwen3:8b`, then starts the app
- * electron-builder left unpacked in release/ (`mac-arm64/` or `mac/`, `win-unpacked/`,
- * `linux-unpacked/`; or the executable given) with HARNESS_STORE_SMOKE_HARNESS set to
- * examples/hello-term/out and HARNESS_STORE_SMOKE_PROVIDER_URL to the fake. The app then runs
- * src/main/runtime/smoke.ts instead of opening a window: it installs hello-term and runs one turn
- * through its own Model Gateway, with its own executable as the Node runtime. This script exits
- * with the app's exit code, or 1 when the fake Provider did not get exactly that one chat request,
- * or when the app is still running after 150 s.
+ * `node scripts/smoke.mjs [executable [argument ...]]`: the post-build smoke test of a packaged
+ * app (P0-13.3). It starts the fake Provider on a port the OS picks, serving `qwen3:8b`, then
+ * starts the app electron-builder left unpacked in release/ (`mac-arm64/` or `mac/`,
+ * `win-unpacked/`, `linux-unpacked/`; or the executable given, with the arguments after it) with
+ * HARNESS_STORE_SMOKE_HARNESS set to examples/hello-term/out and HARNESS_STORE_SMOKE_PROVIDER_URL
+ * to the fake. The app then runs src/main/runtime/smoke.ts instead of opening a window: it installs
+ * hello-term and runs one turn through its own Model Gateway, on the Node runtime it runs every
+ * Node Harness on (src/main/runtime/node-runtime.ts). This script exits with the app's exit code,
+ * or 1 when the fake Provider did not get exactly that one chat request, or when the app is still
+ * running after 150 s.
+ *
+ * `node scripts/smoke.mjs --unpackaged` (`pnpm smoke:unpackaged`) runs the same smoke on the
+ * unpackaged app, after `pnpm build` only: the Electron of node_modules started on apps/desktop, as
+ * `pnpm dev` starts it, which is `node scripts/smoke.mjs <electron> <apps/desktop>`. The `e2e-smoke`
+ * CI job runs it, on Windows after scripts/fetch-node.mjs, whose node.exe the app then runs
+ * hello-term on.
  *
  * The app gets only the OS's own environment variables (as e2e/support/app.ts passes them), so no
  * API key of the shell reaches it. Linux needs a display: CI runs this under `xvfb-run -a`. Build
@@ -16,6 +23,7 @@
  */
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { startFakeProvider } from '@harness-store/gateway/testing/fake-provider';
 
@@ -71,7 +79,13 @@ function log(text) {
   console.log(`[smoke.mjs ${new Date().toISOString()}] ${text}`);
 }
 
-const executable = process.argv[2] === undefined ? packagedExecutable() : resolve(process.argv[2]);
+const unpackaged = process.argv[2] === '--unpackaged';
+const executable = unpackaged
+  ? createRequire(import.meta.url)('electron')
+  : process.argv[2] === undefined
+    ? packagedExecutable()
+    : resolve(process.argv[2]);
+const args = unpackaged ? [DESKTOP_DIR] : process.argv.slice(3);
 if (executable === undefined || !existsSync(executable)) {
   console.error(`No packaged app found in ${RELEASE_DIR}: run \`pnpm package\` first.`);
   process.exit(1);
@@ -89,11 +103,11 @@ for (const name of PASSED_THROUGH) {
 env.HARNESS_STORE_SMOKE_HARNESS = HELLO_TERM;
 env.HARNESS_STORE_SMOKE_PROVIDER_URL = fake.url;
 
-log(`Starting ${executable} with the fake Provider at ${fake.url}`);
+log(`Starting ${[executable, ...args].join(' ')} with the fake Provider at ${fake.url}`);
 const [code, signal] = await new Promise((done) => {
   let child;
   try {
-    child = spawn(executable, [], { env, stdio: ['ignore', 'inherit', 'inherit'] });
+    child = spawn(executable, args, { env, stdio: ['ignore', 'inherit', 'inherit'] });
   } catch (error) {
     // Such as an executable for another CPU (EBADARCH on an Apple silicon Mac without Rosetta).
     log(`Could not start the app: ${error.message}`);

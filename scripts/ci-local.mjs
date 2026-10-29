@@ -15,7 +15,10 @@
  * no other: a real OAuth app configured there for manual testing would fail those tests.
  *
  * `e2e-smoke` and `acceptance` run the Desktop E2E journeys (apps/desktop/e2e) on the built app,
- * with the fake Provider as Ollama on port 11434 (set E2E_OLLAMA_PORT when a real Ollama has it).
+ * with the fake Provider as Ollama on port 11434 (set E2E_OLLAMA_PORT when a real Ollama has it);
+ * `e2e-smoke` then runs the post-build smoke run on the unpackaged app (`smoke:unpackaged`). On
+ * Windows, `supervisor-tests` and `e2e-smoke` first download the node.exe Node Harnesses run on
+ * (`fetch-node`, kept in apps/desktop/vendor/), as CI does; elsewhere that does nothing.
  * `acceptance` needs Docker too: its Playwright setup restarts the local Supabase stack with the
  * fake GitHub, keeping its data, replaces the catalogue with the seed, and stops the stack again at
  * the end. On Linux run them under `xvfb-run` when there is no display.
@@ -123,11 +126,20 @@ const JOBS = [
     id: 'supervisor-tests',
     run: () =>
       steps(
+        () => pnpm(['--filter', '@harness-store/desktop', 'run', 'fetch-node']),
         () => pnpm(['--filter', '@harness-store/desktop', 'run', 'test:launch']),
         () => pnpm(['--filter', '@harness-store/desktop', 'run', 'test:install']),
       ),
   },
-  { id: 'e2e-smoke', run: () => pnpm(['--filter', '@harness-store/desktop', 'run', 'e2e:smoke']) },
+  {
+    id: 'e2e-smoke',
+    run: () =>
+      steps(
+        () => pnpm(['--filter', '@harness-store/desktop', 'run', 'fetch-node']),
+        () => pnpm(['--filter', '@harness-store/desktop', 'run', 'e2e:smoke']),
+        () => pnpm(['--filter', '@harness-store/desktop', 'run', 'smoke:unpackaged']),
+      ),
+  },
   {
     id: 'acceptance',
     run: () =>

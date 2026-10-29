@@ -293,6 +293,16 @@ function rows(table: 'launches' | 'usage_records') {
   }
 }
 
+/**
+ * Waits until `count` Usage Records are stored. The Gateway writes each one after the reply has
+ * gone back to the Harness, so a test that only waited for the reply could count too early.
+ */
+const waitForUsageRecords = (count: number) =>
+  waitFor(
+    () => (rows('usage_records').length >= count ? true : undefined),
+    `${String(count)} Usage Records`,
+  );
+
 /** The chat requests the fake Provider received, as the Model Gateway forwarded them. */
 const chatRequests = () =>
   fake.requests
@@ -355,6 +365,7 @@ describe('hello-term (examples/hello-term/out)', () => {
     // Exactly one Usage Record, this Harness's, written during this launch.
     const [launchRow] = rows('launches');
     expect(launchRow).toMatchObject({ launch_id: launchId, harness_id: harnessId, exit_code: 0 });
+    await waitForUsageRecords(1);
     const usage = rows('usage_records');
     expect(usage).toEqual([
       expect.objectContaining({
@@ -401,6 +412,7 @@ describe('hello-term (examples/hello-term/out)', () => {
     await type(launchId, '\x03');
     await expect(waitForEnd(launchId)).resolves.toMatchObject({ state: 'stopped', exitCode: 0 });
     expect(await screen(launchId)).toMatch(/再见。$/);
+    await waitForUsageRecords(2);
     expect(rows('usage_records')).toHaveLength(2);
   });
 
@@ -436,6 +448,7 @@ describe('hello-term (examples/hello-term/out)', () => {
     await type(launchId, '/quit\r');
     await expect(waitForEnd(launchId)).resolves.toMatchObject({ state: 'stopped', exitCode: 0 });
     // The refused call never reached a Provider, so it has no Usage Record.
+    await waitForUsageRecords(1);
     expect(rows('usage_records')).toMatchObject([{ slot: 'default', status: 'ok' }]);
   });
 });
@@ -651,6 +664,7 @@ describe('hello-web (examples/hello-web/out)', () => {
     ]);
 
     // Exactly one Usage Record, this Harness's, written during this launch.
+    await waitForUsageRecords(1);
     expect(rows('usage_records')).toEqual([
       expect.objectContaining({
         harness_id: harnessId,
@@ -719,6 +733,7 @@ describe('hello-web (examples/hello-web/out)', () => {
       { role: 'assistant', content: 'second question' },
       { role: 'user', content: 'now?' },
     ]);
+    await waitForUsageRecords(3);
     expect(rows('usage_records')).toHaveLength(3);
   });
 

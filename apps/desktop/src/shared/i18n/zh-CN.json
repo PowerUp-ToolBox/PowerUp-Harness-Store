@@ -644,7 +644,7 @@
   "manifest.schema_pattern.nodeEntryPath": "必须是相对于 Harness 包根目录的 .js、.mjs 或 .cjs 文件路径，使用 \"/\" 分隔，不以 \"/\" 开头，不含 \".\" 或 \"..\" 段、反斜杠或冒号。实际为 {actual}。",
   "manifest.schema_pattern.uiPath": "必须是 Harness 本地服务器上以单个 \"/\" 开头的路径，如 \"/\" 或 \"/app\"，不含空格或反斜杠。实际为 {actual}。",
   "manifest.schema_pattern.slotName": "模型槽位名称 \"{key}\" 必须以小写字母开头，且只包含小写字母、数字和连字符（最多 32 个字符）。",
-  "manifest.schema_pattern.modelId": "推荐模型必须是 \"provider/model\" 形式的 ID，如 \"anthropic/claude-sonnet-4-5\"，其中 Provider ID 为小写。实际为 {actual}。",
+  "manifest.schema_pattern.modelId": "推荐模型必须是 \"provider/model\" 形式的 ID，如 \"anthropic/claude-sonnet-5-5\"，其中 Provider ID 为小写。实际为 {actual}。",
   "manifest.schema_pattern.domain": "必须是小写域名，如 \"api.github.com\"，可以以 \"*.\" 开头。实际为 {actual}。",
   "manifest.schema_pattern.unstorable_character": "该文本包含商店无法保存的字符 {character}。Manifest 中的文本不能包含 NUL 字符（U+0000），也不能包含缺少另一半的 UTF-16 代理对（例如单独出现的 JSON 转义 \"\\ud800\"）。请删除它。",
   "manifest.schema_required": "缺少必需的键 \"{key}\"。",

@@ -215,6 +215,8 @@ describe('CI workflow', () => {
     expect(job?.['runs-on']).toBe('${{ matrix.os }}');
     expect(job?.strategy?.['fail-fast']).toBe(false);
     expect(commandsOf('supervisor-tests').slice(2)).toEqual([
+      // The node.exe of Windows apps, which the Windows smoke tests run hello-term on.
+      'pnpm --filter @harness-store/desktop run fetch-node',
       'pnpm --filter @harness-store/desktop run test:launch',
       'pnpm --filter @harness-store/desktop run test:install',
     ]);
@@ -229,6 +231,24 @@ describe('CI workflow', () => {
     // On a virtual display on Linux, as is everywhere else.
     expect(journey).toContain('xvfb-run -a pnpm --filter @harness-store/desktop run e2e:smoke');
     expect(journey).toContain('\n  pnpm --filter @harness-store/desktop run e2e:smoke');
+  });
+
+  it('e2e-smoke fetches the Windows Node runtime, then smoke-runs the unpackaged app after the journey', () => {
+    const commands = commandsOf('e2e-smoke');
+    const index = (text: string) => commands.findIndex((command) => command.includes(text));
+    expect(commands[2]).toBe('pnpm --filter @harness-store/desktop run fetch-node');
+    expect(index('run e2e:smoke')).toBeGreaterThan(2);
+    const smoke = commands[index('run smoke:unpackaged')];
+    expect(index('run smoke:unpackaged')).toBeGreaterThan(index('run e2e:smoke'));
+    // On a virtual display on Linux too, and on every OS: a pull request packages nothing, so
+    // this is the one run of a terminal Harness on the app's own Node runtime before a merge.
+    expect(smoke).toContain(
+      'xvfb-run -a pnpm --filter @harness-store/desktop run smoke:unpackaged',
+    );
+    expect(smoke).toContain('\n  pnpm --filter @harness-store/desktop run smoke:unpackaged');
+    const desktop = readPackageJson('apps', 'desktop');
+    expect(desktop.scripts?.['smoke:unpackaged']).toBe('node scripts/smoke.mjs --unpackaged');
+    expect(desktop.scripts?.['fetch-node']).toBe('node scripts/fetch-node.mjs');
   });
 
   it('acceptance runs the acceptance journey on Linux, with a keyring for the session and a virtual display', () => {
@@ -521,6 +541,12 @@ describe('local CI parity (pnpm ci:local)', () => {
         `pnpm(['--filter', '@harness-store/desktop', 'run', '${name ?? ''}'])`,
       );
     }
+    // And the rest of e2e-smoke: the Windows Node runtime first, the unpackaged smoke run last.
+    for (const name of ['fetch-node', 'smoke:unpackaged']) {
+      expect(script, name).toContain(
+        `pnpm(['--filter', '@harness-store/desktop', 'run', '${name}'])`,
+      );
+    }
   });
 
   it('runs the same commands as the store-tests job', () => {
@@ -626,5 +652,19 @@ describe('build workflow', () => {
     );
     expect(sandbox).toBeLessThan(stepIndex('Smoke run'));
     expect(packageSteps[stepIndex('Upload the build')]?.with?.['if-no-files-found']).toBe('error');
+  });
+
+  it('fetches the node.exe a Windows build ships for the architecture it packages, or fails', () => {
+    // electron-builder's own hooks do it, for the workflow and a local `pnpm package` alike.
+    expect(stepIndex('Fetch the Windows Node runtime')).toBe(-1);
+    expect(readPackageJson('apps', 'desktop').scripts?.package).toBe(
+      'electron-vite build && electron-builder --publish never',
+    );
+    const config = parse(readText('apps', 'desktop', 'electron-builder.yml')) as Record<
+      string,
+      unknown
+    >;
+    expect(config.beforePack).toBe('./scripts/pack-hooks.mjs');
+    expect(config.afterPack).toBe('./scripts/pack-hooks.mjs');
   });
 });

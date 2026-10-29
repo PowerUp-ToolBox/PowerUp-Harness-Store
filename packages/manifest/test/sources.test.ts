@@ -763,6 +763,96 @@ describe('ArchiveSource: bounded work while opening', () => {
     );
   });
 
+  it('reads a local header that 1 000 records point at once, not once per record', async () => {
+    // The stream (about 100 KB) is longer than the 64 KB window, so the data descriptor after it
+    // lies outside the window that holds the local header. Before the fix, reading it moved the
+    // window, and every record read the header's 64 KB and the descriptor's 64 KB again: about
+    // 128 MB for these 1 000 records, gigabytes for 100 000.
+    const records = [
+      zerosEntry('a.bin'),
+      ...Array.from({ length: 999 }, () => ({ ...zerosEntry('a.bin'), listedAt: 0 })),
+    ];
+    const reader = sparseReader(buildZip(records), 0);
+    const source = await ArchiveSource.open(reader);
+
+    const [first, ...copies] = source.listEntries().entries;
+    expect(first).not.toHaveProperty('unsupported');
+    expect(copies).toHaveLength(999);
+    for (const copy of copies) {
+      expect(copy.unsupported).toEqual({
+        reason: 'inconsistent',
+        detail: 'it shares bytes of the archive with "a.bin"',
+      });
+    }
+    // The end record, the central directory (about 50 KB), the header's window, the descriptor and
+    // the stream, inflated once in slices: a bounded number of reads, not two windows per record.
+    expect(reader.reads).toBeLessThan(40);
+    expect(reader.bytesRead).toBeLessThan(MB);
+  });
+
+  /** `length` bytes that do not compress, the same on every run. */
+  const noise = (length: number, seed: number) => {
+    const bytes = new Uint8Array(length);
+    let state = seed;
+    for (let i = 0; i < length; i++) {
+      state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+      bytes[i] = state >>> 24;
+    }
+    return bytes;
+  };
+
+  it('peeks the descriptors of 1 000 records that share a local header but not a size in small reads', async () => {
+    // Each copy gives another compressed size, so its data descriptor lies elsewhere in a 2 MB
+    // stream, about 95 KB from the last one's: the bytes peeked for one never hold the next, and
+    // every copy costs a read. Each read is of the descriptor's 24 bytes at most, never a 64 KB
+    // window (that would be about 64 MB for these 1 000 records).
+    const data = noise(2 * MB, 1);
+    const compressed = deflateRawSync(data, { level: 0 });
+    const entry: ZipEntrySpec = {
+      name: 'a.bin',
+      method: 8,
+      compressedData: compressed,
+      crc: nodeCrc32(data),
+      declaredSize: data.length,
+      dataDescriptor: true,
+    };
+    const span = compressed.length - 128 * 1024;
+    const records = [
+      entry,
+      ...Array.from({ length: 999 }, (_, i) => ({
+        ...entry,
+        compressedData: compressed.subarray(0, 128 * 1024 + ((i * 97_003) % span)),
+        listedAt: 0,
+      })),
+    ];
+    const reader = sparseReader(buildZip(records), 0);
+    const source = await ArchiveSource.open(reader);
+
+    const [first, ...copies] = source.listEntries().entries;
+    expect(first).not.toHaveProperty('unsupported');
+    for (const copy of copies) expect(copy.unsupported?.reason).toBe('inconsistent');
+    // One small read per copy, and the stream inflated once in 64 KB slices: 2 MB and a little.
+    expect(reader.reads).toBeLessThan(999 + 80);
+    expect(reader.bytesRead).toBeLessThan(3 * MB);
+  });
+
+  it('reads the next local header from the window read for a data descriptor', async () => {
+    // Twenty streamed entries, each longer than the 64 KB window: the window read at one entry's
+    // data descriptor holds the next local header, so that header costs no read of its own.
+    const entries = Array.from({ length: 20 }, (_, i) => ({
+      name: `dist/${String(i)}.bin`,
+      data: noise(100 * 1024, i + 1),
+      dataDescriptor: true,
+    }));
+    const reader = sparseReader(buildZip(entries), 0);
+    const source = await ArchiveSource.open(reader);
+    expect(source.listEntries().entries.filter((entry) => 'unsupported' in entry)).toEqual([]);
+    // The end record, the central directory and the first local header's window, then for each
+    // entry one window at its descriptor and two slices of its stream: 63 reads, as on main before
+    // descriptors were peeked (peeking exactly the descriptor's bytes made it 82).
+    expect(reader.reads).toBe(3 + 20 * 3);
+  });
+
   it('confirms at most 500 MB in all, and reports the entries past it as inconsistent', async () => {
     // Five honest 100 MB entries: each is charged its 100 MB and the most its last byte inflates
     // to, so the first four are confirmed and the fifth, with MAX_OVERRUN, does not fit what is

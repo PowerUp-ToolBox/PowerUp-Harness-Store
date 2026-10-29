@@ -115,7 +115,7 @@ One table, `PROVIDERS` ([`src/providers.ts`](src/providers.ts), exported for the
 | `anthropic`         | `@ai-sdk/anthropic`           | `anthropic`                                                                                                        |
 | `openai`            | `@ai-sdk/openai` (Chat API)   | `openai`                                                                                                           |
 | `google`            | `@ai-sdk/google`              | `google`                                                                                                           |
-| `openrouter`        | `@openrouter/ai-sdk-provider` | `openrouter`; model names are OpenRouter's (`anthropic/claude-sonnet-4-5`), passed through unchanged               |
+| `openrouter`        | `@openrouter/ai-sdk-provider` | `openrouter`; model names are OpenRouter's (`anthropic/claude-sonnet-5-5`), passed through unchanged               |
 | `openai-compatible` | `@ai-sdk/openai-compatible`   | `ollama`, `lmstudio`, `deepseek`, `qwen`, `moonshot`, `zhipu`, `minimax`, `doubao`, `groq` and `openai-compatible` |
 
 - A Connection's `baseUrl` overrides the row's default (an international account, Ollama on another port). The generic `openai-compatible` row has no default, so its Connections must carry one.
