@@ -97,9 +97,10 @@ The screen keeps its folder, validation and tab when the User visits another scr
 
 ## F8. Report a Harness
 
-1. Report link on the detail page (and in the Library card menu).
-2. Reason picker: Malicious behaviour, Bypasses the Model Gateway, Broken, Inappropriate content, Spam, Other (one per `report_reason` value in `docs/tech/data-model.md`). Free-text details. Optional email for follow-up.
-3. Submit anonymously; confirmation "Thanks, a reviewer will look at this". Repeated reports on the same Harness from the same install are rate limited with a gentle message.
+1. Report link in the detail page's footer (and in a Store install's Library card menu); not for a local install or on the "no longer available" page.
+2. Reason picker: Malicious behaviour, Bypasses the Model Gateway, Broken, Inappropriate content, Spam, Other (one per `report_reason` value in `docs/tech/data-model.md`), none preselected. Free-text details (2000 characters with the contact line). Optional email for follow-up, sent at the start of the details. What else is sent is shown before Submit: Harness ID, version, platform, app version and a random install ID; no IP address or account is stored.
+3. Submit anonymously, even when signed in; confirmation toast "Thanks, a reviewer will look at this." and the dialog closes. Repeated reports on the same Harness from the same install (3 in 24 hours, checked before any request) or the Store's own limit show the gentle "You've already reported this Harness recently" with only Close.
+4. Offline or a Store error: the message under the form, everything typed kept, Submit becomes Retry.
 
 ## F9. Uninstall
 
