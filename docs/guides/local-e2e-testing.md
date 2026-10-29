@@ -106,12 +106,14 @@ Either:
 HARNESS_STORE_USER_DATA_DIR="$(mktemp -d)" pnpm --filter @harness-store/desktop dev
 ```
 
+A temporary profile works for sign-in on macOS only. On Windows and Linux, leave the variable out (or export it in the environment your desktop session starts programs with). There the browser's `harnessstore://` callback starts a second app process, which does not inherit a variable set on this command line, so it opens the default profile instead of handing the callback to this app, and sign-in waits until it times out.
+
 Without the variable the app uses your normal profile (macOS `~/Library/Application Support/Harness Store`, Windows `%APPDATA%\Harness Store`, Linux `~/.config/Harness Store`). The Store URL of an unchanged app is the local stack, `http://127.0.0.1:54321`: check it in Settings → Advanced → Store URL (empty means the default) if you changed it before.
 
 ### 5. Walk the journey
 
 1. **First-run wizard.** Welcome → Continue. Local Providers lists Ollama with its models; keep Add checked → Continue. Remote Provider: skip, or choose a Provider and paste a key → Test connection. Default model: pick the model → Continue. Done shows the Connection and the Default Model → Open Store.
-2. **Sign in as a Publisher.** Publish → Sign in with GitHub. The browser opens GitHub; authorize the OAuth app; the browser then asks to open the app (`harnessstore://auth-callback`). The Publish screen shows "Signed in as `<your-login>`". See [Sign-in on macOS](#sign-in-on-macos) if it never comes back.
+2. **Sign in as a Publisher.** Publish → Sign in with GitHub. The browser opens GitHub; authorize the OAuth app; the browser then asks to open the app (`harnessstore://auth-callback`). The Publish screen shows "Signed in as `<your-login>`". See [Sign-in on macOS](#sign-in-on-macos) if it never comes back; on Windows and Linux, check that you started the app without `HARNESS_STORE_USER_DATA_DIR` (step 4).
 3. **Make the reference Harnesses yours.** A Harness ID starts with its Publisher's GitHub login, in lower case, so `harness-store/hello-web` is refused for you (`publisher_mismatch`). Publish a copy, not the repository's folder:
 
    ```sh

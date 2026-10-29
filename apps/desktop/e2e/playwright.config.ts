@@ -9,6 +9,9 @@ import { defineConfig } from '@playwright/test';
  * - `acceptance`: the whole P0 journey; its dependency `store` starts the local Supabase stack in
  *   Docker once, and `store-teardown` stops it after.
  *
+ * `globalSetup` resolves (on a first run, downloads) the Electron binary, outside every journey's
+ * budget.
+ *
  * One worker: every journey's fake Ollama listens on the same port. A journey must finish in 10
  * minutes (its timeout); in CI a failed one is retried once, and passing on the retry marks it
  * flaky in the JSON report, which CI lists in the job summary (scripts/e2e-summary.mjs).
@@ -19,6 +22,7 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: '.',
+  globalSetup: './electron.global-setup.ts',
   outputDir: 'test-results',
   workers: 1,
   fullyParallel: false,

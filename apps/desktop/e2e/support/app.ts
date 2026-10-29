@@ -118,12 +118,13 @@ export async function launchApp(ollama: FakeProvider, testInfo: TestInfo): Promi
   if (ollama.port !== OLLAMA_PORT) env.HARNESS_STORE_DEV_OLLAMA_URL = ollama.url;
   // On Linux the session's encryption needs a keyring on the session bus: CI's acceptance job
   // starts GNOME Keyring on one, which Chromium uses only when told to (it would otherwise fall
-  // back to `basic_text`, and the app then refuses to keep a session). With no session bus (the
-  // smoke job) there is no keyring to ask, and nothing in that journey is encrypted.
-  const keyring =
-    process.platform === 'linux' && env.DBUS_SESSION_BUS_ADDRESS !== undefined
-      ? ['--password-store=gnome-libsecret']
-      : [];
+  // back to `basic_text`, and the app then refuses to keep a session). Not a `--password-store`
+  // argument: Playwright's loader sets `password-store=basic` after the arguments are parsed, so
+  // the unpackaged app sets the switch itself from this variable (src/main/index.ts). With no
+  // session bus (the smoke job) there is no keyring to ask, and nothing in that journey is
+  // encrypted.
+  const keyring = process.platform === 'linux' && env.DBUS_SESSION_BUS_ADDRESS !== undefined;
+  if (keyring) env.HARNESS_STORE_DEV_PASSWORD_STORE = 'gnome-libsecret';
   const executablePath = createRequire(import.meta.url)('electron') as string;
   let app: ElectronApplication;
   try {
@@ -131,7 +132,7 @@ export async function launchApp(ollama: FakeProvider, testInfo: TestInfo): Promi
     // journeys would not run the sandboxed windows the app ships with.
     app = await _electron.launch({
       executablePath,
-      args: [main, ...keyring],
+      args: [main],
       env,
       chromiumSandbox: true,
     });
@@ -175,6 +176,22 @@ export async function launchApp(ollama: FakeProvider, testInfo: TestInfo): Promi
       electron.commandLine.hasSwitch('no-sandbox'),
     );
     if (unsandboxed) throw new Error('The app under test was started without its sandbox.');
+    // The keyring asked for is the one safeStorage uses, by the app's own test (secret-cipher.ts,
+    // which refuses `basic_text`): a failure here would otherwise surface later, as a refused
+    // sign-in.
+    if (keyring) {
+      const encryption = await app.evaluate(async ({ safeStorage }) => {
+        const available = await safeStorage.isAsyncEncryptionAvailable();
+        return { available, backend: safeStorage.getSelectedStorageBackend() };
+      });
+      if (!encryption.available || encryption.backend === 'basic_text') {
+        throw new Error(
+          `safeStorage has no keyring (available: ${String(encryption.available)}, backend: ` +
+            `${encryption.backend}), so the app would refuse to keep a session. Run the journey ` +
+            'with an unlocked GNOME Keyring on the session bus, as CI does.',
+        );
+      }
+    }
   } catch (error) {
     // No LaunchedApp reaches the test, so nothing else would close the app or keep its logs.
     await close(true).catch(() => undefined);

@@ -52,6 +52,14 @@ if (userDataDir) app.setPath('userData', resolve(userDataDir));
 const devOllamaUrl = app.isPackaged ? undefined : process.env.HARNESS_STORE_DEV_OLLAMA_URL;
 const localProbeTargets = devOllamaUrl ? localProbeTargetsWithOllama(devOllamaUrl) : undefined;
 
+// Development and E2E only, ignored by a packaged app: the Linux keyring safeStorage uses
+// (Chromium's `--password-store`). Set here because Playwright's Electron loader appends
+// `password-store=basic` before this script runs, which a `--password-store` argument cannot
+// override; Chromium reads the switch only after this script, so the value set here wins
+// (apps/desktop/e2e/support/app.ts).
+const devPasswordStore = app.isPackaged ? undefined : process.env.HARNESS_STORE_DEV_PASSWORD_STORE;
+if (devPasswordStore) app.commandLine.appendSwitch('password-store', devPasswordStore);
+
 let mainWindow: BrowserWindow | null = null;
 /** The Runtime from the moment `start` begins it; null before that. */
 let runtime: Promise<Runtime> | null = null;
