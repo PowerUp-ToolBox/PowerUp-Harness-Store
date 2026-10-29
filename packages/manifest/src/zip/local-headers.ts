@@ -152,7 +152,8 @@ export async function readLocalHeaders(
   const walk: { entry: ZipEntry; index: number; header: LocalHeader; end?: number }[] = [];
   for (const [position, item] of sorted.entries()) {
     const next = sorted[position + 1]?.entry.localHeaderOffset ?? limit;
-    walk.push({ ...item, ...(await readLocalHeader(window, item.entry, next, limit)) });
+    const shared = sorted[position - 1]?.entry.localHeaderOffset === item.entry.localHeaderOffset;
+    walk.push({ ...item, ...(await readLocalHeader(window, item.entry, next, limit, shared)) });
   }
 
   // Each entry must start where the previous one ends: one that starts inside another, or at the
@@ -229,11 +230,16 @@ async function confirmStreamedEntries(
   }
 }
 
+/**
+ * Reads and checks one entry's local header. `shared` says an earlier central directory record
+ * points at the same local header (that record is already read, and this one shares its bytes).
+ */
 async function readLocalHeader(
   window: WindowedReader,
   entry: ZipEntry,
   next: number,
   limit: number,
+  shared: boolean,
 ): Promise<{ header: LocalHeader; end?: number }> {
   const header: LocalHeader = { otherNames: [] };
   const offset = entry.localHeaderOffset;
@@ -289,10 +295,12 @@ async function readLocalHeader(
 
   if ((flags & FLAG_DATA_DESCRIPTOR) === 0) return { header, end: dataEnd };
   // Peeked, so the window stays on the local header: central directory records that share it
-  // then cost no read each.
+  // then cost no read each. For a record that shares it, only the descriptor's bytes are read (see
+  // WindowedReader.peek()).
   const descriptor = await window.peek(
     dataEnd,
     Math.min(MAX_DATA_DESCRIPTOR_SIZE, limit - dataEnd),
+    !shared,
   );
   const length = descriptorLength(descriptor, entry, dataEnd, next);
   if (length === undefined) {
@@ -631,9 +639,24 @@ class WindowedReader {
     this.#limit = limit;
   }
 
-  /** Reads `length` bytes at `offset`; `offset + length` must not pass the limit. */
+  /**
+   * Reads `length` bytes at `offset`; `offset + length` must not pass the limit. When the window
+   * does not hold them and the bytes last peeked do (the next local header, after a data
+   * descriptor), those become the window, and the window the bytes peeked.
+   */
   async read(offset: number, length: number): Promise<Uint8Array> {
-    if (offset < this.#start || offset + length > this.#start + this.#bytes.length) {
+    if (
+      !covers(this.#start, this.#bytes, offset, length) &&
+      covers(this.#peekStart, this.#peeked, offset, length)
+    ) {
+      [this.#start, this.#bytes, this.#peekStart, this.#peeked] = [
+        this.#peekStart,
+        this.#peeked,
+        this.#start,
+        this.#bytes,
+      ];
+    }
+    if (!covers(this.#start, this.#bytes, offset, length)) {
       const size = Math.min(Math.max(length, WINDOW), this.#limit - offset);
       this.#bytes = await this.#reader.read(offset, size);
       this.#start = offset;
@@ -644,20 +667,29 @@ class WindowedReader {
 
   /**
    * Reads a few bytes (a data descriptor) without moving the window: from the window when it
-   * holds them, else from the last bytes peeked, else with a read of exactly `length` bytes.
+   * holds them, else from the last bytes peeked, else with a read that replaces the bytes peeked.
+   * That read is `wide` (a window's worth, so it also holds the next local header, which
+   * {@link read} then takes from it) or of exactly `length` bytes.
+   *
    * Many central directory records that point at one local header with a data descriptor past
    * the window then cost one read of the header's window and one of the descriptor, not two
-   * windows each.
+   * windows each. Records after the first that share the header are peeked narrow: when they
+   * give distinct compressed sizes, so distinct descriptor offsets, each still costs one read,
+   * but of at most {@link MAX_DATA_DESCRIPTOR_SIZE} bytes, never a window.
    */
-  async peek(offset: number, length: number): Promise<Uint8Array> {
-    if (offset >= this.#start && offset + length <= this.#start + this.#bytes.length) {
-      return this.read(offset, length);
-    }
-    if (offset < this.#peekStart || offset + length > this.#peekStart + this.#peeked.length) {
-      this.#peeked = await this.#reader.read(offset, length);
+  async peek(offset: number, length: number, wide: boolean): Promise<Uint8Array> {
+    if (covers(this.#start, this.#bytes, offset, length)) return this.read(offset, length);
+    if (!covers(this.#peekStart, this.#peeked, offset, length)) {
+      const size = wide ? Math.min(Math.max(length, WINDOW), this.#limit - offset) : length;
+      this.#peeked = await this.#reader.read(offset, size);
       this.#peekStart = offset;
     }
     const at = offset - this.#peekStart;
     return this.#peeked.subarray(at, at + length);
   }
+}
+
+/** Whether `bytes`, read at `start`, hold the `length` bytes at `offset`. */
+function covers(start: number, bytes: Uint8Array, offset: number, length: number): boolean {
+  return offset >= start && offset + length <= start + bytes.length;
 }
