@@ -4,8 +4,8 @@
  * @harness-store/store admin <command>`, after `pnpm build`):
  *
  * - `reports list [--open]`: every Report (only the open ones with `--open`), newest first,
- *   grouped by Harness with its count per reason and its latest details. One service-role
- *   PostgREST read of `reports`.
+ *   grouped by Harness with its count per reason and its latest details. Service-role PostgREST
+ *   reads of `reports`, a page at a time.
  * - `reports dismiss <id> --note "..."`: marks an open Report `dismissed` with the note, without
  *   touching the Harness. A service-role PostgREST update; not logged in `admin_actions`, whose
  *   actions are Takedowns only.
@@ -70,6 +70,9 @@ STORE_ADMIN_LOGIN (a profile with is_admin).`;
 
 /** How long the administrator JWT that `takedown` mints is valid. */
 export const ADMIN_JWT_LIFETIME_SECONDS = 5 * 60;
+
+/** How many Reports `reports list` asks for a request: PostgREST's default `max_rows`. */
+export const REPORTS_PAGE_SIZE = 1000;
 
 /** How much of a Report's details its line in `reports list` shows. */
 export const DETAILS_PREVIEW_LENGTH = 120;
@@ -348,15 +351,40 @@ async function request<T>(
   return parsed as T;
 }
 
-async function listReports(env: AdminEnv, open: boolean, out: AdminOutput): Promise<void> {
+/**
+ * Every Report (only the open ones with `open`), newest first, read a page at a time: PostgREST
+ * answers at most `max_rows` rows a request (1000, locally and by default on a hosted project)
+ * without saying it stopped, which would leave the counts short. Each page continues after the
+ * last row of the one before (keyset, on `created_at` then `id`), so a Report filed or deleted
+ * meanwhile neither repeats nor skips a row, and a `max_rows` below the page size only means more
+ * pages. The read ends at an empty page.
+ */
+async function readReports(env: AdminEnv, open: boolean): Promise<ReportRow[]> {
   const select =
     'id,created_at,reason,status,details,harnesses(harness_id),harness_versions(version)';
-  const rows = await request<ReportRow[]>(
-    env,
-    'GET',
-    `rest/v1/reports?select=${select}${open ? '&status=eq.open' : ''}&order=created_at.desc,id`,
-  );
-  for (const line of formatReports(rows, open)) out.log(line);
+  const rows: ReportRow[] = [];
+  for (;;) {
+    const last = rows.at(-1);
+    // Quoted: a timestamp holds the `:` and `.` that PostgREST's logic syntax reserves.
+    const after =
+      last === undefined
+        ? ''
+        : `&or=${encodeURIComponent(
+            `(created_at.lt."${last.created_at}",and(created_at.eq."${last.created_at}",id.lt.${last.id}))`,
+          )}`;
+    const page = await request<ReportRow[]>(
+      env,
+      'GET',
+      `rest/v1/reports?select=${select}${open ? '&status=eq.open' : ''}${after}` +
+        `&order=created_at.desc,id.desc&limit=${String(REPORTS_PAGE_SIZE)}`,
+    );
+    if (page.length === 0) return rows;
+    rows.push(...page);
+  }
+}
+
+async function listReports(env: AdminEnv, open: boolean, out: AdminOutput): Promise<void> {
+  for (const line of formatReports(await readReports(env, open), open)) out.log(line);
 }
 
 async function dismissReport(

@@ -1,10 +1,13 @@
 /**
  * Ticket P0-12.2: the admin CLI's parts that need no Store (scripts/admin.ts): its command line,
  * the environment it needs (named when missing, never printed), how `reports list` lays out the
- * Reports, the administrator JWT `takedown` mints, and the exit codes of a usage error. The CLI
- * against a running Store is test-store/admin.test.ts.
+ * Reports, the administrator JWT `takedown` mints, the exit codes of a usage error, and how
+ * `reports list` pages past PostgREST's `max_rows` (against a fake PostgREST). The CLI against a
+ * running Store is test-store/admin.test.ts.
  */
 import { createHmac } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import {
   ADMIN_JWT_LIFETIME_SECONDS,
@@ -13,6 +16,7 @@ import {
   parseCommand,
   printable,
   readEnv,
+  REPORTS_PAGE_SIZE,
   runAdmin,
   UsageError,
   USAGE,
@@ -256,4 +260,89 @@ describe('runAdmin without a Store', () => {
     expect(lines.error).toEqual(['The Store at http://127.0.0.1:9 did not answer.']);
     expect(lines.log).toEqual([]);
   });
+});
+
+/**
+ * A fake PostgREST `reports` read: the rows newest first (created_at, then id, descending), the
+ * keyset `or` filter `reports list` sends, `limit`, and at most `maxRows` rows an answer, as
+ * PostgREST's `max_rows` cuts one short without saying so. Its URL and the requests it served.
+ */
+async function fakeReports(rows: readonly ReportRow[], maxRows: number) {
+  const requests: URL[] = [];
+  const sorted = [...rows].sort(
+    (a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id),
+  );
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? '/', 'http://store');
+    requests.push(url);
+    const after =
+      /^\(created_at\.lt\."([^"]+)",and\(created_at\.eq\."[^"]+",id\.lt\.([^)]+)\)\)$/.exec(
+        url.searchParams.get('or') ?? '',
+      );
+    const [, createdAt = '', id = ''] = after ?? [];
+    const page = sorted
+      .filter(
+        (row) =>
+          after === null ||
+          row.created_at < createdAt ||
+          (row.created_at === createdAt && row.id < id),
+      )
+      .slice(0, Math.min(Number(url.searchParams.get('limit') ?? Infinity), maxRows));
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(page));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${String(port)}`,
+    requests,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+describe('reports list past max_rows', () => {
+  /** 2,500 Reports on two Harnesses, many filed in one instant (one transaction's `now()`). */
+  const rows: ReportRow[] = Array.from({ length: 2500 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    created_at: `2026-10-28T${String(10 + Math.floor(index / 400)).padStart(2, '0')}:00:00+00:00`,
+    reason: index % 5 === 0 ? 'spam' : 'malware',
+    status: 'open',
+    details: '',
+    // The oldest 300 are on a Harness of their own: the first 1000 rows hold none of them.
+    harnesses: { harness_id: index < 300 ? 'dave/older' : 'carol/bad-tool' },
+    harness_versions: null,
+  }));
+
+  it.each([REPORTS_PAGE_SIZE, 400])(
+    'counts every Report when the Store answers at most %i rows a request',
+    async (maxRows) => {
+      const store = await fakeReports(rows, maxRows);
+      try {
+        const log: string[] = [];
+        const code = await runAdmin(
+          ['reports', 'list', '--open'],
+          { STORE_URL: store.url, STORE_SERVICE_ROLE_KEY: 'service-key' },
+          { log: (line) => log.push(line), error: () => undefined },
+        );
+        expect(code).toBe(0);
+        expect(log.filter((line) => /^\S+: /.test(line))).toEqual([
+          'carol/bad-tool: 2200 open Reports (malware 1760, spam 440)',
+          'dave/older: 300 open Reports (malware 240, spam 60)',
+        ]);
+        // Each Report once: no page repeats a row of the one before.
+        const ids = log.flatMap((line) => /^ {2}(\S{36}) {2}/.exec(line)?.[1] ?? []);
+        expect(ids).toHaveLength(2500);
+        expect(new Set(ids).size).toBe(2500);
+        // Pages until an empty one, each asking for a page of REPORTS_PAGE_SIZE.
+        expect(store.requests).toHaveLength(Math.ceil(2500 / maxRows) + 1);
+        for (const request of store.requests) {
+          expect(request.searchParams.get('limit')).toBe(String(REPORTS_PAGE_SIZE));
+          expect(request.searchParams.get('status')).toBe('eq.open');
+          expect(request.searchParams.get('order')).toBe('created_at.desc,id.desc');
+        }
+      } finally {
+        await store.close();
+      }
+    },
+  );
 });

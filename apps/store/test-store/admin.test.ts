@@ -192,6 +192,29 @@ describe('reports list', () => {
     ).toBe(true);
   });
 
+  it("counts every Report past PostgREST's max_rows (1000)", async () => {
+    const crowded = await harnessWith('crowded', ['1.0.0']);
+    // One insert: the 1001 Reports share one created_at, so the pages part on the ID.
+    await serviceRest(
+      'POST',
+      'reports',
+      Array.from({ length: 1001 }, (_, index) => ({
+        harness_id: crowded.id,
+        reason: index % 2 === 0 ? 'spam' : 'broken',
+      })),
+    );
+    const run = await cli(['reports', 'list', '--open']);
+    expect(run.code).toBe(0);
+    const lines = section(run.log, crowded.harness_id);
+    expect(lines[0]).toBe(`${crowded.harness_id}: 1001 open Reports (spam 501, broken 500)`);
+    const ids = lines.slice(2).map((line) => line.trim().split('  ')[0]);
+    expect(new Set(ids).size).toBe(1001);
+    // The Harness listed before stays listed, with its count.
+    expect(section(run.log, harness.harness_id)[0]).toBe(
+      `${harness.harness_id}: 2 open Reports (broken 1, malware 1)`,
+    );
+  });
+
   it('prints no key or secret, and needs only the URL and the service-role key', async () => {
     const run = await cli(['reports', 'list', '--open'], {
       STORE_URL: stack.apiUrl,
