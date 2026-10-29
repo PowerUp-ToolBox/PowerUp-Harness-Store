@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "package": "electron-vite build && node scripts/fetch-node.mjs && electron-builder --publish never",
+    "package": "electron-vite build && electron-builder --publish never",
     "fetch-node": "node scripts/fetch-node.mjs",
     "smoke": "node scripts/smoke.mjs",
     "smoke:unpackaged": "node scripts/smoke.mjs --unpackaged",

@@ -15,9 +15,11 @@
 # app's own executable with ELECTRON_RUN_AS_NODE=1: Electron's RunAsNode fuse must stay enabled,
 # its default. On Windows the app's executable is a GUI-subsystem program, which gets no console in
 # the pty of a terminal Harness, so the Windows build alone ships the official node.exe of
-# Electron's Node version as resources/node/node.exe: scripts/fetch-node.mjs downloads and checks
-# it into vendor/node/win32-<arch>/ before packaging (the `package` script and CI run it). A build
-# whose runtime is missing or broken fails the smoke run.
+# Electron's Node version as resources/node/node.exe. The hooks of scripts/pack-hooks.mjs see to
+# it for each architecture packaged: beforePack runs scripts/fetch-node.mjs, which downloads it
+# into vendor/node/win32-<arch>/ and checks its pinned SHA-256, and afterPack fails the build when
+# the packaged app lacks it (electron-builder skips a missing `extraResources` file silently). A
+# build whose runtime is broken fails the smoke run.
 #
 # Unsigned: no code signing (`identity: null`, and CI sets CSC_IDENTITY_AUTO_DISCOVERY=false) and
 # no notarisation, both deferred to before the public launch (roadmap). Auto-update of the app is
@@ -36,6 +38,8 @@ files:
 asarUnpack:
   - node_modules/node-pty/**
 npmRebuild: false
+beforePack: ./scripts/pack-hooks.mjs
+afterPack: ./scripts/pack-hooks.mjs
 mac:
   target: dmg
   identity: null

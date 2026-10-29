@@ -654,16 +654,17 @@ describe('build workflow', () => {
     expect(packageSteps[stepIndex('Upload the build')]?.with?.['if-no-files-found']).toBe('error');
   });
 
-  it('fetches the node.exe a Windows build ships, for its architecture, before packaging it', () => {
-    const fetch = packageSteps[stepIndex('Fetch the Windows Node runtime')];
-    expect(fetch?.if).toBe("runner.os == 'Windows'");
-    expect(fetch?.run).toBe(
-      'pnpm --filter @harness-store/desktop run fetch-node --arch ${{ matrix.arch }}',
-    );
-    expect(stepIndex('Fetch the Windows Node runtime')).toBeLessThan(stepIndex('Package'));
-    // A local `pnpm package` fetches it too, before electron-builder.
+  it('fetches the node.exe a Windows build ships for the architecture it packages, or fails', () => {
+    // electron-builder's own hooks do it, for the workflow and a local `pnpm package` alike.
+    expect(stepIndex('Fetch the Windows Node runtime')).toBe(-1);
     expect(readPackageJson('apps', 'desktop').scripts?.package).toBe(
-      'electron-vite build && node scripts/fetch-node.mjs && electron-builder --publish never',
+      'electron-vite build && electron-builder --publish never',
     );
+    const config = parse(readText('apps', 'desktop', 'electron-builder.yml')) as Record<
+      string,
+      unknown
+    >;
+    expect(config.beforePack).toBe('./scripts/pack-hooks.mjs');
+    expect(config.afterPack).toBe('./scripts/pack-hooks.mjs');
   });
 });
