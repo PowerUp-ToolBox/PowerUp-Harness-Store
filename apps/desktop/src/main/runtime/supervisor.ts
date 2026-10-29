@@ -34,6 +34,7 @@ import {
 import type { LaunchStore } from './launch-store.js';
 import { spawnPiped, type PipedSpawner } from './piped-process.js';
 import {
+  isConsoleProgram,
   processTreeAlive,
   processTreeEndsWithin,
   signalProcessTree,
@@ -279,6 +280,11 @@ interface Launch {
   pty: PtyProcess | null;
   /** A web launch's `HARNESS_PORT`. */
   port: number | null;
+  /**
+   * Whether its program is a console program on Windows, which the polite step of the shutdown
+   * sequence cannot end ({@link signalProcessTree}): set with its command.
+   */
+  consoleProgram: boolean;
   windowOpen: boolean;
   /** Whether a web launch's page is in its window. */
   webShown: boolean;
@@ -321,7 +327,7 @@ interface Launch {
  *
  * Closing the window stops the Harness: SIGTERM to its process group, SIGKILL to the group after
  * {@link STOP_GRACE_MS} when the process or another process of its group is still there (at once
- * on Windows when the polite step cannot end it, as for every console process), the launch
+ * on Windows when the polite step cannot end it, as for every console program), the launch
  * recorded as ended at most {@link KILL_WAIT_MS} later, and it ends `stopped`. A Harness
  * that exits on its own ends `stopped` with code 0 and `failed(exit_nonzero)` otherwise; its
  * window stays open with the exit code (a terminal stays readable; a web page makes way for the
@@ -510,6 +516,8 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
         ...(node ? options.nodeCommand.env : {}),
       },
     };
+    // ConPTY hosts console programs only, and node.exe is one.
+    launch.consoleProgram = launch.port === null || node || isConsoleProgram(command.file);
     launch.windowOpen = true;
     setState(launch, 'spawning');
     const spec = { launchId: launch.launchId, harnessId, name: manifest.name };
@@ -653,8 +661,8 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
    * The shutdown sequence of a launch whose process runs. SIGKILL goes to the process group when
    * the process, or any process of its group, is still there after the grace period: a process
    * the Harness started may ignore SIGTERM although the Harness itself exits on it. On Windows,
-   * when the polite step answers that it cannot end the tree (a console process, see
-   * {@link signalProcessTree}), the forced step follows at once instead of after the grace period.
+   * when the polite step cannot end the tree (a console program, see {@link signalProcessTree}),
+   * the forced step follows at once instead of after the grace period.
    */
   const stopProcess = async (launch: Launch, child: { readonly pid: number }, end: LaunchEnd) => {
     setState(launch, 'stopping');
@@ -667,12 +675,12 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
         return Promise.resolve('sent');
       }
       runtimeLine(launch, `Sent ${name} to ${String(pid)} and its children`);
-      return signalProcessTree(pid, name);
+      return signalProcessTree(pid, name, { consoleProgram: launch.consoleProgram });
     };
     // Settles only when the polite step was refused: it then cuts the grace period short.
     const refused = signal('SIGTERM').then((outcome) => {
       if (outcome === 'sent') return NEVER;
-      runtimeLine(launch, 'It can only be ended forcefully: SIGKILL follows now');
+      runtimeLine(launch, 'SIGTERM cannot end it on Windows: SIGKILL follows now');
       return undefined;
     });
     const graceEnds = Date.now() + STOP_GRACE_MS;
@@ -770,6 +778,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       process: null,
       pty: null,
       port: null,
+      consoleProgram: false,
       windowOpen: false,
       webShown: false,
       processExited: false,

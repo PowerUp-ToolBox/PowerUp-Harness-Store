@@ -24,6 +24,7 @@ vi.mock('../../src/main/runtime/process-tree.js', () => ({
   signalProcessTree: (_pid: number, signal: StopSignal) => Promise.resolve(tree.onSignal(signal)),
   processTreeEndsWithin: () => Promise.resolve(true),
   processTreeAlive: () => false,
+  isConsoleProgram: () => false,
 }));
 
 let root: string;
@@ -240,7 +241,7 @@ describe('the pty of a terminal launch', () => {
     tree.onSignal = (signal) => {
       events.push(signal);
       if (signal === 'SIGKILL') pty.exit(137);
-      // Windows' polite taskkill cannot end a console process.
+      // Windows: the polite step cannot end a console program.
       return signal === 'SIGTERM' ? 'refused' : 'sent';
     };
 
