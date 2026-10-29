@@ -76,7 +76,7 @@ There is no admin UI in P0: a Store administrator (a profile whose `is_admin` wa
 
 ```sh
 pnpm install
-pnpm --filter @harness-store/store build
+pnpm --filter "@harness-store/store..." build   # the Store and the packages it imports (their dist/)
 export STORE_URL=https://<project>.supabase.co   # the Store, without a trailing slash
 export STORE_SERVICE_ROLE_KEY=...                # the project's service_role key
 pnpm --filter @harness-store/store admin reports list --open

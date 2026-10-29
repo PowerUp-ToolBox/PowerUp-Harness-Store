@@ -1,6 +1,7 @@
 /**
- * Tickets P0-10.2 and P0-12.2: the update check and updating a Store install, through the Runtime's IPC handlers
- * (the Supervisor/Installer seam, architecture §8 item 3) against a fake Store on a real HTTP port.
+ * Tickets P0-10.2 and P0-12.2: the update check and updating a Store install, through the
+ * Runtime's IPC handlers (the Supervisor/Installer seam, architecture §8 item 3) against a fake
+ * Store on a real HTTP port.
  * The fake Store answers `latest_versions` and `download` as api.md says, and serves real zips
  * built here with fflate from the `fixture-term` folder, its manifest.json changed per version:
  * the v1/v2 pairs of "How to verify" step 2 (v2 narrowing a permission, widening one with

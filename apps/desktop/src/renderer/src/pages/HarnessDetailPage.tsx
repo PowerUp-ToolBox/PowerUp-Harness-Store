@@ -51,8 +51,9 @@ const UNANSWERED: IpcError = {
  * installed Manifest, with Launch and the note "No longer available in the Store" (flows F4 step
  * 4). An installed Harness the update check found taken down (its install's `storeStatus`, the
  * Library card's source too, not this page's Store read) shows the red {@link TakedownWarning} in
- * place of that note, and its Launch asks for the one-time takedown confirmation. Back returns to where the User came from (the Store's search keeps its text, tags and
- * platform toggle), or to the Store home when the page was opened directly.
+ * place of that note, and its Launch asks for the one-time takedown confirmation. Back returns to
+ * where the User came from (the Store's search keeps its text, tags and platform toggle), or to
+ * the Store home when the page was opened directly.
  *
  * The footer's Report opens the Report dialog (flows F8) for the version in the page's header:
  * the Store's latest, or the installed one on a page built from the install, which offers Report
