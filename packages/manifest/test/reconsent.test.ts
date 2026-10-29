@@ -126,6 +126,41 @@ describe('diffForReconsent: acceptance criteria', () => {
   });
 });
 
+describe('diffForReconsent: narrowing (ticket P0-10.2)', () => {
+  it('narrowing every permission at once never requires re-consent, and lists only removals', () => {
+    const wide = withPermissions({
+      filesystem: { scope: 'paths', paths: ['~/a', '~/b'] },
+      shell: true,
+      network: { any: true },
+    });
+    const narrow = withPermissions({
+      filesystem: { scope: 'paths', paths: ['~/a'] },
+      shell: false,
+      network: { domains: ['api.github.com'] },
+    });
+    expect(diffForReconsent(wide, narrow)).toEqual({
+      required: false,
+      reasons: [],
+      added: [],
+      removed: ['permissions.filesystem.paths:~/b', 'permissions.shell', 'permissions.network.any'],
+    });
+  });
+
+  it('a widening next to a narrowing still requires re-consent', () => {
+    const before = withPermissions({ shell: true, network: { domains: ['a.example'] } });
+    const after = withPermissions({
+      shell: false,
+      network: { domains: ['a.example', 'b.example'] },
+    });
+    expect(diffForReconsent(before, after)).toMatchObject({
+      required: true,
+      reasons: ['permissions_widened'],
+      added: ['permissions.network.domains:b.example'],
+      removed: ['permissions.shell'],
+    });
+  });
+});
+
 describe('diffForReconsent: the filesystem ladder none < workspace < home < paths', () => {
   const scopes = ['none', 'workspace', 'home', 'paths'] as const;
   const filesystem = (scope: (typeof scopes)[number]) =>

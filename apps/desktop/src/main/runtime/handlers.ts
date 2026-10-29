@@ -8,7 +8,9 @@ import {
   type LaunchRequest,
   type PublishRequest,
   type StoreHomeRequest,
+  type StoreInstallRequest,
   type StoreSearchRequest,
+  type StoreUpdateRequest,
   type UnpublishRequest,
 } from '../../shared/ipc.js';
 import { isTag } from '../../shared/tags.js';
@@ -201,6 +203,37 @@ export function createHandlers(services: Services): IpcHandlers {
       }
       return services.installs.installFromFolder(input);
     },
+    'installs.install': (input) => {
+      const request = parseStoreInstallRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'installs.install' });
+      return services.installs.install(request);
+    },
+    'installs.confirm': (input) => {
+      if (!isJobId(input)) return fail('invalid_input', { method: 'installs.confirm' });
+      return services.installs.confirm(input);
+    },
+    'installs.cancel': async (input) => {
+      if (!isJobId(input)) return fail('invalid_input', { method: 'installs.cancel' });
+      await services.installs.cancel(input);
+      return ok(null);
+    },
+    'installs.update': (input) => {
+      const request = parseStoreUpdateRequest(input);
+      if (request === null) return fail('invalid_input', { method: 'installs.update' });
+      return services.installs.update(request);
+    },
+    'installs.uninstall': (input) => {
+      if (!isHarnessIdInput(input) || !input.includes('/')) {
+        return fail('invalid_input', { method: 'installs.uninstall' });
+      }
+      return services.installs.uninstall(input);
+    },
+    'installs.dataSize': (input) => {
+      if (!isHarnessIdInput(input) || !input.includes('/')) {
+        return fail('invalid_input', { method: 'installs.dataSize' });
+      }
+      return services.installs.dataSize(input);
+    },
     'installs.list': async (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'installs.list' });
       return ok(await services.installs.list());
@@ -320,6 +353,31 @@ function parseUnpublishRequest(input: unknown): UnpublishRequest | null {
   if (!harnessId.includes('/')) return null;
   if (typeof version !== 'string' || version === '' || version.length > 256) return null;
   return { harnessId, version };
+}
+
+/** `{ harnessId, jobId }`, a `<publisher>/<slug>` ID and a job ID, nothing else. */
+function parseStoreInstallRequest(input: unknown): StoreInstallRequest | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { harnessId, jobId, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0 || !isHarnessIdInput(harnessId) || !isJobId(jobId)) {
+    return null;
+  }
+  return harnessId.includes('/') ? { harnessId, jobId } : null;
+}
+
+/**
+ * `{ harnessId, version, jobId, reconsented }`, a `<publisher>/<slug>` ID, a version string, a job
+ * ID and a boolean, nothing else.
+ */
+function parseStoreUpdateRequest(input: unknown): StoreUpdateRequest | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const { harnessId, version, jobId, reconsented, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length > 0 || !isHarnessIdInput(harnessId) || !isJobId(jobId)) {
+    return null;
+  }
+  if (!harnessId.includes('/') || typeof reconsented !== 'boolean') return null;
+  if (typeof version !== 'string' || version === '' || version.length > 256) return null;
+  return { harnessId, version, jobId, reconsented };
 }
 
 /** `{ archiveId, jobId }`, both IDs, nothing else. */

@@ -31,7 +31,11 @@ import { startRuntime, type Runtime } from './runtime/bootstrap.js';
 import { createDispatcher, UntrustedSenderError } from './runtime/dispatcher.js';
 import { createHandlers } from './runtime/handlers.js';
 import { createHarnessWindowHandlers } from './runtime/harness-window-handlers.js';
-import { isAllowedExternalUrl, mainWindowOptions } from './runtime/main-window.js';
+import {
+  harnessPartition,
+  isAllowedExternalUrl,
+  mainWindowOptions,
+} from './runtime/main-window.js';
 import { createSafeStorageCipher } from './runtime/secret-cipher.js';
 import { STORE_ASSET_SCHEME, storeAssetSource } from '../shared/store-assets.js';
 import { AUTH_SCHEME } from './runtime/store-auth.js';
@@ -220,6 +224,9 @@ async function start(): Promise<void> {
       if (error !== '') console.error(`Could not open ${path}: ${error}`);
       return error === '';
     },
+    // What a web Harness's page kept in its own session goes with it on uninstall.
+    clearHarnessSession: (harnessId) =>
+      session.fromPartition(harnessPartition(harnessId)).clearStorageData(),
   });
   const started = await runtime;
   // Quit while starting: the Runtime is already shutting down.
@@ -280,6 +287,18 @@ function createMainWindow(started: Runtime, route?: string): BrowserWindow {
   });
   window.on('closed', () => {
     mainWindow = null;
+  });
+  // Only this page knows the job IDs of its Store installs: once it is gone (the window closed
+  // while a Harness window keeps the app running, or its renderer crashed) or loads again, nothing
+  // would confirm or cancel them, so their downloads and rows are discarded now. Hash routes are
+  // same-document navigations and keep them.
+  const dropStoreInstalls = () => {
+    void started.services.installs.cancelAll();
+  };
+  window.webContents.on('destroyed', dropStoreInstalls);
+  window.webContents.on('render-process-gone', dropStoreInstalls);
+  window.webContents.on('did-start-navigation', (details) => {
+    if (details.isMainFrame && !details.isSameDocument) dropStoreInstalls();
   });
 
   // The renderer is a single page with hash routes: it never navigates away, and every new

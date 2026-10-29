@@ -109,6 +109,9 @@ describe('openDatabase', () => {
       'consented_permissions',
       'available_version',
       'source',
+      'state',
+      'store_status',
+      'available_manifest',
     ]);
     expect(columns(db, 'launches')).toEqual([
       'launch_id',

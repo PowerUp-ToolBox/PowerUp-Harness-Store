@@ -37,8 +37,8 @@ The button in the header and on Library cards is one control with mutually exclu
 | Needs consent | Review and install / 查看权限并安装 | Download complete, consent pending |
 | Removed | Removed from Store / 已从商店移除 (disabled) | Not installed, and the Store no longer offers it (detail page only) |
 | Installed | Launch / 启动 (secondary on the detail page: Uninstall) | Installed, no newer version, or the Store no longer offers it (note "No longer available in the Store", no Update) |
-| Update available | Update / 更新 (secondary: Launch) | Newer published version |
-| Needs re-consent | Review update / 查看更新 | Newer version changed permissions or Entry |
+| Update available | Update / 更新 (secondary: Launch) | Newer published version that runs on this platform (Store installs only) |
+| Needs re-consent | Review update / 查看更新 (secondary: Launch) | Newer version adds or widens permissions, or changes Entry or runtime kind |
 | Starting | Starting… / 正在启动… (disabled) | Launch in progress, not ready yet |
 | Running | Running… / 运行中… (secondary: Show window) | Process alive |
 | Stopping | Stopping… / 正在停止… (disabled) | Window closed, process being stopped |

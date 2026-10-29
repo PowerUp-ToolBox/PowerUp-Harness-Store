@@ -1,4 +1,4 @@
-import type { Manifest } from '@harness-store/manifest';
+import { diffForReconsent, type Manifest } from '@harness-store/manifest';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import type {
@@ -10,11 +10,13 @@ import type {
 } from '../../../shared/ipc.js';
 import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
-import { useLaunchStatus } from '../library/LaunchAction.js';
+import { downloadPercent, useInstallJobs } from '../install/InstallJobsProvider.js';
+import { isLaunchActive, useLaunchStatus } from '../library/LaunchAction.js';
+import { UninstallDialog } from '../library/UninstallDialog.js';
 import { ListingDetail, type SlotUse } from '../listing/ListingDetail.js';
 import { connectionName } from '../models/names.js';
 import { BackButton } from '../store/BackButton.js';
-import { DetailAction } from '../store/DetailAction.js';
+import { ActionError, DetailAction } from '../store/DetailAction.js';
 import { primaryActionState } from '../store/primary-action.js';
 
 type DetailState =
@@ -34,7 +36,13 @@ const UNANSWERED: IpcError = {
  * card or from a Library card's "View in Store": `store.detail`, read again each time the page
  * opens, shown with the shared {@link ListingDetail} (the Publish preview's too) and the primary
  * button of {@link primaryActionState}. Each Model Slot says what it would use on this machine,
- * from `bindings.resolveManifest`.
+ * from `bindings.resolveManifest`. Install runs the Store install of {@link useInstallJobs}
+ * (flows F2): its progress and Cancel on the button, "Review and install" while its consent
+ * dialog waits, and its error under the button when it failed. Update (or "Review update", when
+ * the latest version needs the User's consent again) updates to the latest version the page shows
+ * (flows F4), the same way; an update refused because the Harness runs says "Close the Harness to
+ * update". Uninstall, beside Launch, opens the same uninstall confirmation as a Library card's
+ * menu (flows F9); once uninstalled, the page offers Install again.
  *
  * A Harness the Store no longer offers (taken down, Unpublished-only, unknown) is the "no longer
  * available" page when it is not installed; an installed one keeps its page, built from its
@@ -47,8 +55,11 @@ export function HarnessDetailPage() {
   const harnessId = useParams()['*'] ?? '';
   const [state, setState] = useState<DetailState>({ status: 'loading' });
   const [error, setError] = useState<IpcError | null>(null);
+  const [uninstalling, setUninstalling] = useState(false);
   const install = useInstall(harnessId);
   const launch = useLaunchStatus(harnessId);
+  const installJobs = useInstallJobs();
+  const job = installJobs.jobs.get(harnessId);
   /** Numbers the reads, so only the latest one's answer is shown. */
   const reads = useRef(0);
 
@@ -114,20 +125,67 @@ export function HarnessDetailPage() {
 
   const { detail: loaded } = state;
   const actionState = primaryActionState({
+    updateNeedsConsent:
+      install !== null &&
+      harness !== null &&
+      diffForReconsent(install.manifest, harness.manifest).required,
     storeStatus: loaded.storeStatus,
     latestVersion: harness?.manifest.version ?? null,
     latestPlatforms: harness?.manifest.platforms ?? [],
     platform: loaded.platform,
     install,
-    downloading: false,
+    downloading: job?.kind === 'downloading',
+    awaitingConsent: job?.kind === 'awaiting_consent' || job?.kind === 'installing',
   });
+  // A launch the Runtime refused, else why the last Store install failed.
+  const shownError = error ?? (job?.kind === 'failed' ? job.error : null);
   const actions = (
     <>
-      <DetailAction state={actionState} install={install} launch={launch} onError={setError} />
+      <DetailAction
+        state={actionState}
+        install={install}
+        launch={launch}
+        download={
+          job?.kind === 'downloading'
+            ? {
+                percent: downloadPercent(job),
+                onCancel: () => {
+                  installJobs.cancel(harnessId);
+                },
+              }
+            : null
+        }
+        onInstall={() => {
+          setError(null);
+          installJobs.install(harnessId);
+        }}
+        onReview={() => {
+          installJobs.review(harnessId);
+        }}
+        onUpdate={() => {
+          if (install === null || harness === null) return;
+          setError(null);
+          installJobs.update(install, harness.manifest);
+        }}
+        onUninstall={() => {
+          setError(null);
+          setUninstalling(true);
+        }}
+        onError={setError}
+      />
       {install !== null && harness === null ? (
         <p className="hint">{t('store.detail.notInStore')}</p>
       ) : null}
-      {error === null ? null : <ErrorMessage error={error} />}
+      {shownError === null ? null : <ActionError error={shownError} />}
+      {uninstalling && install !== null ? (
+        <UninstallDialog
+          install={install}
+          running={isLaunchActive(launch)}
+          onClose={() => {
+            setUninstalling(false);
+          }}
+        />
+      ) : null}
     </>
   );
 

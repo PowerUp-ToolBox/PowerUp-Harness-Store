@@ -2504,6 +2504,40 @@ input[aria-invalid='true'] {
   font-weight: 700;
 }
 
+/* The Library's controls above the cards (P0-10.3): name filter, views and sort. */
+.library {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.library-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.library-filter {
+  flex: 1 1 220px;
+  max-width: 320px;
+}
+
+.library-sort {
+  min-width: 0;
+}
+
+/* A Library card while the Library loads: about the height of a card. */
+.library-skeleton {
+  height: 150px;
+}
+
+/* Cards the controls leave out stay mounted, hidden. */
+.library-grid[hidden],
+.library-grid > li[hidden] {
+  display: none;
+}
+
 .library-empty {
   align-items: center;
   gap: 14px;
@@ -2984,7 +3018,108 @@ input[aria-invalid='true'] {
   cursor: pointer;
 }
 
+.card-menu-list .card-menu-danger {
+  color: var(--color-error);
+}
+
 .card-menu-list [role='menuitem']:hover,
 .card-menu-list [role='menuitem']:focus-visible {
   background: var(--color-bg-subtle);
+}
+
+/* The main window's toast area, bottom-right, over everything but a modal dialog's backdrop. */
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 380px;
+  pointer-events: none;
+}
+
+.toast {
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: var(--color-text);
+  color: var(--color-bg);
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgb(20 21 24 / 30%);
+}
+
+/*
+ * Updates (P0-10.2): the Library nav item's count of available updates, and the update prompt's
+ * versions, "What changed" list (coloured as the permission list, the Entry and runtime kind as
+ * plain facts) and changelog.
+ */
+.nav-badge {
+  min-width: 20px;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--color-accent);
+  color: var(--color-bg);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.update-from-to {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.update-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.update-section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.update-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.update-change {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-sidebar);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.update-change[data-severity='low'] {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.update-change[data-severity='medium'] {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+
+.update-change[data-severity='high'] {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.update-changelog {
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 13px;
 }

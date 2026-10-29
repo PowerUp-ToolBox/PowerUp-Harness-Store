@@ -131,7 +131,7 @@ Created by a migration. Paths are relative to their bucket (no bucket prefix in 
 
 | table | purpose | key columns |
 |---|---|---|
-| `installs` | installed Harnesses, one version per Harness | `harness_id` PK, `version`, `manifest` json, `install_path`, `data_dir`, `installed_at`, `last_launched_at`, `last_workspace`, `consented_permissions` json, `available_version` (from update check), `source` (`store` or `local`: installed from a local folder with "Install this folder locally", never updated from the Store) |
+| `installs` | installed Harnesses, one version per Harness | `harness_id` PK, `version`, `manifest` json, `install_path`, `data_dir`, `installed_at`, `last_launched_at`, `last_workspace`, `consented_permissions` json, `available_version` and `available_manifest` json (from the update check: the newer version the Store offers and its full Manifest, set only for a version greater (semver) than the installed one that declares this platform, else null; an install clears them), `store_status` (from the update check: `available`, `unpublished`, `not_found` stored as `unpublished`, or `taken_down`; null before the first check and for a local install), `source` (`store` or `local`: installed from a local folder with "Install this folder locally", never updated from the Store), `state` (`installed`, or a Store install under way: `downloading`, `verifying`, `awaiting_consent`, `unpacking`; written once the Store's `download` function answered, with that version's Manifest and Declared Permissions; a failed or cancelled install deletes its row, so there is no failed or cancelled state; only `installed` rows are installed Harnesses, and every other row is deleted at startup with the downloads of the installs the app stopped in) |
 | `connections` | Provider Connections | `id` PK (`anthropic`, `openai-compatible:<slug>` …), `provider_id`, `display_name`, `base_url` (NULL = the Provider's default), `secret_ref` (row id in `secrets`, NULL without a key), `key_hint` (last 4 characters of the key, `''` for a key under 12 characters, so the masked key is shown without decrypting), `enabled`, `last_tested_at` (ISO-8601 UTC), `last_test_ok`, `last_test_error` (the Provider's own text), `last_test_failure` (`provider_timeout` or `unexpected_response` when the last test failed without Provider text, else NULL), `test_model` (the model the User named for the last passed test, which later tests reuse; NULL for the catalogue's) |
 | `secrets` | encrypted blobs | `id` PK (= the Connection id, or `store:session` for the Publisher's Store session: access and refresh token, user id, expiry and the last profile read, as JSON; never GitHub's own token), `ciphertext` blob (Electron safeStorage), `created_at` |
 | `slot_bindings` | Slot Bindings | `scope` (`global` or `harness:<id>`), `slot`, `provider_id` (the Connection id, e.g. `openai-compatible:vllm`; no foreign key, removing a Connection deletes its rows in the same transaction), `model`; PK (`scope`, `slot`) |
@@ -141,11 +141,13 @@ Created by a migration. Paths are relative to their bucket (no bucket prefix in 
 
 Global Slot Bindings for `default` are the User's Default Model. Rows with scope `harness:<id>` are Model Overrides.
 
+Uninstalling a Harness deletes its install folder, then its Data Directory, then its `installs` row and its Model Overrides (`slot_bindings` of scope `harness:<id>`) in one transaction; its `launches` rows, Usage Records and launch logs are kept.
+
 Install layout on disk (app data root: Electron's `userData` folder, which `HARNESS_STORE_USER_DATA_DIR` overrides):
 ```
 harnesses/<publisher>/<slug>/<version>/   unpacked package (read-only intent)
 data/<publisher>/<slug>/                  Data Directory (survives updates, deleted on uninstall)
-logs/<publisher>/<slug>/<launchId>.log    launch logs, at most 10 MB each, the 20 newest per Harness (kept on uninstall)
-downloads/                                temp (downloads, and install copies before they are renamed into harnesses/)
+logs/<publisher>/<slug>/<launchId>.log    launch logs, at most 10 MB each, the 20 newest per Harness (kept on uninstall, which writes its time to `uninstalled-at` beside them; at each start, those of a Harness no longer installed are deleted once both they and its uninstall are 30 days old)
+downloads/                                temp: Store downloads (download-<jobId>.zip), install copies (install-*) before they are renamed into harnesses/, and a reinstalled version moved aside (replaced-*); what an interrupted install left is cleaned up at startup
 harness-store.sqlite
 ```

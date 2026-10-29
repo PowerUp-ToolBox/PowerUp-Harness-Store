@@ -22,7 +22,7 @@ export interface ReconsentDiff {
 }
 
 /** Filesystem scopes from narrowest to widest (manifest-spec §6; the P0-01 spec's ladder). */
-const SCOPE_LADDER = ['none', 'workspace', 'home', 'paths'] as const;
+export const SCOPE_LADDER = ['none', 'workspace', 'home', 'paths'] as const;
 
 const REASON_ORDER: readonly ReconsentReason[] = [
   'permissions_widened',

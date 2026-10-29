@@ -21,8 +21,9 @@ export interface ConsentDialogProps {
 }
 
 /**
- * The install consent dialog (docs/ux/screens.md, "Install consent dialog"), minimal and shared:
- * local installs use it now, Store installs reuse it in P0-10. Its body is the trust block
+ * The install consent dialog (docs/ux/screens.md, "Install consent dialog"), shared by both
+ * entry points of the one install path: local installs ("Install this folder locally") and
+ * Store installs (./InstallJobsProvider.tsx), the same component with the same facts. Its body is the trust block
  * (../listing/TrustBlock.tsx), the one the Store detail page and the Publish preview show: the
  * Declared Permissions, the facts row (runtime kind, UI Kind, Workspace, here with the
  * platforms), then the Harness ID, version and Entry, and the standing no-sandbox sentence.

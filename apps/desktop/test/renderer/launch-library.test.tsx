@@ -45,6 +45,8 @@ const INSTALLED: InstalledHarness = {
   lastLaunchedAt: null,
   iconDataUrl: null,
   platformSupported: true,
+  storeStatus: null,
+  availableUpdate: null,
 };
 
 function status(state: LaunchStatus['state'], extra: Partial<LaunchStatus> = {}): LaunchStatus {

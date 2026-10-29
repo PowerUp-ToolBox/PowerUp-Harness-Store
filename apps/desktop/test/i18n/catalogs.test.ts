@@ -34,6 +34,11 @@ const IPC_OWN_CODES = [
   'forbidden',
   'not_found',
   'upload_cancelled',
+  'checksum_mismatch',
+  'integrity_error',
+  'download_cancelled',
+  'platform_not_supported',
+  'reconsent_required',
 ] as const;
 
 describe('catalog parity (CI)', () => {

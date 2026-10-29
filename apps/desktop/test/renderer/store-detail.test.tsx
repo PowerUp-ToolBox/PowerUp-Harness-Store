@@ -136,6 +136,8 @@ function installed(version: string, fields: Partial<InstalledHarness> = {}): Ins
     lastLaunchedAt: null,
     iconDataUrl: null,
     platformSupported: true,
+    storeStatus: null,
+    availableUpdate: null,
     ...fields,
   };
 }
@@ -390,7 +392,7 @@ describe('the primary button', () => {
 
   it('Launch with Uninstall: installed at the latest version, marked in the history', async () => {
     const api = await openDetail({ install: installed('1.2.0') });
-    expect(buttons()).toEqual(['Launch', 'Uninstall (disabled)']);
+    expect(buttons()).toEqual(['Launch', 'Uninstall']);
     const entries = within(region('Version history')).getAllByRole('listitem');
     expect(entries.map((entry) => entry.textContent.includes('Installed'))).toEqual([
       true,
@@ -538,7 +540,7 @@ describe('opening the page', () => {
     expect(window.location.hash).toBe('#/store/h/alice/writer');
     expect(api.store.detail).toHaveBeenCalledWith('alice/writer');
     expect(within(page()).getByRole('heading', { level: 2, name: 'Writer' })).toBeDefined();
-    expect(buttons()).toEqual(['Launch', 'Uninstall (disabled)']);
+    expect(buttons()).toEqual(['Launch', 'Uninstall']);
   });
 
   it('keeps the page of an installed Harness the Store no longer offers, with Launch and a note', async () => {
@@ -551,7 +553,7 @@ describe('opening the page', () => {
     expect(within(page()).getByRole('link', { name: 'by alice' }).getAttribute('href')).toBe(
       '#/store/p/alice',
     );
-    expect(buttons()).toEqual(['Launch', 'Uninstall (disabled)']);
+    expect(buttons()).toEqual(['Launch', 'Uninstall']);
     // Its installed Manifest's changelog is its only version history.
     const entries = within(region('Version history')).getAllByRole('listitem');
     expect(entries).toHaveLength(1);

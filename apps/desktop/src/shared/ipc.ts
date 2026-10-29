@@ -75,6 +75,26 @@ export type IpcErrorCode =
   /** The Publisher cancelled the upload (`publish.cancel`) before it was all sent. */
   | 'upload_cancelled'
   /**
+   * A downloaded Harness Package is not the one the Store described: another size or SHA-256
+   * than its `download` answer. Nothing of it was kept.
+   */
+  | 'checksum_mismatch'
+  /**
+   * A downloaded Harness Package matched the Store's checksum but cannot be installed safely: it
+   * does not validate (an unsafe archive entry included), cannot be unpacked, or its Manifest is
+   * not the one the Store answered with. Nothing of it was kept.
+   */
+  | 'integrity_error'
+  /** The User cancelled the download (`installs.cancel`). Nothing of it was kept. */
+  | 'download_cancelled'
+  /** The Store has no package of this Harness Version for this machine's platform. */
+  | 'platform_not_supported'
+  /**
+   * An update widens the Declared Permissions, or changes the Entry or the runtime kind, and the
+   * User did not consent to it again (`installs.update` without `reconsented`). Nothing changed.
+   */
+  | 'reconsent_required'
+  /**
    * A Harness folder is not (or no longer) a valid Harness Package: it cannot be read, fails
    * validation, or its Manifest changed since `installs.inspectFolder` showed it. The problems
    * themselves come from `installs.inspectFolder`, never in the error.
@@ -89,8 +109,8 @@ export type IpcErrorCode =
   /** The Harness is running, so it cannot be installed over (or uninstalled) now. */
   | 'harness_running'
   /**
-   * An install of the Harness is putting new files in place, so it cannot be launched until the
-   * install is done.
+   * An install of the Harness is putting new files in place (or an uninstall is deleting them),
+   * so it cannot be launched, installed again or uninstalled until that is done.
    */
   | 'harness_installing'
   /** No Harness with this ID is installed. */
@@ -319,6 +339,62 @@ export interface IpcMethods {
    * copying; `harness_running` while that Harness runs.
    */
   'installs.installFromFolder': { input: string; output: InstalledVersion };
+  /**
+   * Installs a Harness from the Store (docs/ux/flows.md F2), up to the consent dialog: calls the
+   * Store's `download` function for its latest version on this machine's platform, streams the
+   * Harness Package into the downloads folder (`progress:<jobId>` events report
+   * {@link DownloadProgress}; subscribe before calling), checks its size and SHA-256 against the
+   * Store's, validates it and checks its Manifest is the Store's, which must be one of this
+   * Harness. Answers what the consent dialog shows once the package waits for consent:
+   * `installs.confirm` installs it, `installs.cancel` discards it; main discards it too when the
+   * main window's page closes, crashes or loads again, as only that page knows the job. `invalid_input` for a Harness already installed (also locally) or a job ID in
+   * use; `harness_installing` while it is being installed; `not_found`, `platform_not_supported`,
+   * `store_unreachable`, `store_error`; `checksum_mismatch`, `integrity_error`;
+   * `download_cancelled`. On any failure nothing of the download is left.
+   */
+  'installs.install': { input: StoreInstallRequest; output: ManifestSummary };
+  /**
+   * The User consented: unpacks the package that `installs.install` downloaded for this job into
+   * the install layout and records the install, which `installs.changed` reports. On a failure
+   * (`integrity_error`) nothing is left. `invalid_input` for a job not waiting for consent.
+   */
+  'installs.confirm': { input: string; output: InstalledVersion };
+  /**
+   * Cancels the Store install `jobId` while it downloads (its `installs.install` then answers
+   * `download_cancelled`) or waits for consent, deleting what it downloaded. Once it is
+   * unpacking it changes nothing, and neither does an unknown or finished job.
+   */
+  'installs.cancel': { input: string; output: null };
+  /**
+   * Updates a Store install to `version` (docs/ux/flows.md F4), the one the update prompt showed:
+   * calls the Store's `download` function for that version, streams it as `installs.install` does
+   * (`progress:<jobId>`, cancelled by `installs.cancel`), checks its size, SHA-256 and Manifest,
+   * then compares that Manifest with the installed one (`diffForReconsent`): when it widens the
+   * Declared Permissions or changes the Entry or the runtime kind and `reconsented` is false, it
+   * answers `reconsent_required` before unpacking anything. Otherwise it unpacks the new version
+   * next to the old one, switches the `installs` row to it (`installs.changed`), then deletes the
+   * old version's folder; the Data Directory is never touched. Until the switch, the old version
+   * stays installed and launchable, whatever fails. `not_installed`; `invalid_input` for a local
+   * install, a version not greater than the installed one or a job ID in use;
+   * `harness_installing` while it is being installed or updated; `harness_running` while it runs
+   * (checked when asked, and again just before the switch); and the download's errors of
+   * `installs.install`.
+   */
+  'installs.update': { input: StoreUpdateRequest; output: InstalledVersion };
+  /**
+   * Uninstalls this installed Harness (docs/ux/flows.md F9): deletes its install folder, then its
+   * Data Directory, then its `installs` row and its Model Overrides, and reports it with
+   * `installs.changed`. Its launch logs (deleted 30 days after they were written, at a later
+   * start) and Usage Records are kept. A failure partway leaves the row, and uninstalling again
+   * finishes the job. `not_installed`; `harness_running` while it runs and `harness_installing`
+   * while it is being installed or updated, deleting nothing.
+   */
+  'installs.uninstall': { input: string; output: null };
+  /**
+   * The size in bytes of the files in this installed Harness's Data Directory, walked without
+   * following links (the uninstall confirmation's size); 0 when it is missing. `not_installed`.
+   */
+  'installs.dataSize': { input: string; output: number };
   /**
    * Every installed Harness: the most recently launched first, then the never-launched ones, by
    * name.
@@ -553,6 +629,33 @@ export interface AppNavigate {
 /** Where an installed Harness Package came from: the Store, or a local folder. */
 export type InstallSource = 'store' | 'local';
 
+/** Which Harness to install from the Store, and the job its progress events are named after. */
+export interface StoreInstallRequest {
+  readonly harnessId: string;
+  /** Chosen by the renderer (a UUID): the events are `progress:<jobId>`. */
+  readonly jobId: string;
+}
+
+/** Which Store install to update, to which version, and the job its progress events are named after. */
+export interface StoreUpdateRequest {
+  readonly harnessId: string;
+  /** The version the update prompt showed: its Manifest is the one compared and installed. */
+  readonly version: string;
+  /** Chosen by the renderer (a UUID): the events are `progress:<jobId>`. */
+  readonly jobId: string;
+  /** The User consented to what the update changes (the re-consent prompt's Update). */
+  readonly reconsented: boolean;
+}
+
+/**
+ * The payload of `progress:<jobId>` for a download: bytes of the Harness Package received so far,
+ * of the size the Store reported.
+ */
+export interface DownloadProgress {
+  readonly received: number;
+  readonly total: number;
+}
+
 /** The facts of a valid Manifest that the install consent dialog shows. */
 export interface ManifestSummary {
   readonly harnessId: string;
@@ -653,6 +756,29 @@ export interface InstalledHarness {
   readonly iconDataUrl: string | null;
   /** Whether it can run on this platform: listed in `platforms`, with an Entry. */
   readonly platformSupported: boolean;
+  /**
+   * What the last update check said of it in the Store; null before the first check, and always
+   * for a local install, which is never checked.
+   */
+  readonly storeStatus: InstallStoreStatus | null;
+  /**
+   * The newer version the Store offers, which runs on this platform; null when there is none (a
+   * local install, a Harness the Store no longer offers, or no check yet).
+   */
+  readonly availableUpdate: AvailableUpdate | null;
+}
+
+/**
+ * A Store install's status as the update check stores it: `latest_versions`' `store_status`, its
+ * `not_found` (a Harness the Store no longer has) kept as `unpublished`.
+ */
+export type InstallStoreStatus = 'available' | 'unpublished' | 'taken_down';
+
+/** A newer Harness Version the Store offers for an installed Harness. */
+export interface AvailableUpdate {
+  readonly version: string;
+  /** Its full Manifest: the changelog, and what `diffForReconsent` compares. */
+  readonly manifest: Manifest;
 }
 
 /** Which installed Harness changed: installed, replaced by another version, or removed. */
@@ -1152,6 +1278,12 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'installs.chooseFolder': true,
   'installs.inspectFolder': true,
   'installs.installFromFolder': true,
+  'installs.install': true,
+  'installs.confirm': true,
+  'installs.cancel': true,
+  'installs.update': true,
+  'installs.uninstall': true,
+  'installs.dataSize': true,
   'installs.list': true,
   'launch.start': true,
   'launch.chooseWorkspace': true,
@@ -1172,15 +1304,19 @@ export const IPC_METHODS = Object.freeze(Object.keys(METHOD_NAMES) as IpcMethodN
 
 /**
  * Events main pushes to the renderer: name → payload. `progress:<jobId>` is reserved for
- * long-running jobs (downloads, uploads, launch readiness); its payload is defined by its first
- * producer: `publish.publish`'s is {@link UploadProgress}.
+ * long-running jobs (downloads, uploads, launch readiness); its payload is defined by its
+ * producer: `publish.publish`'s is {@link UploadProgress}, `installs.install`'s and
+ * `installs.update`'s {@link DownloadProgress}.
  */
 export interface IpcEvents {
   /** The Store's connectivity changed; sent on every change, never twice for the same state. */
   'connectivity.changed': Connectivity;
   /** The Store sign-in state changed; `session_expired` asks the screen in use to sign in again. */
   'auth.changed': AuthChanged;
-  /** An installed Harness was installed, replaced or removed; lists read `installs.list` again. */
+  /**
+   * An installed Harness was installed, replaced or uninstalled, or the update check changed what
+   * it says of it; lists read `installs.list` again.
+   */
   'installs.changed': InstallsChanged;
   /** A launch changed state; sent on every change, `launch.status` lists the latest ones. */
   'launch.state': LaunchStatus;
