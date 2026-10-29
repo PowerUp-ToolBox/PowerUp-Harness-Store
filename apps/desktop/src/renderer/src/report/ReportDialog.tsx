@@ -54,7 +54,8 @@ const UNANSWERED: IpcError = {
  * will look at this." shows and the dialog closes. Any other answer keeps everything typed: the
  * Store's rate limit (or this install's: 3 Reports of a Harness in 24 hours, which the dialog
  * already knows when it opens and then never calls `store.report`) is the gentle "You've already
- * reported this Harness recently" with only Close; every other error shows under the form, and
+ * reported this Harness recently" with only Close (and, for this install's limit only, the rule it
+ * applies); every other error shows under the form, and
  * Submit becomes Retry.
  */
 export function ReportDialog({ target, onClose }: ReportDialogProps) {
@@ -71,6 +72,15 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
   const [rateLimited, setRateLimited] = useState(false);
   /** Set at once, so a second click before the next render sends nothing more. */
   const sending = useRef(false);
+  /** The rate-limited view's Close, focused when the Store's limit replaces the form. */
+  const close = useRef<HTMLButtonElement>(null);
+
+  // The Store's limit swaps the form, and the Submit button that had focus, for the rate-limited
+  // view inside the same Modal: focus goes to its Close, or it would fall out of the dialog and
+  // Escape and the Tab trap would stop working.
+  useEffect(() => {
+    if (rateLimited) close.current?.focus();
+  }, [rateLimited]);
 
   useEffect(() => {
     let current = true;
@@ -152,9 +162,11 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
         <p className="report-limited" role="status">
           {t('report.rateLimited')}
         </p>
-        <p className="hint">{t('report.rateLimitedHint')}</p>
+        {/* This install's own limit only: the Store's (5 an hour per IP address or install, across
+            Harnesses) can refuse a first Report of this Harness. */}
+        {info.info.rateLimited ? <p className="hint">{t('report.rateLimitedHint')}</p> : null}
         <div className="modal-actions">
-          <button type="button" className="button-secondary" onClick={onClose}>
+          <button ref={close} type="button" className="button-secondary" onClick={onClose}>
             {t('report.close')}
           </button>
         </div>

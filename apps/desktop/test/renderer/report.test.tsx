@@ -332,6 +332,11 @@ describe('Report dialog', () => {
 
     await reportFromLibrary();
     expect(dialog().getByText("You've already reported this Harness recently")).toBeDefined();
+    expect(
+      dialog().getByText(
+        'You can report a Harness up to 3 times in 24 hours. A reviewer will look at your earlier Reports.',
+      ),
+    ).toBeDefined();
     expect(dialog().queryByRole('radio')).toBeNull();
     expect(dialog().queryByRole('button', { name: 'Submit' })).toBeNull();
     fireEvent.click(dialog().getByRole('button', { name: 'Close' }));
@@ -355,9 +360,46 @@ describe('Report dialog', () => {
     expect(
       await dialog().findByText("You've already reported this Harness recently"),
     ).toBeDefined();
-    // Not the publish limit's words.
+    // Not the publish limit's words, nor this install's rule, which did not refuse it.
     expect(screen.queryByText(/published too many versions/)).toBeNull();
+    expect(dialog().queryByText(/up to 3 times in 24 hours/)).toBeNull();
     expect(dialog().queryByRole('button', { name: 'Retry' })).toBeNull();
+    // The Submit button that had focus is gone: focus is on Close, so Escape still closes.
+    const close = dialog().getByRole('button', { name: 'Close' });
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(close, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.store.report).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the error and only Close when the client info cannot be read, and sends nothing', async () => {
+    const api = setup();
+    api.store.reportInfo
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: 'internal_error',
+          messageKey: 'error.internal_error',
+          message: 'Something went wrong inside Harness Store.',
+        },
+      })
+      .mockRejectedValueOnce(new Error('IPC gone'));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await reportFromDetail();
+      expect(dialog().getByText(/Something went wrong inside Harness Store/)).toBeDefined();
+      expect(dialog().queryByRole('radio')).toBeNull();
+      expect(screen.getByRole('dialog').querySelector('dl')).toBeNull();
+      expect(
+        dialog()
+          .getAllByRole('button')
+          .map((button) => button.textContent),
+      ).toEqual(['Close']);
+      fireEvent.click(dialog().getByRole('button', { name: 'Close' }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      cleanup();
+    }
+    expect(api.store.reportInfo).toHaveBeenCalledTimes(2);
+    expect(api.store.report).not.toHaveBeenCalled();
   });
 
   it('offers Report on a page built from a Store install the Store no longer offers, never on a local one or the gone page', async () => {
