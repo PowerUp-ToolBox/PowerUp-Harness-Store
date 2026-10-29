@@ -424,18 +424,27 @@ describe('what it stores', () => {
     });
     expect(store.get('acme/alpha')?.installedVersionTakenDown).toBe(true);
 
-    // Published again: the mark goes. An unknown installed version status is not what api.md
-    // says, so that row is skipped.
+    // An unknown installed version status is not what api.md says, so that row is skipped:
+    // the mark stays even though the rest of the row changed.
+    latest.set('acme/alpha', {
+      ...latest.get('acme/alpha'),
+      latest_version: '3.0.0',
+      manifest: manifestOf('acme/alpha', '3.0.0'),
+      installed_version_status: 'gone',
+    });
+    changed = [];
+    await checker().check();
+    expect(changed).toEqual([]);
+    expect(checked('acme/alpha').availableVersion).toBe('2.0.0');
+    expect(store.get('acme/alpha')?.installedVersionTakenDown).toBe(true);
+
+    // Published again: the mark goes.
     latest.set('acme/alpha', {
       ...latest.get('acme/alpha'),
       installed_version_status: 'published',
     });
     await checker().check();
     expect(store.get('acme/alpha')?.installedVersionTakenDown).toBe(false);
-    latest.set('acme/alpha', { ...latest.get('acme/alpha'), installed_version_status: 'gone' });
-    changed = [];
-    await checker().check();
-    expect(changed).toEqual([]);
   });
 
   it('judges an install updated between the list and the answer by its new version', async () => {
@@ -481,5 +490,29 @@ describe('what it stores', () => {
     });
     installed('acme/alpha', '2.0.0', 'local');
     expect(checked('acme/alpha').storeStatus).toBeNull();
+  });
+
+  it('a Store reinstall of the same version keeps a Takedown of it, a local install clears it', async () => {
+    installed('acme/alpha', '1.0.0');
+    latest.set('acme/alpha', {
+      harness_id: 'acme/alpha',
+      store_status: 'available',
+      latest_version: '2.0.0',
+      manifest: manifestOf('acme/alpha', '2.0.0'),
+      installed_version_status: 'taken_down',
+    });
+    await checker().check();
+    expect(store.acknowledgeTakedown('acme/alpha')).toBe(true);
+    const flags = () => {
+      const install = store.get('acme/alpha');
+      return [install?.installedVersionTakenDown, install?.takedownAcknowledged];
+    };
+    expect(flags()).toEqual([true, true]);
+
+    installed('acme/alpha', '1.0.0');
+    expect(flags()).toEqual([true, true]);
+
+    installed('acme/alpha', '1.0.0', 'local');
+    expect(flags()).toEqual([false, false]);
   });
 });
