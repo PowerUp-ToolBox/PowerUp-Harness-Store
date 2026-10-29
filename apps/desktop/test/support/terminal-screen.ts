@@ -11,6 +11,8 @@ const { Terminal } = xtermHeadless;
 export interface TerminalScreen {
   /** Feeds what the pty printed. */
   write(data: string): void;
+  /** Resizes the terminal, as the window's xterm.js does before it sends the pty its new size. */
+  resize(size: { cols: number; rows: number }): void;
   /**
    * The text on screen and in the scrollback once everything written so far is rendered: one line
    * per line the Harness printed (a row it ran past the edge of joins the next), without blanks at
@@ -25,6 +27,9 @@ export function createTerminalScreen(size: { cols: number; rows: number }): Term
   return {
     write(data) {
       terminal.write(data);
+    },
+    resize(size) {
+      terminal.resize(size.cols, size.rows);
     },
     async text() {
       await new Promise<void>((resolve) => {
@@ -51,15 +56,22 @@ export function createTerminalScreen(size: { cols: number; rows: number }): Term
 /** The terminals of several Harness windows, one {@link TerminalScreen} per launch. */
 export function createTerminalScreens(size: { cols: number; rows: number }) {
   const screens = new Map<string, TerminalScreen>();
+  const screenOf = (launchId: string): TerminalScreen => {
+    let screen = screens.get(launchId);
+    if (screen === undefined) {
+      screen = createTerminalScreen(size);
+      screens.set(launchId, screen);
+    }
+    return screen;
+  };
   return {
     /** Feeds what the pty of `launchId` printed. */
     write(launchId: string, data: string) {
-      let screen = screens.get(launchId);
-      if (screen === undefined) {
-        screen = createTerminalScreen(size);
-        screens.set(launchId, screen);
-      }
-      screen.write(data);
+      screenOf(launchId).write(data);
+    },
+    /** Resizes the terminal of `launchId`'s window. */
+    resize(launchId: string, next: { cols: number; rows: number }) {
+      screenOf(launchId).resize(next);
     },
     /** The text of `launchId`'s terminal; empty before its pty printed anything. */
     async text(launchId: string): Promise<string> {

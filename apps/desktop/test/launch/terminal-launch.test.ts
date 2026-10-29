@@ -402,6 +402,8 @@ describe('launching fixture-term', () => {
     await expect(
       waitFor(async () => (await reports(launchId, 'input'))[0] as string | undefined),
     ).resolves.toBe(process.platform === 'win32' ? 'hello\r\n' : 'hello\n');
+    // The window's terminal takes its new size first; ConPTY then draws its screen at that size.
+    windows.screens.resize(launchId, { cols: 120, rows: 40 });
     await windowCall(launchId, 'terminal.resize', { cols: 120, rows: 40 });
     await expect(waitFor(async () => (await reports(launchId, 'resize'))[0])).resolves.toEqual([
       120, 40,
