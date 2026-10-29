@@ -2,19 +2,24 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import type { InstalledHarness, IpcError, LaunchStatus } from '../../../shared/ipc.js';
 import { useI18n } from '../i18n/I18nProvider.js';
+import { TakedownConfirm, takedownOf } from './Takedown.js';
 import { WorkspaceSheet } from './WorkspaceSheet.js';
 
 /** How an installed Harness is launched from a button: the Library card's and the detail page's. */
 export interface LaunchControls {
   /** Nothing can fill its `default` Model Slot: the button reads "Set up a model first". */
   readonly needsModel: boolean;
-  /** Launch: through the Workspace sheet when the Harness's Manifest asks for a Workspace. */
+  /**
+   * Launch: through the takedown confirmation first for a taken-down Harness or installed
+   * version not yet acknowledged, and through the Workspace sheet when the Harness's Manifest
+   * asks for a Workspace.
+   */
   readonly launch: () => void;
   /** A launch while it runs, which brings its window to the front. */
   readonly focus: () => void;
   /** The Models page at this Harness's card. */
   readonly openModels: () => void;
-  /** The Workspace sheet while it is open; render it next to the button. */
+  /** The takedown confirmation or the Workspace sheet while open; render it next to the button. */
   readonly sheet: ReactNode;
 }
 
@@ -24,6 +29,13 @@ export interface LaunchControls {
  * be filled (`bindings.resolveAll`), the Workspace sheet for a Harness that asks for a Workspace,
  * and `launch.start`. A launch refused with `slot_unbound` turns the button into "Set up a model
  * first"; any other refusal goes to `onError`, which is cleared (null) when a launch begins.
+ *
+ * A Harness the update check found taken down (`storeStatus` `taken_down`), or whose installed
+ * version it found taken down (`installedVersionTakenDown`), whose Takedown the User has not
+ * acknowledged asks first, with {@link TakedownConfirm} (P0-12.2): only "Launch anyway" records
+ * the acknowledgement (`installs.acknowledgeTakedown`) and goes on, so the confirmation shows once
+ * per Takedown. Bringing a running Harness's window to the front is not a launch and
+ * asks nothing, nor does a Harness window's Relaunch.
  */
 export function useLaunch(
   install: InstalledHarness,
@@ -32,6 +44,7 @@ export function useLaunch(
   const navigate = useNavigate();
   const [needsModel, setNeedsModel] = useState(false);
   const [choosingWorkspace, setChoosingWorkspace] = useState(false);
+  const [confirmingTakedown, setConfirmingTakedown] = useState(false);
   const { harnessId } = install;
 
   useEffect(() => {
@@ -60,17 +73,39 @@ export function useLaunch(
     onError(null);
     void start().then(onError);
   };
+  const proceed = () => {
+    if ((install.manifest.workspace ?? 'none') === 'none') focus();
+    else setChoosingWorkspace(true);
+  };
+  const confirmTakedown = async () => {
+    onError(null);
+    const result = await window.api.installs.acknowledgeTakedown(harnessId);
+    setConfirmingTakedown(false);
+    if (result.ok) proceed();
+    else onError(result.error);
+  };
   return {
     needsModel,
     launch: () => {
-      if ((install.manifest.workspace ?? 'none') === 'none') focus();
-      else setChoosingWorkspace(true);
+      if (takedownOf(install) !== null && !install.takedownAcknowledged) {
+        setConfirmingTakedown(true);
+      } else {
+        proceed();
+      }
     },
     focus,
     openModels: () => {
       void navigate(`/models?harness=${encodeURIComponent(harnessId)}`);
     },
-    sheet: choosingWorkspace ? (
+    sheet: confirmingTakedown ? (
+      <TakedownConfirm
+        install={install}
+        onConfirm={confirmTakedown}
+        onClose={() => {
+          setConfirmingTakedown(false);
+        }}
+      />
+    ) : choosingWorkspace ? (
       <WorkspaceSheet
         install={install}
         onLaunch={(workspace) => {

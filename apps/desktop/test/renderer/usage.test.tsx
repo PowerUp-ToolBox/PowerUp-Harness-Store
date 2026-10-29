@@ -133,6 +133,8 @@ const REVIEWER: InstalledHarness = {
   iconDataUrl: null,
   platformSupported: true,
   storeStatus: 'available',
+  installedVersionTakenDown: false,
+  takedownAcknowledged: false,
   availableUpdate: null,
 };
 

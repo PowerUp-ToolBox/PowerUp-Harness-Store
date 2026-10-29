@@ -56,7 +56,7 @@ Each flow lists steps, decision points and error branches. Screen details are in
    - Added permission, changed Entry or changed runtime kind → the button reads "Review update"; the re-consent prompt opens before the download, listing what the update adds (diff style: "New: runs shell commands"), the changelog, the trust block with the no-sandbox sentence, and buttons Update, Not now. Update then downloads, verifies and replaces as above.
    - Download or integrity error → inline error under the button; the old version stays installed and launchable. Update retries.
 3. A Harness that is running cannot be updated; "Close the Harness to update" shows under the button.
-4. An installed version that was Unpublished or taken down remains launchable; the card shows a note "No longer available in the Store" and Update is hidden.
+4. An installed version that was Unpublished or taken down remains launchable and Update is hidden. Unpublished: the card shows a note "No longer available in the Store". Taken down (P0-12): a red warning on the card and the detail page, and Launch first asks once per Takedown "This Harness was removed from the Store. Launch anyway?". When only the installed version was taken down, the same warning and confirmation name that version, and Update to a newer published version stays offered, since it is the remedy.
 
 ## F5. Publish
 
@@ -97,9 +97,10 @@ The screen keeps its folder, validation and tab when the User visits another scr
 
 ## F8. Report a Harness
 
-1. Report link on the detail page (and in the Library card menu).
-2. Reason picker: Malicious behaviour, Bypasses the Model Gateway, Broken, Inappropriate content, Spam, Other (one per `report_reason` value in `docs/tech/data-model.md`). Free-text details. Optional email for follow-up.
-3. Submit anonymously; confirmation "Thanks, a reviewer will look at this". Repeated reports on the same Harness from the same install are rate limited with a gentle message.
+1. Report link in the detail page's footer (and in a Store install's Library card menu); not for a local install or on the "no longer available" page.
+2. Reason picker: Malicious behaviour, Bypasses the Model Gateway, Broken, Inappropriate content, Spam, Other (one per `report_reason` value in `docs/tech/data-model.md`), none preselected. Free-text details (2000 characters with the contact line). Optional email for follow-up, sent at the start of the details. What else is sent is shown before Submit: Harness ID, version, platform, app version and a random install ID; no IP address or account is stored.
+3. Submit anonymously, even when signed in; confirmation toast "Thanks, a reviewer will look at this." and the dialog closes. Repeated reports on the same Harness from the same install (3 in 24 hours, checked before any request) or the Store's own limit show the gentle "You've already reported this Harness recently" with only Close.
+4. Offline or a Store error: the message under the form, everything typed kept, Submit becomes Retry.
 
 ## F9. Uninstall
 

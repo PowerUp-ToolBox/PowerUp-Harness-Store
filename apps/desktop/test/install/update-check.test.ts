@@ -4,7 +4,8 @@
  * (the Store installs only, never a local one, at most 1000 IDs a call, with the anon key), that
  * it does nothing offline and shows nothing when the Store does not answer, and what it stores
  * per install (an update only when the latest version is greater and runs here; `not_found` kept
- * as `unpublished`), reporting exactly the rows it changed.
+ * as `unpublished`; a Takedown of the installed version, which it sends, apart from the Store
+ * status), reporting exactly the rows it changed.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -29,8 +30,8 @@ const ANON_KEY = 'fake-anon-key';
 let root: string;
 let db: DatabaseSync;
 let store: InstallStore;
-/** The `latest_versions` calls: their headers and the IDs asked for. */
-let calls: { headers: Record<string, string>; ids: string[] }[];
+/** The `latest_versions` calls: their headers, the IDs and the installed versions asked for. */
+let calls: { headers: Record<string, string>; ids: string[]; installed: unknown }[];
 /** What `latest_versions` answers for an ID; unknown IDs are `not_found`. */
 let latest: Map<string, Record<string, unknown>>;
 /** When set, the fake Store fails every call this way. */
@@ -90,8 +91,11 @@ const fakeFetch: UpdateCheckOptions['fetch'] = (url, init) => {
   if (failure === 'network') return Promise.reject(new TypeError('fetch failed'));
   expect(url).toBe(`${BASE_URL}/rest/v1/rpc/latest_versions`);
   expect(init.method).toBe('POST');
-  const { harness_ids: ids } = JSON.parse(init.body as string) as { harness_ids: string[] };
-  calls.push({ headers: init.headers as Record<string, string>, ids });
+  const { harness_ids: ids, installed_versions: installed } = JSON.parse(init.body as string) as {
+    harness_ids: string[];
+    installed_versions: unknown;
+  };
+  calls.push({ headers: init.headers as Record<string, string>, ids, installed });
   if (failure === 'server') return Promise.resolve(new Response('{}', { status: 503 }));
   const rows = ids.map(
     (id) =>
@@ -228,9 +232,10 @@ describe('scheduling (acceptance: 10 s after start, then every interval, 6 hours
 });
 
 describe('what it asks', () => {
-  it('asks about Store installs only, never a local install, with the anon key', async () => {
+  it('asks about Store installs only, never a local install, with the anon key and each installed version', async () => {
     installed('acme/store', '1.0.0');
     installed('acme/local', '1.0.0', 'local');
+    installed('acme/other', '2.3.4');
     await checker().check();
     expect(calls).toEqual([
       {
@@ -238,9 +243,14 @@ describe('what it asks', () => {
           apikey: ANON_KEY,
           authorization: `Bearer ${ANON_KEY}`,
         }) as unknown,
-        ids: ['acme/store'],
+        ids: expect.arrayContaining(['acme/store', 'acme/other']) as unknown,
+        installed: expect.any(Array) as unknown,
       },
     ]);
+    // Aligned by position.
+    const [call] = calls;
+    expect(call?.ids).toHaveLength(2);
+    expect(call?.ids.map((id) => store.get(id)?.version)).toEqual(call?.installed);
     expect(checked('acme/local')).toEqual({
       storeStatus: null,
       availableVersion: null,
@@ -396,6 +406,47 @@ describe('what it stores', () => {
     }
   });
 
+  it('stores a Takedown of the installed version apart from the Store status, keeping the update', async () => {
+    installed('acme/alpha', '1.0.0');
+    latest.set('acme/alpha', {
+      harness_id: 'acme/alpha',
+      store_status: 'available',
+      latest_version: '2.0.0',
+      manifest: manifestOf('acme/alpha', '2.0.0'),
+      installed_version_status: 'taken_down',
+    });
+    await checker().check();
+    expect(changed).toEqual(['acme/alpha']);
+    expect(checked('acme/alpha')).toEqual({
+      storeStatus: 'available',
+      availableVersion: '2.0.0',
+      availableManifestVersion: '2.0.0',
+    });
+    expect(store.get('acme/alpha')?.installedVersionTakenDown).toBe(true);
+
+    // An unknown installed version status is not what api.md says, so that row is skipped:
+    // the mark stays even though the rest of the row changed.
+    latest.set('acme/alpha', {
+      ...latest.get('acme/alpha'),
+      latest_version: '3.0.0',
+      manifest: manifestOf('acme/alpha', '3.0.0'),
+      installed_version_status: 'gone',
+    });
+    changed = [];
+    await checker().check();
+    expect(changed).toEqual([]);
+    expect(checked('acme/alpha').availableVersion).toBe('2.0.0');
+    expect(store.get('acme/alpha')?.installedVersionTakenDown).toBe(true);
+
+    // Published again: the mark goes.
+    latest.set('acme/alpha', {
+      ...latest.get('acme/alpha'),
+      installed_version_status: 'published',
+    });
+    await checker().check();
+    expect(store.get('acme/alpha')?.installedVersionTakenDown).toBe(false);
+  });
+
   it('judges an install updated between the list and the answer by its new version', async () => {
     installed('acme/alpha', '1.0.0');
     offers('acme/alpha', '2.0.0');
@@ -412,6 +463,19 @@ describe('what it stores', () => {
       availableVersion: null,
       availableManifestVersion: null,
     });
+    // A Takedown of 1.0.0, the version asked about, is not 2.0.0's.
+    latest.set('acme/alpha', {
+      ...latest.get('acme/alpha'),
+      installed_version_status: 'taken_down',
+    });
+    await checker({
+      installs: () => {
+        const listed = store.all();
+        installed('acme/alpha', '2.1.0');
+        return Promise.resolve(listed);
+      },
+    }).check();
+    expect(store.get('acme/alpha')?.installedVersionTakenDown).toBe(false);
   });
 
   it('an install clears the update, keeps the Store status, and a local one clears both', async () => {
@@ -426,5 +490,29 @@ describe('what it stores', () => {
     });
     installed('acme/alpha', '2.0.0', 'local');
     expect(checked('acme/alpha').storeStatus).toBeNull();
+  });
+
+  it('a Store reinstall of the same version keeps a Takedown of it, a local install clears it', async () => {
+    installed('acme/alpha', '1.0.0');
+    latest.set('acme/alpha', {
+      harness_id: 'acme/alpha',
+      store_status: 'available',
+      latest_version: '2.0.0',
+      manifest: manifestOf('acme/alpha', '2.0.0'),
+      installed_version_status: 'taken_down',
+    });
+    await checker().check();
+    expect(store.acknowledgeTakedown('acme/alpha')).toBe(true);
+    const flags = () => {
+      const install = store.get('acme/alpha');
+      return [install?.installedVersionTakenDown, install?.takedownAcknowledged];
+    };
+    expect(flags()).toEqual([true, true]);
+
+    installed('acme/alpha', '1.0.0');
+    expect(flags()).toEqual([true, true]);
+
+    installed('acme/alpha', '1.0.0', 'local');
+    expect(flags()).toEqual([false, false]);
   });
 });

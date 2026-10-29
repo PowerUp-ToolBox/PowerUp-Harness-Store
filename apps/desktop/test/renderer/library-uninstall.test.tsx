@@ -54,6 +54,8 @@ function installed(
     iconDataUrl: null,
     platformSupported: true,
     storeStatus: 'available',
+    installedVersionTakenDown: false,
+    takedownAcknowledged: false,
     availableUpdate: null,
     ...fields,
   };
@@ -183,19 +185,31 @@ describe('the Library cards', () => {
     const local = screen.getByRole('article', { name: 'Local Copy' });
     expect(within(local).getByText('Local')).toBeDefined();
     expect(actions('Local Copy')).toEqual(['Launch']);
-    // No longer in the Store: the note, and no Update.
+    // Taken down: the red warning instead of the note, and no Update.
     const gone = screen.getByRole('article', { name: 'Gone From Store' });
-    expect(within(gone).getByText('No longer available in the Store')).toBeDefined();
+    expect(within(gone).getByText(/A Store administrator took this Harness down/)).toBeDefined();
+    expect(within(gone).queryByText('No longer available in the Store')).toBeNull();
     expect(actions('Gone From Store')).toEqual(['Launch']);
 
-    // Every card's menu has the same five items, Uninstall last.
-    for (const name of ['Installed', 'Local Copy', 'Running Now']) {
+    // Every card's menu has the same items, Uninstall last; Report only for a Store install.
+    for (const [name, report] of [
+      ['Installed', ['Report']],
+      ['Local Copy', []],
+      ['Running Now', ['Report']],
+    ] as const) {
       const menu = await openMenu(name);
       expect(
         within(menu)
           .getAllByRole('menuitem')
           .map((item) => item.textContent),
-      ).toEqual(['View in Store', 'Model Overrides', 'Show logs', 'Open data folder', 'Uninstall']);
+      ).toEqual([
+        'View in Store',
+        'Model Overrides',
+        'Show logs',
+        'Open data folder',
+        ...report,
+        'Uninstall',
+      ]);
       fireEvent.keyDown(menu, { key: 'Escape' });
     }
   });
@@ -205,6 +219,7 @@ describe('the Library cards', () => {
       installed('local', 'Local Copy', {
         source: 'local',
         storeStatus: null,
+        takedownAcknowledged: false,
         // A local install is never checked; a stray value must not make an Update button.
         availableUpdate: { version: '1.1.0', manifest: { ...MANIFEST, version: '1.1.0' } },
       }),

@@ -85,6 +85,8 @@ function installed(fields: Partial<InstalledHarness> = {}): InstalledHarness {
     iconDataUrl: null,
     platformSupported: true,
     storeStatus: 'available',
+    installedVersionTakenDown: false,
+    takedownAcknowledged: false,
     availableUpdate: null,
     ...fields,
   };
@@ -190,6 +192,7 @@ describe('a Library card with an update', () => {
         name: 'Local one',
         source: 'local',
         storeStatus: null,
+        takedownAcknowledged: false,
       }),
     ]);
     expect(cardButtons('Writer')).toEqual(['Update', 'Launch']);
@@ -293,14 +296,22 @@ describe('a Library card with an update', () => {
     expect(within(card('Writer')).getByText('Close the Harness to update')).toBeDefined();
   });
 
-  it.each(['unpublished', 'taken_down'] as const)(
-    'a Harness %s in the Store has the note and no Update',
-    async (storeStatus) => {
-      await openLibrary([installed({ storeStatus })]);
-      expect(cardButtons('Writer')).toEqual(['Launch']);
-      expect(within(card('Writer')).getByText('No longer available in the Store')).toBeDefined();
-    },
-  );
+  it('a Harness Unpublished in the Store has the note and no Update', async () => {
+    await openLibrary([installed({ storeStatus: 'unpublished' })]);
+    expect(cardButtons('Writer')).toEqual(['Launch']);
+    expect(within(card('Writer')).getByText('No longer available in the Store')).toBeDefined();
+  });
+
+  it('a Harness taken down in the Store has the red warning in place of the note, and no Update', async () => {
+    await openLibrary([installed({ storeStatus: 'taken_down' })]);
+    expect(cardButtons('Writer')).toEqual(['Launch']);
+    expect(
+      within(card('Writer')).getByText(
+        'A Store administrator took this Harness down. It may be harmful: launch it only if you trust it.',
+      ),
+    ).toBeDefined();
+    expect(within(card('Writer')).queryByText('No longer available in the Store')).toBeNull();
+  });
 });
 
 describe('the update prompt (How to verify, step 3)', () => {

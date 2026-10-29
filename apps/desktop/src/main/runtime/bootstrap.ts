@@ -55,6 +55,7 @@ import {
 import { createStoreAuth, type StoreAuth, type StoreFetch } from './store-auth.js';
 import { createStoreCatalogue } from './store-catalogue.js';
 import { createStoreDownloader } from './store-download.js';
+import { createStoreReporter } from './store-report.js';
 import {
   createSupervisor,
   createSupervisorStub,
@@ -322,7 +323,8 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       updates?.reschedule();
     },
   });
-  const platform = platformOf(options.platform ?? `${process.platform}-${process.arch}`);
+  const machinePlatform = options.platform ?? `${process.platform}-${process.arch}`;
+  const platform = platformOf(machinePlatform);
   const connectionStore = sqlite?.connections;
   const connections: ConnectionsService =
     connectionStore === undefined
@@ -471,6 +473,20 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     ...(options.now === undefined ? {} : { now: options.now }),
   });
 
+  // A Report is anonymous too: the anon key alone, whoever is signed in.
+  const reports = createStoreReporter({
+    fetch: options.storeFetch ?? ((url, init) => globalThis.fetch(url, init)),
+    storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
+    anonKey: options.storeAnonKey ?? storeAnonKey(),
+    settings: store,
+    platform: machinePlatform,
+    appVersion: options.version,
+    onStoreUnreachable: () => {
+      connectivity.reportFailure();
+    },
+    ...(options.now === undefined ? {} : { now: options.now }),
+  });
+
   return {
     status: startupStatus,
     connectivity,
@@ -502,6 +518,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       }),
       connectivity,
       store: storeCatalogue,
+      reports,
       providers: { list: () => providerPresets() },
       connections,
       bindings:

@@ -17,6 +17,7 @@
     "db:stop": "pnpm run build && node dist/scripts/supabase.js stop",
     "db:reset": "pnpm run build && node dist/scripts/supabase.js db reset && node dist/scripts/seed.js",
     "seed": "node dist/scripts/seed.js",
+    "admin": "node dist/scripts/admin.js",
     "functions:serve": "pnpm run build && node dist/scripts/supabase.js functions serve"
   },
   "devDependencies": {

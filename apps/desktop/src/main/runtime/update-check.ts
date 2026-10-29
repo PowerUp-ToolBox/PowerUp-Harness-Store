@@ -23,7 +23,9 @@ const CALL_TIMEOUT_MS = 15_000;
 export interface UpdateCheckOptions {
   readonly store: InstallStore;
   /** The installed Harnesses, read once the installer cleaned up after an interrupted install. */
-  readonly installs: () => Promise<readonly Pick<InstalledHarness, 'harnessId' | 'source'>[]>;
+  readonly installs: () => Promise<
+    readonly Pick<InstalledHarness, 'harnessId' | 'source' | 'version'>[]
+  >;
   /** Makes the Store calls (Electron's `net.fetch`, so system proxies apply). */
   readonly fetch: StoreFetch;
   /** The Store base URL, read on every check (the `store_base_url` setting). */
@@ -69,10 +71,12 @@ export interface UpdateChecker {
 /**
  * The background update check (P0-10.2; docs/ux/flows.md F4 step 1): 10 seconds after start and
  * then every interval (6 hours unless the User chose 1 hour, 24 hours or Never), it asks the
- * Store's `latest_versions` (api.md) about every installed Store Harness (never a local install),
- * in calls of at most 1000 IDs with the anon key, and stores per install its Store status and, when
- * there is one, the update it can take ({@link resolveUpdateCheck}). Each install whose row changed
- * is reported, so the Library and its nav badge read the list again.
+ * Store's `latest_versions` (api.md) about every installed Store Harness (never a local install)
+ * and its installed version, in calls of at most 1000 IDs with the anon key, and stores per install
+ * its Store status, the update it can take when there is one, and whether the installed version
+ * itself was taken down ({@link resolveUpdateCheck}; kept as it was for an install updated since
+ * the Store was asked). Each install whose row changed is reported, so the Library and its nav
+ * badge read the list again.
  *
  * While the Store is known to be offline the check is skipped; a check that gets no answer has
  * connectivity checked again and is dropped silently. Nothing is retried: the next scheduled check
@@ -87,8 +91,13 @@ export function createUpdateChecker(options: UpdateCheckOptions): UpdateChecker 
   let started = false;
   let stopped = false;
 
-  /** One `latest_versions` call; null when the Store did not answer as api.md says. */
-  const latestVersions = async (ids: readonly string[]): Promise<unknown[] | null> => {
+  /**
+   * One `latest_versions` call about these installs; null when the Store did not answer as
+   * api.md says.
+   */
+  const latestVersions = async (
+    installs: readonly { readonly harnessId: string; readonly version: string }[],
+  ): Promise<unknown[] | null> => {
     const base = options.storeBaseUrl().replace(/\/+$/, '');
     let response: Response;
     let text: string;
@@ -100,7 +109,10 @@ export function createUpdateChecker(options: UpdateCheckOptions): UpdateChecker 
           authorization: `Bearer ${options.anonKey}`,
           'content-type': 'application/json',
         },
-        body: JSON.stringify({ harness_ids: ids }),
+        body: JSON.stringify({
+          harness_ids: installs.map((install) => install.harnessId),
+          installed_versions: installs.map((install) => install.version),
+        }),
         signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
       });
       text = await response.text();
@@ -120,12 +132,13 @@ export function createUpdateChecker(options: UpdateCheckOptions): UpdateChecker 
   /** One check; whether the Store answered every call. */
   const run = async (): Promise<boolean> => {
     if (options.connectivity.get().state === 'offline') return false;
-    const ids = (await options.installs())
-      .filter((install) => install.source === 'store')
-      .map((install) => install.harnessId);
-    for (let at = 0; at < ids.length && !stopped; at += LATEST_VERSIONS_MAX_IDS) {
-      const rows = await latestVersions(ids.slice(at, at + LATEST_VERSIONS_MAX_IDS));
+    const installs = (await options.installs()).filter((install) => install.source === 'store');
+    for (let at = 0; at < installs.length && !stopped; at += LATEST_VERSIONS_MAX_IDS) {
+      const batch = installs.slice(at, at + LATEST_VERSIONS_MAX_IDS);
+      const rows = await latestVersions(batch);
       if (rows === null) return false;
+      // The version each install was at when the Store was asked; one install per Harness ID.
+      const asked = new Map(batch.map((install) => [install.harnessId, install.version]));
       for (const row of rows) {
         const answer = parseLatestVersion(row);
         if (answer === null) continue;
@@ -133,7 +146,13 @@ export function createUpdateChecker(options: UpdateCheckOptions): UpdateChecker 
         const install = options.store.get(answer.harnessId);
         if (install?.source !== 'store') continue;
         const result = resolveUpdateCheck(install.version, answer, options.platform);
-        if (options.store.recordUpdateCheck(answer.harnessId, install.version, result)) {
+        // The installed version's status is of the version asked about; another version
+        // installed since keeps what its install wrote.
+        const checked =
+          asked.get(answer.harnessId) === install.version
+            ? result
+            : { ...result, installedVersionTakenDown: install.installedVersionTakenDown };
+        if (options.store.recordUpdateCheck(answer.harnessId, install.version, checked)) {
           options.onChanged?.(answer.harnessId);
         }
       }
@@ -192,22 +211,33 @@ export interface LatestVersion {
   /** Both present exactly when `available`. */
   readonly latestVersion: string | null;
   readonly manifest: Manifest | null;
+  /** The status of the installed version asked about; null when the Store does not know it. */
+  readonly installedVersionStatus: 'published' | 'unpublished' | 'taken_down' | null;
 }
 
+const VERSION_STATUSES: ReadonlySet<unknown> = new Set(['published', 'unpublished', 'taken_down']);
+
 /**
- * The row, or null when it is not what api.md says `latest_versions` answers: an unknown status,
- * or an `available` row whose latest version is not a valid Manifest of that Harness and version.
- * Such a row is skipped, and the install keeps what the last check said.
+ * The row, or null when it is not what api.md says `latest_versions` answers: an unknown status
+ * or installed version status, or an `available` row whose latest version is not a valid Manifest
+ * of that Harness and version. Such a row is skipped, and the install keeps what the last check
+ * said. A missing installed version status reads as null.
  */
 export function parseLatestVersion(row: unknown): LatestVersion | null {
   if (typeof row !== 'object' || row === null) return null;
-  const { harness_id: harnessId, store_status: storeStatus } = row as Record<string, unknown>;
+  const {
+    harness_id: harnessId,
+    store_status: storeStatus,
+    installed_version_status: installed = null,
+  } = row as Record<string, unknown>;
   if (typeof harnessId !== 'string') return null;
+  if (installed !== null && !VERSION_STATUSES.has(installed)) return null;
+  const installedVersionStatus = installed as LatestVersion['installedVersionStatus'];
   if (storeStatus !== 'available') {
     return storeStatus === 'unpublished' ||
       storeStatus === 'taken_down' ||
       storeStatus === 'not_found'
-      ? { harnessId, storeStatus, latestVersion: null, manifest: null }
+      ? { harnessId, storeStatus, latestVersion: null, manifest: null, installedVersionStatus }
       : null;
   }
   const { latest_version: latestVersion, manifest } = row as Record<string, unknown>;
@@ -220,7 +250,13 @@ export function parseLatestVersion(row: unknown): LatestVersion | null {
   ) {
     return null;
   }
-  return { harnessId, storeStatus, latestVersion, manifest: validation.manifest };
+  return {
+    harnessId,
+    storeStatus,
+    latestVersion,
+    manifest: validation.manifest,
+    installedVersionStatus,
+  };
 }
 
 /**
@@ -229,7 +265,8 @@ export function parseLatestVersion(row: unknown): LatestVersion | null {
  * its latest version is greater (semver) than the installed one, never merely different (taking
  * down or Unpublishing the latest version moves it back, possibly below the installed one), and
  * its Manifest declares this platform, with an Entry for it, so Update never asks for a package
- * the Store does not have.
+ * the Store does not have. The installed version taken down (P0-12.2 follow-up) is stored apart
+ * from the Harness's status and leaves the update offered: updating is the remedy.
  */
 export function resolveUpdateCheck(
   installedVersion: string,
@@ -250,5 +287,6 @@ export function resolveUpdateCheck(
   return {
     storeStatus,
     available: offered ? { version: latestVersion, manifest } : null,
+    installedVersionTakenDown: answer.installedVersionStatus === 'taken_down',
   };
 }

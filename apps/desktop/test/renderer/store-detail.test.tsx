@@ -137,6 +137,8 @@ function installed(version: string, fields: Partial<InstalledHarness> = {}): Ins
     iconDataUrl: null,
     platformSupported: true,
     storeStatus: null,
+    installedVersionTakenDown: false,
+    takedownAcknowledged: false,
     availableUpdate: null,
     ...fields,
   };
@@ -270,7 +272,10 @@ describe('Harness detail page', () => {
     expect(within(footer).getByRole('link', { name: 'Source' }).getAttribute('href')).toBe(
       'http://git.example.com/alice/writer',
     );
-    expect(within(footer).getByRole('button', { name: 'Report' })).toHaveProperty('disabled', true);
+    expect(within(footer).getByRole('button', { name: 'Report' })).toHaveProperty(
+      'disabled',
+      false,
+    );
   });
 
   it('shows shell commands in red, with the concrete sentence and the no-sandbox sentence', async () => {

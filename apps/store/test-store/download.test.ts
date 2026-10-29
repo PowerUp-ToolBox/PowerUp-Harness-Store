@@ -396,6 +396,7 @@ interface LatestVersion {
   store_status: 'available' | 'unpublished' | 'taken_down' | 'not_found';
   latest_version: string | null;
   manifest: Record<string, unknown> | null;
+  installed_version_status: 'published' | 'unpublished' | 'taken_down' | null;
 }
 
 function latestVersions(
@@ -428,25 +429,35 @@ describe('latest_versions', () => {
             store_status: 'available',
             latest_version: '0.1.0',
             manifest: helloWeb.manifest,
+            installed_version_status: null,
           },
           {
             harness_id: 'bob/retired-tool',
             store_status: 'unpublished',
             latest_version: null,
             manifest: null,
+            installed_version_status: null,
           },
           {
             harness_id: 'carol/bad-tool',
             store_status: 'taken_down',
             latest_version: null,
             manifest: null,
+            installed_version_status: null,
           },
-          { harness_id: missing, store_status: 'not_found', latest_version: null, manifest: null },
+          {
+            harness_id: missing,
+            store_status: 'not_found',
+            latest_version: null,
+            manifest: null,
+            installed_version_status: null,
+          },
           {
             harness_id: 'alice/code-reviewer',
             store_status: 'available',
             latest_version: '2.1.0-beta.3',
             manifest: reviewer.manifest,
+            installed_version_status: null,
           },
         ],
       });
@@ -481,6 +492,7 @@ describe('latest_versions', () => {
       store_status: 'taken_down',
       latest_version: null,
       manifest: null,
+      installed_version_status: null,
     });
     const blocked = await download({ harness_id: harness.harness_id, ...ASK });
     expect(blocked.status).toBe(404);
@@ -507,6 +519,7 @@ describe('latest_versions', () => {
       store_status: 'unpublished',
       latest_version: null,
       manifest: null,
+      installed_version_status: null,
     });
   });
 
@@ -526,5 +539,104 @@ describe('latest_versions', () => {
     expect(most.body).toHaveLength(1000);
     const tooMany = await latestVersions('anon', [...ids, 'nobody/one-more']);
     expect(tooMany.status).toBe(400);
+  });
+});
+
+/** `latest_versions` with the installed version of each Harness (P0-12.2 follow-up). */
+function latestVersionsOf(
+  ids: readonly string[],
+  installed: readonly (string | null)[],
+): Promise<Reply<LatestVersion[]>> {
+  return rest<LatestVersion[]>('anon', 'POST', 'rpc/latest_versions', {
+    harness_ids: ids,
+    installed_versions: installed,
+  });
+}
+
+describe('latest_versions with installed_versions', () => {
+  it('reports a Takedown of the installed version while the Harness stays available with a newer latest', async () => {
+    const harness = await insertHarness(owner, 'installed-taken-down');
+    const bad = await insertVersion(harness, '1.0.0');
+    await insertVersion(harness, '1.1.0');
+    await serviceRest('PATCH', `harness_versions?id=eq.${bad.id}`, {
+      status: 'taken_down',
+      takedown_note: 'Secret administrator note',
+    });
+    const latest = await storedVersion(harness.harness_id, '1.1.0');
+
+    const reply = await latestVersionsOf([harness.harness_id], ['1.0.0']);
+    expect(reply).toEqual({
+      status: 200,
+      body: [
+        {
+          harness_id: harness.harness_id,
+          store_status: 'available',
+          latest_version: '1.1.0',
+          manifest: latest.manifest,
+          installed_version_status: 'taken_down',
+        },
+      ],
+    });
+    // The takedown note is never public.
+    expect(JSON.stringify(reply.body)).not.toContain('Secret administrator note');
+  });
+
+  it("answers each installed version's status by position, null where none or no such version was given", async () => {
+    const harness = await insertHarness(owner, 'installed-statuses');
+    await insertVersion(harness, '1.0.0', { status: 'unpublished' });
+    await insertVersion(harness, '2.0.0');
+    const missing = `nobody-${randomUUID().slice(0, 8)}/missing`;
+    const reply = await latestVersionsOf(
+      [harness.harness_id, harness.harness_id, harness.harness_id, harness.harness_id, missing],
+      ['2.0.0', '1.0.0', null, '9.9.9', '1.0.0'],
+    );
+    expect(reply.status).toBe(200);
+    expect(
+      reply.body.map((row) => [row.harness_id, row.store_status, row.installed_version_status]),
+    ).toEqual([
+      [harness.harness_id, 'available', 'published'],
+      [harness.harness_id, 'available', 'unpublished'],
+      [harness.harness_id, 'available', null],
+      [harness.harness_id, 'available', null],
+      [missing, 'not_found', null],
+    ]);
+  });
+
+  it('reports the installed version taken down when no published version is left', async () => {
+    const harness = await insertHarness(owner, 'installed-only-taken-down');
+    const only = await insertVersion(harness, '1.0.0');
+    await serviceRest('PATCH', `harness_versions?id=eq.${only.id}`, { status: 'taken_down' });
+    const [row] = (await latestVersionsOf([harness.harness_id], ['1.0.0'])).body;
+    expect(row).toEqual({
+      harness_id: harness.harness_id,
+      store_status: 'unpublished',
+      latest_version: null,
+      manifest: null,
+      installed_version_status: 'taken_down',
+    });
+  });
+
+  it('refuses installed versions of another length than the Harness IDs', async () => {
+    for (const installed of [[], ['1.0.0'], ['1.0.0', '1.0.0', '1.0.0']]) {
+      const reply = await latestVersionsOf(['bob/xiezuo', 'alice/hello-web'], installed);
+      expect(reply.status, JSON.stringify(installed)).toBe(400);
+    }
+  });
+
+  it('answers the one-argument call as before: no installed version status', async () => {
+    const ids = ['bob/xiezuo', 'carol/bad-tool'];
+    const before = await latestVersions('anon', ids);
+    expect(before.status).toBe(200);
+    expect(before.body.map((row) => Object.keys(row).sort())).toEqual([
+      ['harness_id', 'installed_version_status', 'latest_version', 'manifest', 'store_status'],
+      ['harness_id', 'installed_version_status', 'latest_version', 'manifest', 'store_status'],
+    ]);
+    expect(before.body.map((row) => row.installed_version_status)).toEqual([null, null]);
+    // The same rows as with every installed version left out.
+    expect((await latestVersionsOf(ids, [null, null])).body).toEqual(before.body);
+    expect(before.body.map((row) => [row.store_status, row.latest_version])).toEqual([
+      ['available', '1.0.0'],
+      ['taken_down', null],
+    ]);
   });
 });

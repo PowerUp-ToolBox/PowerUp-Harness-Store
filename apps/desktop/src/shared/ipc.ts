@@ -15,6 +15,7 @@ import type {
   Tag,
 } from '@harness-store/manifest';
 import type { Locale } from './i18n/locale.js';
+import type { ReportReason } from './report.js';
 
 /**
  * Error codes the Runtime returns over IPC: its own, then every Model Gateway code
@@ -228,6 +229,27 @@ export interface IpcMethods {
    * `store_error` when it answered with something else.
    */
   'store.publisher': { input: string; output: StorePublisherPage };
+  /**
+   * What a Report of this Harness sends besides what the User types (P0-12.1), for the Report
+   * dialog to show before Submit: this install's random install ID (created and stored the first
+   * time it is needed), this machine's platform and the app version; and whether this install
+   * already sent `REPORTS_PER_HARNESS` (3) Reports of it that the Store took in the last 24 hours,
+   * when the dialog says so instead of offering Submit. Nothing is sent to the Store.
+   */
+  'store.reportInfo': { input: string; output: ReportInfo };
+  /**
+   * Sends a Report to the Store's `report` function (docs/ux/flows.md F8), anonymously: the anon
+   * key alone, whoever is signed in. Main adds `client_info` itself (the install ID, platform and
+   * app version of `store.reportInfo`, nothing else) and puts the contact email, when given, at
+   * the start of `details`. The client-side rate limit is checked again first: a fourth Report of
+   * the Harness within 24 hours answers `rate_limited` without a request, as does the Store's own
+   * limit (429). Only a Report the Store took (201) counts. `invalid_input` for a reason that is
+   * not one of `REPORT_REASONS`, an email that is not like `x@y`, details with the email over 2000
+   * characters, or the Store's 400; `not_found` for a Harness or version the Store does not have;
+   * `store_unreachable` when the Store did not answer (connectivity is checked again);
+   * `store_error` for any other answer.
+   */
+  'store.report': { input: ReportRequest; output: null };
   /** Every Provider of the Gateway's table, in its order, local ones (Ollama, LM Studio) included. */
   'providers.list': { input: undefined; output: readonly ProviderPreset[] };
   /**
@@ -427,6 +449,15 @@ export interface IpcMethods {
    * `store_unreachable` when the Store is offline or did not answer as api.md says.
    */
   'installs.checkUpdates': { input: undefined; output: null };
+  /**
+   * The User confirmed "Launch anyway" for this installed Harness, which the update check found
+   * taken down, or whose installed version it found taken down (P0-12.2): records it in its
+   * `installs` row, so Launch asks no more until the update check finds another Store status or
+   * installed-version status, or another version is installed, and reports it with
+   * `installs.changed`. Nothing changes for a Harness that is not taken down, or already
+   * acknowledged. `not_installed`.
+   */
+  'installs.acknowledgeTakedown': { input: string; output: null };
   /**
    * Launches an installed Harness (docs/tech/architecture.md §4) and answers as soon as its launch
    * has begun; how it goes arrives as `launch.state` events. One instance per Harness: while it
@@ -805,6 +836,18 @@ export interface InstalledHarness {
    */
   readonly storeStatus: InstallStoreStatus | null;
   /**
+   * The last update check found the installed version itself taken down, whatever `storeStatus`
+   * says of the Harness (a newer version may still be offered as `availableUpdate`); false before
+   * a check, for a local install, and once another version is installed.
+   */
+  readonly installedVersionTakenDown: boolean;
+  /**
+   * The User confirmed "Launch anyway" since the update check found it, or its installed version,
+   * taken down (`installs.acknowledgeTakedown`); false whenever that check last changed
+   * `storeStatus` or `installedVersionTakenDown`.
+   */
+  readonly takedownAcknowledged: boolean;
+  /**
    * The newer version the Store offers, which runs on this platform; null when there is none (a
    * local install, a Harness the Store no longer offers, or no check yet).
    */
@@ -1081,6 +1124,33 @@ export interface StoreVersion {
    * the oldest one.
    */
   readonly permissionsChanged: boolean;
+}
+
+/** What a Report sends besides what the User typed (`store.reportInfo`). */
+export interface ReportInfo {
+  /** This install's random ID (a UUID), sent only for the Store's per-install rate limit. */
+  readonly installId: string;
+  /** This machine's platform, `<process.platform>-<process.arch>` (`darwin-arm64`, …). */
+  readonly platform: string;
+  /** The desktop app's version. */
+  readonly appVersion: string;
+  /** This install already sent as many Reports of the Harness as it may in 24 hours. */
+  readonly rateLimited: boolean;
+}
+
+/** A Report as the User filled in the Report dialog (`store.report`). */
+export interface ReportRequest {
+  readonly harnessId: string;
+  /**
+   * The Harness Version reported: the installed one from a Library card, the one the detail page
+   * shows from there; null for the whole Harness.
+   */
+  readonly version: string | null;
+  readonly reason: ReportReason;
+  /** What the User wrote; empty for nothing. */
+  readonly details: string;
+  /** The optional contact email; empty for none. */
+  readonly contactEmail: string;
 }
 
 /**
@@ -1390,6 +1460,8 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'store.search': true,
   'store.detail': true,
   'store.publisher': true,
+  'store.reportInfo': true,
+  'store.report': true,
   'providers.list': true,
   'connections.detectLocal': true,
   'connections.list': true,
@@ -1420,6 +1492,7 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'installs.dataSize': true,
   'installs.list': true,
   'installs.checkUpdates': true,
+  'installs.acknowledgeTakedown': true,
   'launch.start': true,
   'launch.chooseWorkspace': true,
   'launch.lastWorkspace': true,
