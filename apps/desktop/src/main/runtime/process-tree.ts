@@ -25,6 +25,9 @@ export interface SignalOptions {
 /** taskkill's exit code when no process has the pid: it exited before taskkill ran. */
 const TASKKILL_NOT_FOUND = 128;
 
+/** How long taskkill may run before it is ended. */
+const TASKKILL_TIMEOUT_MS = 10_000;
+
 /**
  * Sends `signal` to a Harness process and every process it started, so stopping a Harness never
  * leaves its children running.
@@ -61,7 +64,8 @@ export function signalProcessTree(
       execFile(
         'taskkill',
         ['/T', ...force, '/PID', String(pid)],
-        { windowsHide: true },
+        // A taskkill that hangs on a wedged tree is ended; its outcome then counts as no answer.
+        { windowsHide: true, timeout: TASKKILL_TIMEOUT_MS },
         (error) => {
           // A numeric code is taskkill's own; a string one (ENOENT) means it never ran, and the
           // shutdown sequence then goes on as it would without an answer.

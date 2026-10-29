@@ -686,7 +686,8 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     const graceEnds = Date.now() + STOP_GRACE_MS;
     const exitedInTime = await settlesWithin(launch.exited, STOP_GRACE_MS, refused);
     if (!exitedInTime || !(await processTreeEndsWithin(child.pid, graceEnds - Date.now()))) {
-      await signal('SIGKILL');
+      // Not awaited: a taskkill that hangs must not keep the launch from being recorded as ended.
+      void signal('SIGKILL');
       if (!(await settlesWithin(launch.exited, KILL_WAIT_MS))) {
         runtimeLine(launch, 'The process did not report its exit; the launch is recorded as ended');
       }
