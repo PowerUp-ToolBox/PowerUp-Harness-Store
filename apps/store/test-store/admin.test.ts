@@ -8,7 +8,8 @@
  *
  * Discovery is checked through the very reads P0-09 makes (api.md "Reads": the three home rows,
  * `search_harnesses` and the Publisher page), with the anon key: a taken-down Harness, or version,
- * is in none of them, with no mechanism of its own.
+ * is in none of them, with no mechanism of its own. Search is checked with the owner's own JWT
+ * too (`search_harnesses` is SECURITY INVOKER): the owner does not see their taken-down rows there.
  */
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -459,5 +460,41 @@ describe('Store discovery after a Takedown (the P0-09 reads)', () => {
       `harness_versions?harness_id=eq.${harness.id}&version=eq.2.0.0`,
     );
     expect(detail).toEqual({ status: 200, body: [] });
+  });
+
+  /** `search_harnesses` as `owner` signs in (SECURITY INVOKER, so their own JWT's policies apply). */
+  async function ownerSearch(query: string) {
+    const reply = await rest<{ harness_id: string; latest_version: string }[]>(
+      { token: owner.token },
+      'POST',
+      'rpc/search_harnesses',
+      { q: query },
+    );
+    expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+    return reply.body;
+  }
+
+  it("search with the Publisher's own JWT does not return their taken-down Harness or version", async () => {
+    const query = word();
+    const whole = await harnessWith('gone-own-whole', ['1.0.0'], `Gone ${query} whole`);
+    const version = await harnessWith('gone-own-version', ['1.0.0', '2.0.0'], `Gone ${query} ver`);
+    expect(
+      (await ownerSearch(query)).map((row) => [row.harness_id, row.latest_version]).sort(),
+    ).toEqual(
+      [
+        [whole.harness_id, '1.0.0'],
+        [version.harness_id, '2.0.0'],
+      ].sort(),
+    );
+
+    expect((await cli(['takedown', whole.harness_id, '--note', 'Malware.'])).code).toBe(0);
+    const run = await cli(['takedown', version.harness_id, '--version', '2.0.0', '--note', 'Bad.']);
+    expect(run.code).toBe(0);
+
+    // The owner may read their own versions (harness_versions' owner policy), but search is
+    // still the public catalogue: the whole Takedown is gone and the version one is at 1.0.0.
+    expect((await ownerSearch(query)).map((row) => [row.harness_id, row.latest_version])).toEqual([
+      [version.harness_id, '1.0.0'],
+    ]);
   });
 });
