@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Install, lint, typecheck, test, build
+    name: Install, build, lint, typecheck, test
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -35,6 +35,11 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # Packages import each other through workspace:* and their exports point at dist/,
+      # so everything is built before it is linted, type-checked or tested.
+      - name: Build
+        run: pnpm build
+
       - name: Lint
         run: pnpm lint
 
@@ -43,6 +48,3 @@ jobs:
 
       - name: Test
         run: pnpm test
-
-      - name: Build
-        run: pnpm build

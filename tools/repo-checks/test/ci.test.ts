@@ -40,7 +40,7 @@ describe('CI workflow', () => {
     }
   });
 
-  it('runs exactly the root install, lint, typecheck, test and build commands, in that order', () => {
+  it('runs exactly the root install, build, lint, typecheck and test commands, in that order', () => {
     expect(runCommands).toEqual([
       'pnpm install --frozen-lockfile',
       ...ROOT_COMMANDS.map((command) => `pnpm ${command}`),
