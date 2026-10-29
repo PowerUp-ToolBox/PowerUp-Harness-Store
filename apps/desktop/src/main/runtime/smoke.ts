@@ -273,7 +273,9 @@ export async function runSmoke(options: SmokeOptions): Promise<boolean> {
     }
   } finally {
     clearTimeout(timer);
-    // Stops the Harness (the shutdown sequence) and closes the database.
+    // Stops the Harness (the shutdown sequence) and closes the database. The next step's time
+    // shows how long that took.
+    if (state.runtime !== undefined) step('Stopping the Harness and the Runtime');
     await state.runtime?.shutdown();
   }
   step(passed ? 'PASSED' : 'The smoke run failed');

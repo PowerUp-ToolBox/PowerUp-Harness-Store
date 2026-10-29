@@ -31,8 +31,8 @@ export interface PtyProcess {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   /**
-   * Frees the pty once its process has exited. On Windows that closes the pseudoconsole, which
-   * node-pty only does in its `kill` (ending whatever still runs attached to it), never when the
+   * Frees the pty once its process has exited; called once, after the exit. On Windows that closes
+   * the pseudoconsole and the pipes to it, which node-pty does only in its `kill`, never when the
    * process exits: without it each launch would leave a console host process behind. Elsewhere it
    * does nothing. Never throws.
    */
@@ -81,12 +81,65 @@ export const spawnNodePty: PtySpawner = (options) => {
       child.resize(cols, rows);
     },
     dispose() {
-      if (process.platform !== 'win32') return;
-      try {
-        child.kill();
-      } catch {
-        // Already closed.
-      }
+      if (process.platform === 'win32') closePseudoconsole(child);
     },
   };
 };
+
+/**
+ * The parts of node-pty's Windows terminal (lib/windowsTerminal.js, lib/windowsPtyAgent.js of the
+ * node-pty version package.json pins) that {@link closePseudoconsole} uses. Internal to node-pty,
+ * so every one is checked before it is used.
+ */
+interface WindowsPtyInternals {
+  readonly _agent?: {
+    readonly _pty?: unknown;
+    readonly _useConptyDll?: unknown;
+    readonly _ptyNative?: { readonly kill?: unknown };
+    readonly _conoutSocketWorker?: { readonly dispose?: unknown };
+    readonly inSocket?: { readonly destroy?: unknown };
+  };
+}
+
+/**
+ * Closes the pseudoconsole of a Windows pty whose process has exited: what node-pty's `kill`
+ * does, without the step of it that is unsafe after the exit. `kill` (WindowsPtyAgent.kill, without
+ * conpty.dll) first forks conpty_console_list_agent to list the processes attached to the console
+ * and `process.kill`s each; when that takes over 5 s it kills the Harness's own pid instead. Once
+ * the Harness has exited that pid is dead and Windows may already have given it to an unrelated
+ * process. So this does only the rest of `kill`, each step guarded:
+ * - the native `kill` of the pty's id, which calls ClosePseudoConsole while node-pty still holds
+ *   the pseudoconsole (node-pty's exit thread may already have let it go: it then does nothing);
+ * - disposing of the worker thread that reads the console's output, which closes that pipe;
+ * - destroying the socket that writes its input, which closes that pipe.
+ * With both pipes closed the console host exits. Nothing here signals a process. Never throws: a
+ * node-pty whose internals differ is left as it is.
+ */
+function closePseudoconsole(child: NodePty.IPty): void {
+  const agent = (child as unknown as WindowsPtyInternals)._agent;
+  if (agent === undefined) return;
+  const steps = [
+    () => {
+      const { _ptyNative: native, _pty: id, _useConptyDll: useConptyDll } = agent;
+      if (typeof native?.kill === 'function' && typeof id === 'number') {
+        const kill = native.kill as (id: number, useConptyDll: boolean) => void;
+        kill.call(native, id, useConptyDll === true);
+      }
+    },
+    () => {
+      const worker = agent._conoutSocketWorker;
+      if (typeof worker?.dispose === 'function') (worker.dispose as () => void).call(worker);
+    },
+    () => {
+      const socket = agent.inSocket;
+      if (typeof socket?.destroy === 'function') (socket.destroy as () => void).call(socket);
+    },
+  ];
+  for (const step of steps) {
+    try {
+      step();
+    } catch {
+      // Already closed.
+    }
+  }
+}
