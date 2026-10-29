@@ -583,6 +583,68 @@ describe('calls that overlap', () => {
     expect(changes.map((change) => change.reason)).toEqual(['session_expired', 'signed_in']);
   });
 
+  it('a Store URL change while a sign-in exchanges its code never sends that sign-in to the new URL', async () => {
+    // P0-11: Settings signs out, then switches the Store URL, while the code exchange is under way.
+    let base = FAKE_STORE_URL;
+    const origins: string[] = [];
+    const auth = createAuth({
+      storeBaseUrl: () => base,
+      fetch: (url, init) => {
+        origins.push(new URL(url).origin);
+        return store.fetch(url, init);
+      },
+    });
+
+    const release = store.hold('POST /auth/v1/token?grant_type=pkce');
+    const signingIn = auth.signIn();
+    await vi.waitFor(() => {
+      expect(count('POST /auth/v1/token?grant_type=pkce')).toBe(1);
+    });
+    await auth.signOut();
+    base = 'https://other-store.example';
+    release();
+
+    await expect(signingIn).rejects.toMatchObject({ code: 'sign_in_cancelled' });
+    expect(origins.every((origin) => origin === new URL(FAKE_STORE_URL).origin)).toBe(true);
+    expect(count('GET /rest/v1/profiles')).toBe(0);
+    expect(slot.read()).toBeUndefined();
+  });
+
+  it('a sign-in started while a Store URL change signs out never keeps the old Store’s session', async () => {
+    // P0-11: Settings awaits the revoke at the old Store before it writes the new URL, so a
+    // sign-in started meanwhile pins the old Store and outlives the sign-out.
+    let base = FAKE_STORE_URL;
+    const origins: string[] = [];
+    const auth = createAuth({
+      storeBaseUrl: () => base,
+      fetch: (url, init) => {
+        origins.push(new URL(url).origin);
+        return store.fetch(url, init);
+      },
+    });
+    await auth.signIn();
+
+    const releaseLogout = store.hold('POST /auth/v1/logout');
+    const signingOut = auth.signOut();
+    await vi.waitFor(() => {
+      expect(count('POST /auth/v1/logout')).toBe(1);
+    });
+    const releaseExchange = store.hold('POST /auth/v1/token?grant_type=pkce');
+    const signingIn = auth.signIn();
+    await vi.waitFor(() => {
+      expect(count('POST /auth/v1/token?grant_type=pkce')).toBe(2);
+    });
+    releaseLogout();
+    await signingOut;
+    base = 'https://other-store.example';
+    releaseExchange();
+
+    await expect(signingIn).rejects.toMatchObject({ code: 'sign_in_cancelled' });
+    expect(slot.read()).toBeUndefined();
+    await expect(auth.whoami()).resolves.toEqual({ signedIn: false });
+    expect(origins.every((origin) => origin === new URL(FAKE_STORE_URL).origin)).toBe(true);
+  });
+
   it('a 401 for the token of an earlier sign-in leaves the current one alone', async () => {
     const auth = createAuth();
     await auth.signIn();

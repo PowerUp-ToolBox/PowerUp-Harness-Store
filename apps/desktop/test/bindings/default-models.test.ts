@@ -79,9 +79,9 @@ function call(method: string, input?: unknown) {
 }
 
 function gatewayUrl(path: string): string {
-  const { gateway } = runtime.services.diagnostics.get();
-  if (!gateway.running) throw new Error('The Model Gateway is not running');
-  return `http://127.0.0.1:${String(gateway.port)}${path}`;
+  const port = runtime.gatewayPort();
+  if (port === null) throw new Error('The Model Gateway is not running');
+  return `http://127.0.0.1:${String(port)}${path}`;
 }
 
 /** One chat completion naming `model` (a Slot name), as a Harness sends it. */
@@ -235,7 +235,7 @@ describe('bindings.setGlobal', () => {
     // Setting a Slot again replaces its binding.
     await setGlobal('fast', FAKE, 'model-b');
 
-    const databasePath = runtime.services.diagnostics.get().databasePath;
+    const databasePath = runtime.databasePath;
     await runtime.shutdown();
     const db = new DatabaseSync(databasePath, { readOnly: true });
     try {

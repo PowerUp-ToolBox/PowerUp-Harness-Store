@@ -16,12 +16,18 @@ import {
   type RuntimeOptions,
 } from '../../src/main/runtime/bootstrap.js';
 import { MIGRATIONS } from '../../src/main/runtime/database.js';
+import { DEFAULT_STORE_BASE_URL } from '../../src/main/runtime/connectivity.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
 import { offlineProviderFetch } from '../support/provider-fetch.js';
 
 const MAIN_WINDOW = {};
+/** What `settings.get` answers for the settings these tests leave alone. */
+const SETTINGS_DEFAULTS = {
+  updateCheckInterval: '6h',
+  defaultStoreBaseUrl: DEFAULT_STORE_BASE_URL,
+} as const;
 
 let dataDir: string;
 let started: Runtime[];
@@ -63,9 +69,9 @@ function call(runtime: Runtime, method: string, input?: unknown) {
 }
 
 function gatewayPort(runtime: Runtime): number {
-  const { gateway } = runtime.services.diagnostics.get();
-  if (!gateway.running) throw new Error('The Model Gateway is not running');
-  return gateway.port;
+  const port = runtime.gatewayPort();
+  if (port === null) throw new Error('The Model Gateway is not running');
+  return port;
 }
 
 /** Resolves true when a TCP connection to 127.0.0.1:`port` opens, false when it is refused. */
@@ -110,7 +116,7 @@ const USAGE_RECORD: UsageRecord = {
 
 /** The rows of usage_records in the Runtime's database, read after it has shut down. */
 function usageRows(runtime: Runtime): unknown[] {
-  const db = new DatabaseSync(runtime.services.diagnostics.get().databasePath, { readOnly: true });
+  const db = new DatabaseSync(runtime.databasePath, { readOnly: true });
   try {
     return db.prepare('SELECT harness_id, provider, model, status FROM usage_records').all();
   } finally {
@@ -136,7 +142,7 @@ describe('startRuntime on a clean install', () => {
   it('creates the SQLite file in the data directory with the tables of every migration', async () => {
     const runtime = await launch();
     expect(runtime.status).toEqual({ state: 'ready' });
-    const { databasePath } = runtime.services.diagnostics.get();
+    const { databasePath } = runtime;
     expect(databasePath).toBe(join(dataDir, 'harness-store.sqlite'));
     expect(existsSync(databasePath)).toBe(true);
     await runtime.shutdown();
@@ -157,7 +163,10 @@ describe('startRuntime on a clean install', () => {
       ok: true,
       data: {
         version: '1.2.3',
-        gateway: { running: true, port: expect.any(Number) as number },
+        // The real probe reached it.
+        gateway: { running: true, port: expect.any(Number) as number, reachable: true },
+        nodeVersion: process.versions.node,
+        dataRoot: dataDir,
         databasePath: join(dataDir, 'harness-store.sqlite'),
       },
     });
@@ -195,7 +204,7 @@ describe('Runtime.shutdown', () => {
     const port = gatewayPort(runtime);
     await runtime.shutdown();
     await expect(canConnect(port)).resolves.toBe(false);
-    expect(runtime.services.diagnostics.get().gateway).toEqual({ running: false });
+    expect(runtime.gatewayPort()).toBeNull();
   });
 
   it('is idempotent and stops saving the window state once it began', async () => {
@@ -264,7 +273,12 @@ describe('relaunch after a clean quit', () => {
     expect(second.status).toEqual({ state: 'ready' });
     await expect(call(second, 'settings.get')).resolves.toEqual({
       ok: true,
-      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN', onboardingDone: false },
+      data: {
+        locale: 'zh-CN',
+        resolvedLocale: 'zh-CN',
+        onboardingDone: false,
+        ...SETTINGS_DEFAULTS,
+      },
     });
     expect(second.windowState.read()).toEqual(windowState);
     await second.shutdown();
@@ -292,7 +306,7 @@ describe('startup failures', () => {
       ok: true,
       data: runtime.status,
     });
-    expect(runtime.services.diagnostics.get().gateway).toEqual({ running: false });
+    expect(runtime.gatewayPort()).toBeNull();
     expect(logError).toHaveBeenCalledOnce();
   });
 
@@ -306,7 +320,7 @@ describe('startup failures', () => {
     // Without the database the UI still follows the OS locale, for the error screen.
     await expect(call(runtime, 'settings.get')).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'zh-CN', onboardingDone: false },
+      data: { resolvedLocale: 'zh-CN', onboardingDone: false, ...SETTINGS_DEFAULTS },
     });
     expect(runtime.windowState.read()).toBeNull();
   });
@@ -330,7 +344,7 @@ describe('startup failures', () => {
     expect(createGatewaySpy).not.toHaveBeenCalled();
     await expect(call(runtime, 'settings.get')).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'en', onboardingDone: false },
+      data: { resolvedLocale: 'en', onboardingDone: false, ...SETTINGS_DEFAULTS },
     });
     expect(runtime.windowState.read()).toBeNull();
   });

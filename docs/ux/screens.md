@@ -10,7 +10,7 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Elements.** Sidebar items in order: Library, Store, Models, Publish, Usage, Settings. Header: page title (the Store's search sits in its own filter row, see Store home). Global toast area bottom-right.
 
-**States.** Offline → persistent banner "You're offline. Library and Models still work." / "当前离线。资源库和模型页仍可使用。" Update badge on Library when any installed Harness has an update.
+**States.** Offline → persistent banner "You're offline. Library and Models still work." / "当前离线。资源库和模型页仍可使用。" Custom Store URL set in Settings → a banner beside it on every main screen (not the first-run wizard) that cannot be dismissed: "You're using a custom Store: {url}" / "正在使用自定义商店：{url}" with the link "Change in Settings" / "在设置中更改" (P0-11). Update badge on Library when any installed Harness has an update.
 
 **Key copy.** Library / 资源库 · Store / 商店 · Models / 模型 · Publish / 发布 · Usage / 用量 · Settings / 设置.
 
@@ -197,11 +197,11 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** Show tokens consumed through the Model Gateway, locally.
 
-**Elements.** Period selector (Today, 7 days, 30 days, All), totals (requests, prompt tokens, completion tokens), table grouped by Harness then model with last used, filters by Harness and Provider, Export CSV, Clear usage data.
+**Elements.** A note that the records stay on this machine. Period selector (Today, 7 days (default, not remembered), 30 days, All). Filters by Harness and Provider (All Harnesses / All Providers, then every one ever recorded; a Harness by its installed name, else its ID; a Provider by its Connection's name, else its ID). Totals tiles: Requests, Errors, Prompt tokens, Completion tokens. Table "Usage by Harness and model": a row per Harness with its model rows ("{model}", "via {Provider}") beneath, most recently used first, columns Requests, Errors, Prompt tokens, Completion tokens, Last used. Table "Daily breakdown": a row per day with records, newest first, same columns without Last used. Export CSV, Clear usage data. Tokens only, no cost.
 
-**States.** Empty: "Launch a Harness to see usage here". Unknown counts shown as a dash with tooltip. Clear confirmation.
+**States.** Empty (no Usage Record at all, also after Clear): "Launch a Harness to see usage here". A period or filter matching nothing: zero totals and empty tables. A token cell whose `ok` requests all lacked counts: a dash with tooltip; some lacked counts: the known sum with the dash beside it. Clear confirmation (shared with Settings). Export: "Saved {file}" when written; an export error stays until the next export.
 
-**Key copy.** Requests / 请求数 · Prompt tokens / 输入 token · Completion tokens / 输出 token · Last used / 最近使用 · "This Provider did not report usage" / "该 Provider 未返回用量信息" · Export CSV / 导出 CSV · Clear usage data / 清除用量数据.
+**Key copy.** "Counted by the Model Gateway on this machine. Usage Records never leave it." / "由本机的 Model Gateway 统计，用量记录不会离开本机。" · Today / 今天 · 7 days / 7 天 · 30 days / 30 天 · All / 全部 · Requests / 请求数 · Errors / 失败 · Prompt tokens / 输入 token · Completion tokens / 输出 token · Last used / 最近使用 · "Usage by Harness and model" / "按 Harness 和模型统计的用量" · "via {provider}" / "通过 {provider}" · Daily breakdown / 每日明细 · "This Provider did not report usage" / "该 Provider 未返回用量信息" · Export CSV / 导出 CSV · Clear usage data / 清除用量数据 · "Clear usage data?" / "清除用量数据？" · "This deletes every Usage Record on this machine." / "这会删除本机上的所有用量记录。" · Usage data cleared / 已清除用量数据.
 
 ---
 
@@ -209,11 +209,11 @@ One entry per screen. Each gives purpose, primary elements, states, key copy (en
 
 **Purpose.** App-level preferences.
 
-**Elements.** Language (System, English, 简体中文). Appearance (System, Light, Dark). Local Provider detection on startup (toggle). Terminal font size. Data location (path display, Open folder, Move… deferred if complex). Check for Harness updates (interval and Check now). About (version, licenses). Sign out (when signed in). Danger zone: Reset app (confirm).
+**Elements.** In order: Language (System, English, 简体中文). Check for Harness updates (Every hour, Every 6 hours (default), Every 24 hours, Never; Check now). Data location (the app data root, Open folder, Open logs folder). Advanced, collapsed: Store URL (field showing the default, Apply, Use default). First-run setup (Re-run setup). Usage data (Clear usage data, with the Usage page's confirmation). Diagnostics (version, Model Gateway status and port, Node, data root, local database; Copy diagnostics). Every value applies at once with no Save button, except the Store URL, which applies with Apply because a new Store signs the User out. Not in P0: Appearance, local Provider detection toggle, terminal font size, Move data location, Licenses, Sign out (it is on Publish), Reset app.
 
-**States.** Language change applies immediately with a note that running Harnesses keep their launch locale until relaunched.
+**States.** Language change applies immediately with a note that running Harnesses keep their launch locale until relaunched. Never: a note that the Store is asked about updates only on Check now. Check now disabled while offline or checking; then a toast with the number of updates available, or the error inline. Store URL refused: the reason beside the field. Custom Store URL: the shell's banner on every main screen. Model Gateway: running on port N, not reachable on port N, or not running (read when the page opens and after Copy).
 
-**Key copy.** Language / 语言 · Appearance / 外观 · Detect local Providers on startup / 启动时检测本地模型 · Data location / 数据位置 · Check now / 立即检查 · Sign out / 退出登录 · Reset app / 重置应用.
+**Key copy.** Language / 语言 · Check for Harness updates / 检查 Harness 更新 · Every hour / 每小时 · Every 6 hours / 每 6 小时 · Every 24 hours / 每 24 小时 · Never / 从不 · Check now / 立即检查 · "Checked the Store. No updates available." / "已检查商店，没有可用更新。" · Data location / 数据位置 · Open folder / 打开文件夹 · Open logs folder / 打开日志文件夹 · Advanced / 高级 · Store URL / 商店地址 · "Applying a new address signs you out of the Store." / "应用新地址会退出商店登录。" · Apply / 应用 · Use default / 恢复默认 · Re-run setup / 重新运行设置向导 · Clear usage data / 清除用量数据 · Diagnostics / 诊断信息 · "Not reachable on port {port}" / "无法访问，端口 {port}" · Copy diagnostics / 复制诊断信息 · Diagnostics copied / 已复制诊断信息.
 
 ---
 

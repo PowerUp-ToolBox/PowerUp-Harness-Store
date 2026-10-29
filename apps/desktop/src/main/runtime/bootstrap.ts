@@ -2,7 +2,14 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { createGateway, type Gateway, type GatewayOptions } from '@harness-store/gateway';
-import type { IpcEventName, IpcEvents, StartupStage, StartupStatus } from '../../shared/ipc.js';
+import type {
+  AppFolder,
+  IpcEventName,
+  IpcEvents,
+  IpcResult,
+  StartupStage,
+  StartupStatus,
+} from '../../shared/ipc.js';
 import { createBindingsService, createBindingsStub, resolveHarnessSlot } from './bindings.js';
 import { createConnectionStore, type ConnectionStore } from './connection-store.js';
 import {
@@ -14,16 +21,19 @@ import {
 } from './connections.js';
 import {
   createConnectivityService,
+  DEFAULT_STORE_BASE_URL,
   storeAnonKey,
   storeBaseUrlFrom,
   type ConnectivityService,
   type FetchLike,
 } from './connectivity.js';
 import { DATABASE_FILE_NAME, openDatabase } from './database.js';
+import { createDiagnosticsService, probeGateway } from './diagnostics.js';
 import { createGatewayHost } from './gateway-host.js';
 import { harnessPaths, platformOf } from './harness-paths.js';
 import { createInstallStore, type InstallStore } from './install-store.js';
 import { createInstaller, createInstallsStub, type InstallsService } from './installer.js';
+import { fail, ok } from './ipc-result.js';
 import { createLaunchStore, type LaunchStore } from './launch-store.js';
 import { createLocalDetector, type LocalProbeTarget } from './local-detection.js';
 import type { PipedSpawner } from './piped-process.js';
@@ -36,7 +46,7 @@ import {
   createSqliteSessionSlot,
   type SessionSlot,
 } from './session-slot.js';
-import { createSettingsService } from './settings.js';
+import { createSettingsService, updateCheckIntervalMs } from './settings.js';
 import {
   createMemorySettingsStore,
   createSqliteSettingsStore,
@@ -53,6 +63,7 @@ import {
   type Supervisor,
 } from './supervisor.js';
 import { createUpdateChecker, type UpdateChecker } from './update-check.js';
+import { createUsageService, createUsageStub } from './usage.js';
 import { createUsageRecordStore, type UsageRecordStore } from './usage-records.js';
 import { parseWindowState, type WindowState } from './window-state.js';
 
@@ -107,6 +118,11 @@ export interface RuntimeOptions {
    */
   readonly pickFolder?: (defaultPath?: string | null) => Promise<string | null>;
   /**
+   * Opens the OS save dialog (Electron's `dialog`) with this file name and resolves the chosen
+   * path, or null when the User cancels: the Usage page's CSV export. Default: always cancelled.
+   */
+  readonly pickSaveFile?: (defaultName: string) => Promise<string | null>;
+  /**
    * This machine's platform as `<process.platform>-<process.arch>`, which decides whether an
    * installed Harness can run here. Default: this process's.
    */
@@ -119,10 +135,17 @@ export interface RuntimeOptions {
    */
   readonly harnessWindows?: HarnessWindows;
   /**
-   * Opens a file or folder with the OS (Electron's `shell.openPath`), a launch's log or a Data
-   * Directory, resolving whether the OS opened it.
+   * Opens a file or folder with the OS (Electron's `shell.openPath`), a launch's log, a Data
+   * Directory, the app data root or its logs folder, resolving whether the OS opened it.
    */
   readonly openPath?: (path: string) => Promise<boolean>;
+  /** Puts text on the clipboard (Electron's `clipboard.writeText`): Copy diagnostics. */
+  readonly writeClipboard?: (text: string) => Promise<void>;
+  /**
+   * Whether the Model Gateway on this port answers now, for the diagnostics. Default:
+   * {@link probeGateway}; tests simulate a Gateway that does not answer.
+   */
+  readonly probeGateway?: (port: number) => Promise<boolean>;
   /** Clears a web Harness's browser session when it is uninstalled (see createInstaller). */
   readonly clearHarnessSession?: (harnessId: string) => Promise<void>;
   /**
@@ -149,10 +172,10 @@ export interface RuntimeOptions {
    */
   readonly logError?: (message: string, error: unknown) => void;
   /**
-   * When the background update check runs: first after `firstDelayMs` (default 10 s), then every
-   * `intervalMs` (default 6 hours).
+   * When the background update check runs first: after `firstDelayMs` (default 10 s). Then it runs
+   * every `update_check_interval` (6 hours unless the User chose another), or never.
    */
-  readonly updateCheck?: { readonly firstDelayMs?: number; readonly intervalMs?: number };
+  readonly updateCheck?: { readonly firstDelayMs?: number };
 }
 
 /** The started Runtime: its IPC services and what the Electron entry point needs around them. */
@@ -166,6 +189,10 @@ export interface Runtime {
    * Store's images (`store-asset:`) from it.
    */
   storeBaseUrl(): string;
+  /** The SQLite database file in the data directory. */
+  readonly databasePath: string;
+  /** The Model Gateway's port while it listens; null before, after a failed start and on shutdown. */
+  gatewayPort(): number | null;
   /**
    * The Publisher's Store sign-in. The Electron entry point hands it every
    * `harnessstore://auth-callback` URL the OS opens the app with; Store clients (P0-08) take
@@ -266,6 +293,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       }),
       onUsage: (record) => {
         usageRecords.insert(record);
+        options.emit?.('usage.recorded', { harnessId: record.harnessId });
         return Promise.resolve();
       },
     });
@@ -279,7 +307,21 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
 
   const store = sqlite?.settings ?? createMemorySettingsStore();
-  const settings = createSettingsService(store, options.osLocale);
+  // `auth`, `storeCatalogue`, `connectivity` and `updates` are created below; these run only on a
+  // `settings.set`.
+  const settings = createSettingsService(store, options.osLocale, {
+    // signOut does nothing when nobody is signed in, and cancels a sign-in under way.
+    beforeStoreChange: async () => {
+      await auth.signOut();
+    },
+    afterStoreChange: () => {
+      storeCatalogue.clearCache();
+      void connectivity.storeChanged();
+    },
+    afterUpdateIntervalChange: () => {
+      updates?.reschedule();
+    },
+  });
   const platform = platformOf(options.platform ?? `${process.platform}-${process.arch}`);
   const connectionStore = sqlite?.connections;
   const connections: ConnectionsService =
@@ -390,6 +432,7 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           platform,
           connectivity,
           onChanged: (harnessId) => options.emit?.('installs.changed', { harnessId }),
+          intervalMs: () => updateCheckIntervalMs(settings.get().updateCheckInterval),
           ...options.updateCheck,
         });
   if (startupStatus.state === 'ready') updates?.start();
@@ -432,19 +475,31 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
     status: startupStatus,
     connectivity,
     storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
+    databasePath,
+    gatewayPort: () => gatewayPort,
     auth,
     supervisor,
-    updates: { check: () => updates?.check() ?? Promise.resolve() },
+    updates: { check: () => updates?.check() ?? Promise.resolve(false) },
     services: {
-      app: { version: options.version, status: () => startupStatus, quit: options.quit },
-      settings,
-      diagnostics: {
-        get: () => ({
-          version: options.version,
-          gateway: gatewayPort === null ? { running: false } : { running: true, port: gatewayPort },
-          databasePath,
-        }),
+      app: {
+        version: options.version,
+        status: () => startupStatus,
+        quit: options.quit,
+        openFolder: (folder) =>
+          openAppFolder(options.dataDir, folder, options.openPath ?? (() => Promise.resolve(true))),
       },
+      settings,
+      diagnostics: createDiagnosticsService({
+        version: options.version,
+        dataRoot: options.dataDir,
+        databasePath,
+        gatewayPort: () => gatewayPort,
+        probe: options.probeGateway ?? ((port) => probeGateway(port)),
+        storeBaseUrl: () => storeBaseUrlFrom(store.read('store_base_url')),
+        isDefaultStore: () =>
+          storeBaseUrlFrom(store.read('store_base_url')) === DEFAULT_STORE_BASE_URL,
+        writeClipboard: options.writeClipboard ?? (() => Promise.resolve()),
+      }),
       connectivity,
       store: storeCatalogue,
       providers: { list: () => providerPresets() },
@@ -455,8 +510,18 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
           : createBindingsService(sqlite.connections, sqlite.installs),
       auth,
       installs,
+      updates: { check: () => updates?.check() ?? Promise.resolve(false) },
       launch: supervisor,
       publish,
+      usage:
+        sqlite === null
+          ? createUsageStub()
+          : createUsageService({
+              store: sqlite.usageRecords,
+              pickSaveFile: options.pickSaveFile ?? (() => Promise.resolve(null)),
+              logError,
+              ...(options.now === undefined ? {} : { now: options.now }),
+            }),
     },
     windowState: {
       read() {
@@ -492,6 +557,20 @@ export async function startRuntime(options: RuntimeOptions): Promise<Runtime> {
       return stopped;
     },
   };
+}
+
+/**
+ * Opens the app data root, or its `logs` folder (every Harness's launch logs), with the OS,
+ * creating the folder when missing.
+ */
+async function openAppFolder(
+  dataDir: string,
+  folder: AppFolder,
+  openPath: (path: string) => Promise<boolean>,
+): Promise<IpcResult<null>> {
+  const path = folder === 'logs' ? harnessPaths(dataDir).logs : dataDir;
+  mkdirSync(path, { recursive: true });
+  return (await openPath(path)) ? ok(null) : fail('open_failed', { path });
 }
 
 /** An error's message followed by its causes', for the startup error screen's details. */

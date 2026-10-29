@@ -6,17 +6,28 @@ import { createInstallsStub } from '../src/main/runtime/installer.js';
 import { fail, ok } from '../src/main/runtime/ipc-result.js';
 import type { Services } from '../src/main/runtime/services.js';
 import { StoreAuthError } from '../src/main/runtime/store-auth.js';
+import { createUsageStub } from '../src/main/runtime/usage.js';
 import { translatorFor } from '../src/shared/i18n/translate.js';
 import {
   IPC_METHODS,
+  type AppFolder,
   type IpcResult,
+  type Settings,
   type StoreDetail,
   type StoreHomeRequest,
   type StorePublisherPage,
   type StoreSearchRequest,
+  type UsageQuery,
+  type UsageRow,
 } from '../src/shared/ipc.js';
 
 const MAIN_WINDOW = { id: 'main window webContents' };
+const SETTINGS: Settings = {
+  resolvedLocale: 'en',
+  onboardingDone: false,
+  updateCheckInterval: '6h',
+  defaultStoreBaseUrl: 'http://127.0.0.1:54321',
+};
 const quit = vi.fn();
 const stopWatching = vi.fn();
 const cancel = vi.fn();
@@ -41,22 +52,34 @@ const publisher = vi.fn<(login: string) => Promise<IpcResult<StorePublisherPage>
   Promise.resolve(ok({ platform: 'darwin-arm64', publisher: null })),
 );
 const resolveManifest = vi.fn(() => ok([{ slot: 'default', binding: null }]));
+const openFolder = vi.fn((folder: AppFolder) =>
+  Promise.resolve(folder === 'logs' ? ok(null) : fail('open_failed', { path: '/profile' })),
+);
+const copyDiagnostics = vi.fn(() => Promise.resolve());
+let storeAnswers = true;
+const checkUpdates = vi.fn(() => Promise.resolve(storeAnswers));
+const query = vi.fn<(query: UsageQuery) => readonly UsageRow[]>(() => []);
 const fakeServices: Services = {
   app: {
     version: '1.2.3',
     status: () => ({ state: 'failed', stage: 'gateway', detail: 'listen EADDRINUSE' }),
     quit,
+    openFolder,
   },
   settings: {
-    get: () => ({ resolvedLocale: 'en', onboardingDone: false }),
-    set: () => ({ resolvedLocale: 'en', onboardingDone: true }),
+    get: () => SETTINGS,
+    set: () => Promise.resolve({ ...SETTINGS, onboardingDone: true }),
   },
   diagnostics: {
-    get: () => ({
-      version: '1.2.3',
-      gateway: { running: true, port: 51234 },
-      databasePath: '/profile/harness-store.sqlite',
-    }),
+    get: () =>
+      Promise.resolve({
+        version: '1.2.3',
+        gateway: { running: true, port: 51234, reachable: false },
+        nodeVersion: '24.1.0',
+        dataRoot: '/profile',
+        databasePath: '/profile/harness-store.sqlite',
+      }),
+    copy: copyDiagnostics,
   },
   connectivity: {
     get: () => ({ state: 'offline' }),
@@ -88,6 +111,7 @@ const fakeServices: Services = {
       }),
   },
   installs: { ...createInstallsStub(), chooseFolder: () => Promise.resolve('/Users/me/hello') },
+  updates: { check: checkUpdates },
   launch: {
     start: (harnessId, workspace) =>
       Promise.resolve(
@@ -122,6 +146,7 @@ const fakeServices: Services = {
     unpublish: ({ harnessId, version }) =>
       Promise.resolve(ok({ harnessId, version, latestVersion: null })),
   },
+  usage: { ...createUsageStub(), query },
 };
 const en = translatorFor('en');
 
@@ -165,16 +190,70 @@ describe('IPC handlers against a fake service container', () => {
     expect(quit).toHaveBeenCalledOnce();
   });
 
-  it('diagnostics.get returns the version, Model Gateway status and database path', async () => {
+  it('diagnostics.get returns the version, Model Gateway status and paths', async () => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method: 'diagnostics.get' })).resolves.toEqual({
       ok: true,
       data: {
         version: '1.2.3',
-        gateway: { running: true, port: 51234 },
+        gateway: { running: true, port: 51234, reachable: false },
+        nodeVersion: '24.1.0',
+        dataRoot: '/profile',
         databasePath: '/profile/harness-store.sqlite',
       },
     });
+  });
+
+  it('diagnostics.copy has main copy the diagnostics', async () => {
+    const { dispatch } = dispatcherFor();
+    copyDiagnostics.mockClear();
+    await expect(dispatch(MAIN_WINDOW, { method: 'diagnostics.copy' })).resolves.toEqual({
+      ok: true,
+      data: null,
+    });
+    expect(copyDiagnostics).toHaveBeenCalledOnce();
+  });
+
+  it.each(['logs', 'dataRoot'] as const)('app.openFolder opens %s', async (input) => {
+    const { dispatch } = dispatcherFor();
+    await dispatch(MAIN_WINDOW, { method: 'app.openFolder', input });
+    expect(openFolder).toHaveBeenLastCalledWith(input);
+  });
+
+  it('app.openFolder answers open_failed with the path the OS could not open', async () => {
+    const { dispatch } = dispatcherFor();
+    await expect(
+      dispatch(MAIN_WINDOW, { method: 'app.openFolder', input: 'dataRoot' }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'open_failed', params: { path: '/profile' } },
+    });
+  });
+
+  it.each([undefined, 'data', '/etc', { folder: 'logs' }])(
+    'app.openFolder rejects %j as invalid_input',
+    async (input) => {
+      const { dispatch } = dispatcherFor();
+      openFolder.mockClear();
+      await expect(
+        dispatch(MAIN_WINDOW, { method: 'app.openFolder', input }),
+      ).resolves.toMatchObject({ ok: false, error: { code: 'invalid_input' } });
+      expect(openFolder).not.toHaveBeenCalled();
+    },
+  );
+
+  it('installs.checkUpdates answers null when the Store answered, else store_unreachable', async () => {
+    const { dispatch } = dispatcherFor();
+    storeAnswers = true;
+    await expect(dispatch(MAIN_WINDOW, { method: 'installs.checkUpdates' })).resolves.toEqual({
+      ok: true,
+      data: null,
+    });
+    storeAnswers = false;
+    await expect(dispatch(MAIN_WINDOW, { method: 'installs.checkUpdates' })).resolves.toMatchObject(
+      { ok: false, error: { code: 'store_unreachable' } },
+    );
+    storeAnswers = true;
   });
 
   it('connectivity.get returns what the last Store check found', async () => {
@@ -322,6 +401,7 @@ describe('IPC handlers against a fake service container', () => {
     'app.status',
     'app.quit',
     'diagnostics.get',
+    'diagnostics.copy',
     'connectivity.get',
     'connectivity.check',
     'providers.list',
@@ -333,7 +413,9 @@ describe('IPC handlers against a fake service container', () => {
     'auth.whoami',
     'installs.chooseFolder',
     'installs.list',
+    'installs.checkUpdates',
     'launch.status',
+    'usage.clear',
   ])('%s rejects any input as invalid_input', async (method) => {
     const { dispatch } = dispatcherFor();
     await expect(dispatch(MAIN_WINDOW, { method, input: {} })).resolves.toMatchObject({
@@ -341,6 +423,70 @@ describe('IPC handlers against a fake service container', () => {
       error: { code: 'invalid_input', params: { method } },
     });
   });
+
+  it('usage.query passes a valid query on with its bounds as toISOString writes them', async () => {
+    const { dispatch } = dispatcherFor();
+    query.mockClear();
+    await expect(
+      dispatch(MAIN_WINDOW, {
+        method: 'usage.query',
+        input: {
+          from: '2026-10-22T04:00:00Z',
+          to: '2026-10-29T00:00:00.5-04:00',
+          harnessId: 'acme/hello',
+          providerId: 'openai-compatible:vllm',
+          groupBy: ['harness', 'model'],
+        },
+      }),
+    ).resolves.toEqual({ ok: true, data: [] });
+    expect(query).toHaveBeenCalledWith({
+      from: '2026-10-22T04:00:00.000Z',
+      to: '2026-10-29T04:00:00.500Z',
+      harnessId: 'acme/hello',
+      providerId: 'openai-compatible:vllm',
+      groupBy: ['harness', 'model'],
+    });
+  });
+
+  it.each([
+    undefined,
+    null,
+    [],
+    { from: null, to: null },
+    { from: null, to: null, groupBy: 'harness' },
+    { from: null, to: null, groupBy: ['harness', 'harness'] },
+    { from: null, to: null, groupBy: ['status'] },
+    { from: null, to: null, groupBy: ['harness_id; DROP TABLE usage_records'] },
+    { from: '2026-10-22', to: null, groupBy: [] },
+    { from: 'yesterday', to: null, groupBy: [] },
+    { from: '2026-13-40T00:00:00Z', to: null, groupBy: [] },
+    { from: 0, to: null, groupBy: [] },
+    { to: null, groupBy: [] },
+    { from: null, to: null, harnessId: '', groupBy: [] },
+    { from: null, to: null, providerId: 7, groupBy: [] },
+    { from: null, to: null, groupBy: [], extra: true },
+  ])('usage.query rejects %j as invalid_input', async (input) => {
+    const { dispatch } = dispatcherFor();
+    query.mockClear();
+    await expect(dispatch(MAIN_WINDOW, { method: 'usage.query', input })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'invalid_input', params: { method: 'usage.query' } },
+    });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, { from: null, to: null, groupBy: [] }, { from: 'today', to: null }])(
+    'usage.export rejects %j as invalid_input',
+    async (input) => {
+      const { dispatch } = dispatcherFor();
+      await expect(dispatch(MAIN_WINDOW, { method: 'usage.export', input })).resolves.toMatchObject(
+        {
+          ok: false,
+          error: { code: 'invalid_input', params: { method: 'usage.export' } },
+        },
+      );
+    },
+  );
 
   it.each([undefined, 42, { id: 'anthropic' }])(
     'connections.remove rejects %j as invalid_input',

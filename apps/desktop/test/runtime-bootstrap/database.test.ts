@@ -76,6 +76,7 @@ describe('openDatabase', () => {
       'index slot_bindings_provider_id',
       'table usage_records',
       'index usage_records_harness_id_timestamp',
+      'index usage_records_timestamp',
     ]);
     expect(columns(db, 'settings')).toEqual(['key', 'value']);
     expect(columns(db, 'usage_records')).toEqual([
@@ -97,6 +98,8 @@ describe('openDatabase', () => {
       'harness_id',
       'timestamp',
     ]);
+    const byTime = db.prepare("PRAGMA index_info('usage_records_timestamp')").all();
+    expect(byTime.map((column) => (column as { name: string }).name)).toEqual(['timestamp']);
     expect(columns(db, 'installs')).toEqual([
       'harness_id',
       'version',

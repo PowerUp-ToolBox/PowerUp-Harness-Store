@@ -317,9 +317,9 @@ describe('installs.installFromFolder', () => {
       launchId: 'launch-1',
       locale: 'en',
     });
-    const { gateway: running } = runtime.services.diagnostics.get();
-    if (!running.running) throw new Error('The Model Gateway is not running');
-    const response = await fetch(`http://127.0.0.1:${String(running.port)}/v1/harness/context`, {
+    const port = runtime.gatewayPort();
+    if (port === null) throw new Error('The Model Gateway is not running');
+    const response = await fetch(`http://127.0.0.1:${String(port)}/v1/harness/context`, {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(response.status).toBe(200);

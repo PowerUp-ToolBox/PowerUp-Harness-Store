@@ -105,9 +105,9 @@ function editManifest(change: (manifest: Record<string, unknown>) => void) {
 
 /** What a request for `slot` resolved to: the response's `model`, or the error code. */
 async function resolvedModel(slot: string): Promise<string> {
-  const { gateway } = runtime.services.diagnostics.get();
-  if (!gateway.running) throw new Error('The Model Gateway is not running');
-  const response = await fetch(`http://127.0.0.1:${String(gateway.port)}/v1/chat/completions`, {
+  const port = runtime.gatewayPort();
+  if (port === null) throw new Error('The Model Gateway is not running');
+  const response = await fetch(`http://127.0.0.1:${String(port)}/v1/chat/completions`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ model: slot, messages: [{ role: 'user', content: 'hello there' }] }),
@@ -263,7 +263,7 @@ describe('Recommended Models and Model Overrides through the Gateway HTTP seam',
       target: { connectionId: 'ollama', model: 'model-a' },
     });
     await override('fast', 'ollama', 'model-c');
-    const db = new DatabaseSync(runtime.services.diagnostics.get().databasePath, {
+    const db = new DatabaseSync(runtime.databasePath, {
       readOnly: true,
     });
     try {

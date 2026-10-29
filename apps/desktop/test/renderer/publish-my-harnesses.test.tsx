@@ -17,7 +17,13 @@ import type {
   OwnVersion,
   UnpublishedVersion,
 } from '../../src/shared/ipc.js';
-import { connectivityResult, FAKE_PUBLISHER, installFakeApi, renderApp } from './render-app.js';
+import {
+  connectivityResult,
+  FAKE_DEFAULT_STORE_URL,
+  FAKE_PUBLISHER,
+  installFakeApi,
+  renderApp,
+} from './render-app.js';
 
 afterEach(() => {
   cleanup();
@@ -342,7 +348,13 @@ describe('My Harnesses', () => {
     const api = signedIn();
     api.settings.get.mockResolvedValue({
       ok: true,
-      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN', onboardingDone: true },
+      data: {
+        locale: 'zh-CN',
+        resolvedLocale: 'zh-CN',
+        onboardingDone: true,
+        updateCheckInterval: '6h',
+        defaultStoreBaseUrl: FAKE_DEFAULT_STORE_URL,
+      },
     });
     await renderApp('#/publish');
     fireEvent.click(await screen.findByRole('tab', { name: '我的 Harness' }));

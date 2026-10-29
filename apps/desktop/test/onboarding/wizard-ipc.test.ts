@@ -6,6 +6,7 @@ import { PROVIDERS, createGateway, type GatewayOptions } from '@harness-store/ga
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startRuntime, type Runtime } from '../../src/main/runtime/bootstrap.js';
 import { parseConnectionDraft, providerPresets } from '../../src/main/runtime/connections.js';
+import { DEFAULT_STORE_BASE_URL } from '../../src/main/runtime/connectivity.js';
 import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { parseSettingsPatch } from '../../src/main/runtime/settings.js';
@@ -13,6 +14,11 @@ import { createFakeCipher } from '../support/fake-cipher.js';
 import { anthropicProviderFetch } from '../support/provider-fetch.js';
 
 const MAIN_WINDOW = {};
+/** What `settings.get` answers for the settings these tests leave alone. */
+const SETTINGS_DEFAULTS = {
+  updateCheckInterval: '6h',
+  defaultStoreBaseUrl: DEFAULT_STORE_BASE_URL,
+} as const;
 
 let dataDir: string;
 let started: Runtime[];
@@ -64,7 +70,7 @@ function call(runtime: Runtime, method: string, input?: unknown) {
 
 /** The `onboarding_done` row of the settings table, JSON-decoded; undefined when absent. */
 function storedOnboardingDone(runtime: Runtime): unknown {
-  const db = new DatabaseSync(runtime.services.diagnostics.get().databasePath, { readOnly: true });
+  const db = new DatabaseSync(runtime.databasePath, { readOnly: true });
   try {
     const row = db.prepare("SELECT value FROM settings WHERE key = 'onboarding_done'").get() as
       { value: string } | undefined;
@@ -88,7 +94,7 @@ describe('onboarding_done across launches', () => {
     const first = await launch();
     await expect(call(first, 'settings.set', { onboardingDone: true })).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'en', onboardingDone: true },
+      data: { resolvedLocale: 'en', onboardingDone: true, ...SETTINGS_DEFAULTS },
     });
     await first.shutdown();
     expect(storedOnboardingDone(first)).toBe(true);
@@ -96,7 +102,7 @@ describe('onboarding_done across launches', () => {
     const second = await launch();
     await expect(call(second, 'settings.get')).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'en', onboardingDone: true },
+      data: { resolvedLocale: 'en', onboardingDone: true, ...SETTINGS_DEFAULTS },
     });
   });
 
@@ -105,11 +111,16 @@ describe('onboarding_done across launches', () => {
     await call(runtime, 'settings.set', { locale: 'zh-CN' });
     await expect(call(runtime, 'settings.set', { onboardingDone: true })).resolves.toEqual({
       ok: true,
-      data: { locale: 'zh-CN', resolvedLocale: 'zh-CN', onboardingDone: true },
+      data: {
+        locale: 'zh-CN',
+        resolvedLocale: 'zh-CN',
+        onboardingDone: true,
+        ...SETTINGS_DEFAULTS,
+      },
     });
     await expect(call(runtime, 'settings.set', { locale: null })).resolves.toEqual({
       ok: true,
-      data: { resolvedLocale: 'en', onboardingDone: true },
+      data: { resolvedLocale: 'en', onboardingDone: true, ...SETTINGS_DEFAULTS },
     });
   });
 

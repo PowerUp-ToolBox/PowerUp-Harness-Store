@@ -4,7 +4,7 @@
  * answers like the Store over a small catalogue: text in the name, every tag, this machine's
  * platform (darwin-arm64) unless every platform is asked for, most downloaded first, 24 a page.
  * Typed text is searched once, 300 ms after the last keystroke; Enter, a tag and the toggle at
- * once. In en and zh-CN.
+ * once. A change of the Store URL in Settings drops the old Store's results. In en and zh-CN.
  */
 import type { Tag } from '@harness-store/manifest';
 import { act, cleanup, fireEvent, screen, within } from '@testing-library/react';
@@ -374,6 +374,28 @@ describe('Store search', () => {
     expect(within(list).getAllByRole('article')[0]).toBe(firstCard);
     // A short page was the last one.
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+
+  it('starts over once the Store URL changes: the old Store’s results are gone', async () => {
+    const api = await renderStore();
+    await searchFor('note');
+    expect(resultNames()).toEqual(['Note Writer', 'Notes']);
+
+    await click(screen.getByRole('link', { name: 'Settings' }));
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Store URL'), {
+        target: { value: 'https://staging.store.test' },
+      });
+      await Promise.resolve();
+    });
+    await click(screen.getByRole('button', { name: 'Apply' }));
+    expect(api.settings.set).toHaveBeenCalledWith({ storeBaseUrl: 'https://staging.store.test' });
+
+    await click(screen.getByRole('link', { name: 'Store' }));
+    expect(screen.queryByRole('list', { name: 'Search results' })).toBeNull();
+    expect(homeShown()).toBe(true);
+    expect(searchBox().value).toBe('');
+    expect(api.store.search).toHaveBeenCalledTimes(1);
   });
 
   it('shows a Harness once when a later page repeats it', async () => {

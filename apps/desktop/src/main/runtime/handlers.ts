@@ -31,6 +31,7 @@ import { fail, ok } from './ipc-result.js';
 import type { Services } from './services.js';
 import { parseSettingsPatch } from './settings.js';
 import { StoreAuthError } from './store-auth.js';
+import { parseUsageFilter, parseUsageQuery } from './usage.js';
 
 /**
  * One handler per IPC method. The input arrives as `unknown` because it crossed a process
@@ -58,18 +59,29 @@ export function createHandlers(services: Services): IpcHandlers {
       services.app.quit();
       return ok(null);
     },
+    'app.openFolder': (input) => {
+      if (input !== 'logs' && input !== 'dataRoot') {
+        return fail('invalid_input', { method: 'app.openFolder' });
+      }
+      return services.app.openFolder(input);
+    },
     'settings.get': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'settings.get' });
       return ok(services.settings.get());
     },
-    'settings.set': (input) => {
+    'settings.set': async (input) => {
       const patch = parseSettingsPatch(input);
       if (patch === null) return fail('invalid_input', { method: 'settings.set' });
-      return ok(services.settings.set(patch));
+      return ok(await services.settings.set(patch));
     },
-    'diagnostics.get': (input) => {
+    'diagnostics.get': async (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'diagnostics.get' });
-      return ok(services.diagnostics.get());
+      return ok(await services.diagnostics.get());
+    },
+    'diagnostics.copy': async (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'diagnostics.copy' });
+      await services.diagnostics.copy();
+      return ok(null);
     },
     'connectivity.get': (input) => {
       if (input !== undefined) return fail('invalid_input', { method: 'connectivity.get' });
@@ -238,6 +250,10 @@ export function createHandlers(services: Services): IpcHandlers {
       if (input !== undefined) return fail('invalid_input', { method: 'installs.list' });
       return ok(await services.installs.list());
     },
+    'installs.checkUpdates': async (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'installs.checkUpdates' });
+      return (await services.updates.check()) ? ok(null) : fail('store_unreachable');
+    },
     'launch.start': (input) => {
       const request = parseLaunchRequest(input);
       if (request === null) return fail('invalid_input', { method: 'launch.start' });
@@ -297,6 +313,21 @@ export function createHandlers(services: Services): IpcHandlers {
       const request = parseUnpublishRequest(input);
       if (request === null) return fail('invalid_input', { method: 'publish.unpublish' });
       return services.publish.unpublish(request);
+    },
+    'usage.query': (input) => {
+      const query = parseUsageQuery(input);
+      if (query === null) return fail('invalid_input', { method: 'usage.query' });
+      return ok(services.usage.query(query));
+    },
+    'usage.export': (input) => {
+      const filter = parseUsageFilter(input);
+      if (filter === null) return fail('invalid_input', { method: 'usage.export' });
+      return services.usage.export(filter);
+    },
+    'usage.clear': (input) => {
+      if (input !== undefined) return fail('invalid_input', { method: 'usage.clear' });
+      services.usage.clear();
+      return ok(null);
     },
   };
 }

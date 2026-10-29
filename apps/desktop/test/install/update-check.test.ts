@@ -134,7 +134,7 @@ function checked(id: string) {
   };
 }
 
-describe('scheduling (acceptance: 10 s after start, then every 6 hours)', () => {
+describe('scheduling (acceptance: 10 s after start, then every interval, 6 hours by default)', () => {
   it('checks first 10 seconds after start, then every 6 hours, until stopped', async () => {
     vi.useFakeTimers();
     installed('acme/alpha', '1.0.0');
@@ -156,6 +156,63 @@ describe('scheduling (acceptance: 10 s after start, then every 6 hours)', () => 
     updates.stop();
     await vi.advanceTimersByTimeAsync(UPDATE_CHECK_INTERVAL_MS * 2);
     expect(calls).toHaveLength(3);
+  });
+
+  it('Never schedules nothing, not even the first check; check() still runs one', async () => {
+    vi.useFakeTimers();
+    installed('acme/alpha', '1.0.0');
+    const updates = checker({ intervalMs: () => null });
+    updates.start();
+    await vi.advanceTimersByTimeAsync(30 * 60 * 60 * 1000);
+    expect(calls).toHaveLength(0);
+    await expect(updates.check()).resolves.toBe(true);
+    expect(calls).toHaveLength(1);
+    updates.stop();
+  });
+
+  it('reads the interval each time a check is due: Never by then checks nothing', async () => {
+    vi.useFakeTimers();
+    installed('acme/alpha', '1.0.0');
+    let interval: number | null = UPDATE_CHECK_INTERVAL_MS;
+    const updates = checker({ intervalMs: () => interval });
+    updates.start();
+    interval = null;
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_INTERVAL_MS * 5);
+    expect(calls).toHaveLength(0);
+    updates.stop();
+  });
+
+  it('reschedule() puts the next check a whole new interval from now, checking nothing now', async () => {
+    vi.useFakeTimers();
+    installed('acme/alpha', '1.0.0');
+    let interval: number | null = UPDATE_CHECK_INTERVAL_MS;
+    const updates = checker({ intervalMs: () => interval });
+    updates.reschedule(); // Not started: nothing.
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_INTERVAL_MS * 2);
+    expect(calls).toHaveLength(0);
+
+    updates.start();
+    await vi.advanceTimersByTimeAsync(FIRST_UPDATE_CHECK_DELAY_MS);
+    expect(calls).toHaveLength(1);
+    interval = 60 * 60 * 1000;
+    updates.reschedule();
+    expect(calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(interval);
+    expect(calls).toHaveLength(2);
+
+    interval = null;
+    updates.reschedule();
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_INTERVAL_MS * 5);
+    expect(calls).toHaveLength(2);
+
+    // From Never to an interval: the first check comes a whole interval later.
+    interval = 24 * 60 * 60 * 1000;
+    updates.reschedule();
+    await vi.advanceTimersByTimeAsync(interval - 1);
+    expect(calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toHaveLength(3);
+    updates.stop();
   });
 
   it('starting twice schedules one check', async () => {
@@ -213,7 +270,7 @@ describe('offline (acceptance: does nothing and shows no error)', () => {
     installed('acme/alpha', '1.0.0');
     offers('acme/alpha', '2.0.0');
     connectivity = 'offline';
-    await expect(checker().check()).resolves.toBeUndefined();
+    await expect(checker().check()).resolves.toBe(false);
     expect(calls).toEqual([]);
     expect(checked('acme/alpha').availableVersion).toBeNull();
     expect(changed).toEqual([]);
@@ -227,10 +284,17 @@ describe('offline (acceptance: does nothing and shows no error)', () => {
     changed = [];
 
     failure = 'network';
-    await expect(checker().check()).resolves.toBeUndefined();
+    await expect(checker().check()).resolves.toBe(false);
     expect(reportedFailures).toBe(1);
     expect(checked('acme/alpha').availableVersion).toBe('2.0.0');
     expect(changed).toEqual([]);
+  });
+
+  it('check() resolves whether the Store answered', async () => {
+    installed('acme/alpha', '1.0.0');
+    await expect(checker().check()).resolves.toBe(true);
+    failure = 'server';
+    await expect(checker().check()).resolves.toBe(false);
   });
 
   it('an answer that is not the rows changes nothing and is not a connectivity failure', async () => {

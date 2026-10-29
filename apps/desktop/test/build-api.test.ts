@@ -20,8 +20,9 @@ describe('buildApi (window.api)', () => {
       'publish',
       'settings',
       'store',
+      'usage',
     ]);
-    expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit']);
+    expect(Object.keys(api.app)).toEqual(['ping', 'status', 'quit', 'openFolder']);
     expect(Object.keys(api.auth)).toEqual(['signIn', 'signOut', 'whoami']);
     expect(Object.keys(api.bindings)).toEqual([
       'getGlobal',
@@ -43,7 +44,7 @@ describe('buildApi (window.api)', () => {
       'remove',
     ]);
     expect(Object.keys(api.connectivity)).toEqual(['get', 'check']);
-    expect(Object.keys(api.diagnostics)).toEqual(['get']);
+    expect(Object.keys(api.diagnostics)).toEqual(['get', 'copy']);
     expect(Object.keys(api.installs)).toEqual([
       'chooseFolder',
       'inspectFolder',
@@ -55,6 +56,7 @@ describe('buildApi (window.api)', () => {
       'uninstall',
       'dataSize',
       'list',
+      'checkUpdates',
     ]);
     expect(Object.keys(api.launch)).toEqual([
       'start',
@@ -75,6 +77,7 @@ describe('buildApi (window.api)', () => {
     ]);
     expect(Object.keys(api.settings)).toEqual(['get', 'set']);
     expect(Object.keys(api.store)).toEqual(['home', 'search', 'detail', 'publisher']);
+    expect(Object.keys(api.usage)).toEqual(['query', 'export', 'clear']);
     expect(Object.isFrozen(api)).toBe(true);
     expect(Object.isFrozen(api.app)).toBe(true);
     expect(Object.isFrozen(api.settings)).toBe(true);
@@ -114,6 +117,7 @@ describe('buildApi (window.api)', () => {
     'auth.changed',
     'installs.changed',
     'publish.folderChanged',
+    'usage.recorded',
   ] as const)('subscribes to %s', (event) => {
     const listen = vi.fn<Listen>(() => () => undefined);
     const api = buildApi(vi.fn<Invoke>(), listen);

@@ -74,5 +74,5 @@ Buttons never change meaning mid-hover; state transitions animate the label, not
 - **Empty** states explain what the screen will hold and offer the one action that fills it (Library empty → "Browse the Store"; Models empty → "Add a Connection"; Usage empty → "Launch a Harness to see usage here").
 - **Loading** uses skeletons for lists and inline spinners for buttons; never a full-screen blocker except during first-run Provider detection (bounded to a few seconds with a skip).
 - **Error** states are inline, keep the User's input, and offer Retry. Network errors in the Store distinguish "offline" from "server error".
-- **Offline**: Library, Models, Usage and Settings work entirely. Store shows an offline panel ("Can't reach the Store") with Retry in place of its pages, beside the offline banner. Publish is disabled with an explanation.
+- **Offline**: Library, Models, Usage and Settings work entirely, except Settings' Check now, which is disabled while offline. Store shows an offline panel ("Can't reach the Store") with Retry in place of its pages, beside the offline banner. Publish is disabled with an explanation.
 - Destructive actions (uninstall deletes the Data Directory, Unpublish) always confirm and name what is lost.
