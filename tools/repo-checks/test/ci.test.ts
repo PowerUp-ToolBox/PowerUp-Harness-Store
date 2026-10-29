@@ -241,7 +241,11 @@ describe('CI workflow', () => {
   it('the Desktop E2E jobs keep the Electron sandbox, list flaky journeys and upload traces on failure', () => {
     // The sandbox is allowed on the runner (Ubuntu 24.04 restricts user namespaces), never turned off.
     for (const command of runCommands) expect(command).not.toContain('--no-sandbox');
-    expect(readText('apps', 'desktop', 'e2e', 'support', 'app.ts')).not.toContain('--no-sandbox');
+    const app = readText('apps', 'desktop', 'e2e', 'support', 'app.ts');
+    expect(app).not.toContain('--no-sandbox');
+    // Playwright adds --no-sandbox to an Electron launch on Linux unless told not to.
+    expect(app).toContain('chromiumSandbox: true,');
+    expect(app).toContain("commandLine.hasSwitch('no-sandbox')");
     for (const name of ['e2e-smoke', 'acceptance']) {
       const jobSteps = workflow.jobs?.[name]?.steps ?? [];
       const sandbox = jobSteps.find((step) => step.run?.includes('apparmor_restrict_unprivileged'));
@@ -256,6 +260,18 @@ describe('CI workflow', () => {
       expect(upload, name).toMatchObject({ if: 'failure()' });
       expect(upload?.with?.path, name).toBe('apps/desktop/e2e/test-results/');
     }
+  });
+
+  it('the Desktop E2E records its own trace and screenshot, which Playwright does not for Electron', () => {
+    // `use.trace` and `use.screenshot` only reach browsers Playwright launches, so they would
+    // promise artifacts an `_electron` journey never writes.
+    const config = readText('apps', 'desktop', 'e2e', 'playwright.config.ts');
+    expect(config).not.toMatch(/^\s*(trace|screenshot):/m);
+    const app = readText('apps', 'desktop', 'e2e', 'support', 'app.ts');
+    expect(app).toContain('.context().tracing.start(');
+    expect(app).toContain("testInfo.outputPath('trace.zip')");
+    expect(app).toContain("testInfo.outputPath('test-failed-1.png')");
+    expect(app).toContain("testInfo.outputPath('profile-logs')");
   });
 
   it('the Playwright config retries once in CI only and gives each journey a 10-minute budget', () => {

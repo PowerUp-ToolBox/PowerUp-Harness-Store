@@ -88,13 +88,21 @@ export interface LaunchedApp {
   readonly app: ElectronApplication;
   /** The main window. */
   readonly window: Page;
-  /** Closes the app, keeps its logs with the test's output on failure, deletes the profile. */
+  /**
+   * Closes the app and deletes its profile. When the test failed it first keeps, with the test's
+   * output, a screenshot of the main window, the Playwright trace (`trace.zip`) and the profile's
+   * `logs/` (`profile-logs/`).
+   */
   close(): Promise<void>;
 }
 
 /**
  * Launches the built desktop app on a new, empty profile (`HARNESS_STORE_USER_DATA_DIR`): no
  * Connection, no install, no session. The app looks for Ollama where `ollama` listens.
+ *
+ * Playwright's `trace` and `screenshot` options only reach the browsers it launches, not an
+ * Electron app, so this records the trace itself from launch on, and {@link LaunchedApp.close}
+ * keeps it on failure.
  */
 export async function launchApp(ollama: FakeProvider, testInfo: TestInfo): Promise<LaunchedApp> {
   const main = join(DESKTOP_DIR, 'out', 'main', 'index.js');
@@ -117,23 +125,80 @@ export async function launchApp(ollama: FakeProvider, testInfo: TestInfo): Promi
       ? ['--password-store=gnome-libsecret']
       : [];
   const executablePath = createRequire(import.meta.url)('electron') as string;
-  const app = await _electron.launch({ executablePath, args: [main, ...keyring], env });
-  const window = await app.firstWindow();
+  let app: ElectronApplication;
+  try {
+    // `chromiumSandbox`: without it Playwright turns Chromium's sandbox off on Linux, and the
+    // journeys would not run the sandboxed windows the app ships with.
+    app = await _electron.launch({
+      executablePath,
+      args: [main, ...keyring],
+      env,
+      chromiumSandbox: true,
+    });
+  } catch (error) {
+    removeProfile(profile);
+    throw error;
+  }
+
+  let window: Page | undefined;
+  let tracing = false;
+  const close = async (failed: boolean): Promise<void> => {
+    try {
+      if (failed && window !== undefined) {
+        await window
+          .screenshot({ path: testInfo.outputPath('test-failed-1.png'), timeout: 5_000 })
+          .catch(() => undefined);
+      }
+      if (tracing) {
+        const path = failed ? testInfo.outputPath('trace.zip') : undefined;
+        await app
+          .context()
+          .tracing.stop(path === undefined ? {} : { path })
+          .catch(() => undefined);
+      }
+      await app.close();
+    } finally {
+      const logs = join(profile, 'logs');
+      if (failed && existsSync(logs)) {
+        cpSync(logs, testInfo.outputPath('profile-logs'), { recursive: true });
+      }
+      removeProfile(profile);
+    }
+  };
+
+  try {
+    await app.context().tracing.start({ screenshots: true, snapshots: true, sources: true });
+    tracing = true;
+    window = await app.firstWindow();
+    // The sandbox the shipped app runs with is the one under test (see `chromiumSandbox` above).
+    const unsandboxed = await app.evaluate(({ app: electron }) =>
+      electron.commandLine.hasSwitch('no-sandbox'),
+    );
+    if (unsandboxed) throw new Error('The app under test was started without its sandbox.');
+  } catch (error) {
+    // No LaunchedApp reaches the test, so nothing else would close the app or keep its logs.
+    await close(true).catch(() => undefined);
+    throw error;
+  }
+  const opened = window;
   return {
     app,
-    window,
-    async close() {
-      try {
-        await app.close();
-      } finally {
-        const logs = join(profile, 'logs');
-        if (testInfo.status !== testInfo.expectedStatus && existsSync(logs)) {
-          cpSync(logs, testInfo.outputPath('profile-logs'), { recursive: true });
-        }
-        rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-      }
-    },
+    window: opened,
+    close: () => close(testInfo.status !== testInfo.expectedStatus),
   };
+}
+
+/**
+ * Deletes a temporary profile. A file an exiting Electron helper still holds (on Windows) only
+ * leaves the folder behind in the OS temp folder: that is not what a journey checks, so it is a
+ * warning, not a failure.
+ */
+function removeProfile(profile: string): void {
+  try {
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch (error) {
+    console.warn(`Could not delete the test profile ${profile}:`, error);
+  }
 }
 
 /**

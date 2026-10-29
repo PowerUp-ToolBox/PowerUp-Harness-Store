@@ -12,6 +12,10 @@ import { defineConfig } from '@playwright/test';
  * One worker: every journey's fake Ollama listens on the same port. A journey must finish in 10
  * minutes (its timeout); in CI a failed one is retried once, and passing on the retry marks it
  * flaky in the JSON report, which CI lists in the job summary (scripts/e2e-summary.mjs).
+ *
+ * No `trace` or `screenshot` option: Playwright applies them only to the browsers it launches, not
+ * to an Electron app. A journey records its own trace and, when it fails, keeps it with a
+ * screenshot and the app's logs in its test-results folder (support/app.ts).
  */
 export default defineConfig({
   testDir: '.',
@@ -23,11 +27,7 @@ export default defineConfig({
   timeout: 10 * 60_000,
   expect: { timeout: 15_000 },
   reporter: [['list'], ['json', { outputFile: 'test-results/results.json' }]],
-  use: {
-    actionTimeout: 30_000,
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-  },
+  use: { actionTimeout: 30_000 },
   projects: [
     { name: 'store', testMatch: 'store.setup.ts', teardown: 'store-teardown' },
     { name: 'store-teardown', testMatch: 'store.teardown.ts' },

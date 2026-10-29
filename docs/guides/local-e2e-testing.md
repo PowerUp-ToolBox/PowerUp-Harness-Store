@@ -157,15 +157,20 @@ Install hello-web again first if you uninstalled it. After the takedown the Stor
 
 ## Troubleshooting
 
-- **Sign-in on macOS.** In development the `harnessstore://` scheme is registered to the Electron app under `apps/desktop/node_modules/electron`, and macOS may hand the callback to another copy (an older checkout, an installed Harness Store). If the app keeps waiting after you authorize, quit every Harness Store and Electron app and try again; else build and run the unpacked app, which registers the scheme itself:
+### Sign-in on macOS
 
-  ```sh
-  pnpm build
-  pnpm --filter @harness-store/desktop exec electron-builder --dir
-  HARNESS_STORE_USER_DATA_DIR="$(mktemp -d)" "apps/desktop/release/mac-arm64/Harness Store.app/Contents/MacOS/Harness Store"
-  ```
+In development the `harnessstore://` scheme is registered to the Electron app under `apps/desktop/node_modules/electron`, and macOS may hand the callback to another copy (an older checkout, an installed Harness Store). If the app keeps waiting after you authorize, quit every Harness Store and Electron app and try again; else build and run the unpacked app, which registers the scheme itself:
 
-  (`release/mac/` on an Intel Mac.) It also uses the local Store by default.
+```sh
+pnpm build
+pnpm --filter @harness-store/desktop exec electron-builder --dir
+HARNESS_STORE_USER_DATA_DIR="$(mktemp -d)" "apps/desktop/release/mac-arm64/Harness Store.app/Contents/MacOS/Harness Store"
+```
+
+(`release/mac/` on an Intel Mac.) It also uses the local Store by default.
+
+### Other problems
+
 - **A keychain prompt for "Electron Safe Storage"** (or "Harness Store Safe Storage"). The app keeps API keys and the Publisher's session encrypted with the OS keychain; choose Always Allow. If you deny it, adding a key and signing in fail with an encryption error.
 - **Ports.** 11434: Ollama or the fake one (`lsof -i :11434`); use `E2E_OLLAMA_PORT` for the automated journey. 54321 to 54324: the Supabase stack; another project's stack on them must be stopped (`supabase stop` in that project). `pnpm --filter @harness-store/store db:stop` stops this one.
 - **Logs.** Each launch of a Harness logs to `logs/<publisher>/<slug>/<launch id>.log` in the app profile (Settings → Open logs folder, or the Library card's Show logs). The app's own errors are in the terminal running `pnpm dev`; the Edge Functions' in the terminal running `functions:serve`. Settings → Copy diagnostics gives the version, folders and Gateway status.
