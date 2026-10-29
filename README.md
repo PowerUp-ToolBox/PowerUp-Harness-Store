@@ -81,7 +81,15 @@ Which checks a pull request must pass is a branch protection setting of the repo
 | Desktop E2E smoke (ubuntu-latest) | `e2e-smoke` |
 | Acceptance journey (local Store) | `acceptance` |
 
-Never mark the Nightly workflow's "Model Gateway conformance (real Providers)" as required.
+Never mark the Nightly workflow's "Model Gateway conformance (real Providers)" as required, nor the Build workflow's jobs.
+
+A third workflow, [`build.yml`](./.github/workflows/build.yml), packages the unsigned desktop app on every push to `main`, on every `v*` tag and on demand (Actions → Build → Run workflow), never on a pull request: a dmg for macOS arm64 and x64, an nsis installer for Windows x64 and an AppImage for Linux x64, each on a runner of its own platform. Each build is then started once headless with the post-build smoke run, which installs and runs `examples/hello-term` for one turn against the fake Provider with the app's own Node runtime; a failure fails that build. The builds are the run's artifacts (`harness-store-macos-arm64`, …). A tag `v1.2.3` builds version 1.2.3 and also creates a draft GitHub release with the four builds and [`.github/release-notes.md`](./.github/release-notes.md), which tells testers how to open an unsigned app; review and publish it by hand. Nothing is code-signed or notarised yet (roadmap: before the public launch). To build and smoke-test for your own OS:
+
+```sh
+pnpm build
+pnpm --filter @harness-store/desktop package   # into apps/desktop/release/
+pnpm --filter @harness-store/desktop smoke     # exits 0 when hello-term answered once
+```
 
 To check a Harness Package (a folder or a zip) the way the Store will, build the Manifest package and run its CLI: `pnpm --filter @harness-store/manifest build`, then `node packages/manifest/bin/harness-manifest.js validate <path>`. See [`packages/manifest`](./packages/manifest/README.md#command-line-harness-manifest-validate) for its options, output and exit status.
 

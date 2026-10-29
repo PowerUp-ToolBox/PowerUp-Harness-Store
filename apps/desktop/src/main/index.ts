@@ -3,6 +3,8 @@
  * Electron's APIs; the services and IPC handlers live in src/main/runtime/, which never imports
  * Electron, so they are unit-tested under plain Node.
  */
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   app,
@@ -39,6 +41,7 @@ import {
   mainWindowOptions,
 } from './runtime/main-window.js';
 import { createSafeStorageCipher } from './runtime/secret-cipher.js';
+import { runSmoke, smokeRequest, type SmokeRequestResult } from './runtime/smoke.js';
 import { STORE_ASSET_SCHEME, storeAssetSource } from '../shared/store-assets.js';
 import { AUTH_SCHEME } from './runtime/store-auth.js';
 import { initialWindowBounds } from './runtime/window-state.js';
@@ -75,8 +78,14 @@ protocol.registerSchemesAsPrivileged([
   { scheme: STORE_ASSET_SCHEME, privileges: { standard: true, secure: true } },
 ]);
 
-// One Runtime per profile: a second launch focuses the existing window instead.
-if (!app.requestSingleInstanceLock()) {
+// The post-build smoke run (./runtime/smoke.ts), asked for by environment variables only: it runs
+// instead of the app, with no window, on a profile of its own, then exits.
+const smoke = smokeRequest(process.env);
+
+if (smoke !== null) {
+  runSmokeInstead(smoke);
+} else if (!app.requestSingleInstanceLock()) {
+  // One Runtime per profile: a second launch focuses the existing window instead.
   app.quit();
 } else {
   // The Store sign-in comes back from the browser as harnessstore://auth-callback. Packaged builds
@@ -364,4 +373,40 @@ function saveWindowState(window: BrowserWindow, started: Runtime): void {
   } catch (error) {
     console.error('Could not save the window state', error);
   }
+}
+
+/**
+ * The post-build smoke run instead of the app (scripts/smoke.mjs): on a new temporary profile,
+ * deleted afterwards, with no window, no single-instance lock and no `harnessstore:` registration.
+ * The app exits 0 when the run passed, 1 otherwise (a refused request included).
+ */
+function runSmokeInstead(smoke: SmokeRequestResult): void {
+  if (!smoke.ok) {
+    console.error(`[smoke] ${smoke.error}`);
+    app.exit(1);
+    return;
+  }
+  const dataDir = mkdtempSync(join(tmpdir(), 'harness-store-smoke-'));
+  app.setPath('userData', dataDir);
+  if (process.platform === 'darwin') app.dock?.hide();
+  void app
+    .whenReady()
+    .then(() =>
+      runSmoke({
+        ...smoke.request,
+        dataDir,
+        version: app.getVersion(),
+        log: (line) => {
+          console.log(line);
+        },
+      }),
+    )
+    .catch((error: unknown) => {
+      console.error('[smoke] The smoke run could not start', error);
+      return false;
+    })
+    .then((passed) => {
+      rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      app.exit(passed ? 0 : 1);
+    });
 }

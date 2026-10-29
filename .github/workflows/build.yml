@@ -1,0 +1,152 @@
+name: Build
+
+# Unsigned desktop builds (P0-13.3), on every push to main, on version tags (v*) and on demand;
+# never on a pull request. Each target is packaged by electron-builder on a runner of its own OS
+# and architecture, so the post-build smoke run starts the very build that is uploaded: dmg for
+# macOS arm64 and x64, nsis for Windows x64, AppImage for Linux x64. The smoke run
+# (apps/desktop/scripts/smoke.mjs) installs and runs examples/hello-term for one turn against the
+# fake Provider, with the app's own executable as the Node runtime; a failure fails that target's
+# job, and nothing is uploaded for it.
+#
+# This workflow runs on its own, alongside `ci`, and does not wait for it: `ci` lints and tests the
+# same commit, and a red `ci` on main is what blocks a release.
+#
+# Nothing is signed or notarised: both are deferred to before the public launch (roadmap).
+# CSC_IDENTITY_AUTO_DISCOVERY=false keeps electron-builder from picking up a signing identity a
+# runner may have. On a tag, the last job attaches every build to a draft GitHub release whose
+# notes (.github/release-notes.md) say how to open an unsigned app; the maintainer publishes it.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package and smoke (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-latest
+            arch: arm64
+            file: mac-arm64.dmg
+          - name: macos-x64
+            os: macos-15-intel
+            arch: x64
+            file: mac-x64.dmg
+          - name: windows-x64
+            os: windows-latest
+            arch: x64
+            file: win-x64.exe
+          - name: linux-x64
+            os: ubuntu-latest
+            arch: x64
+            # electron-builder names the x64 AppImage x86_64.
+            file: linux-x86_64.AppImage
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      # Installs the pnpm version pinned in package.json#packageManager.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # electron-vite's out/, the packages it bundles, and examples/hello-term/out for the smoke run.
+      - name: Build
+        run: pnpm build
+
+      # A tag v1.2.3 builds version 1.2.3; main and manual runs keep package.json's 0.0.0.
+      - name: Package
+        run: |
+          version=()
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version=("-c.extraMetadata.version=${GITHUB_REF_NAME#v}")
+          fi
+          pnpm --filter @harness-store/desktop exec electron-builder --${{ matrix.arch }} --publish never "${version[@]}"
+
+      # Ubuntu 24.04 forbids the unprivileged user namespaces Chromium's sandbox needs; this lifts
+      # that for the runner instead of starting the app with --no-sandbox.
+      - name: Allow the Electron sandbox
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # The unpacked app electron-builder packaged (release/mac*/, win-unpacked/, linux-unpacked/),
+      # started headless with the smoke variables; Linux on a virtual display.
+      - name: Smoke run
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a pnpm --filter @harness-store/desktop run smoke
+          else
+            pnpm --filter @harness-store/desktop run smoke
+          fi
+
+      # The installer itself, not only the unpacked app the smoke run started: present, and not an
+      # empty or truncated file (every build is well over 50 MB, Electron alone).
+      - name: Check the build
+        run: |
+          ls -l apps/desktop/release
+          find apps/desktop/release -maxdepth 1 -name 'harness-store-*-${{ matrix.file }}' -size +50M | grep .
+
+      - name: Upload the build
+        uses: actions/upload-artifact@v7
+        with:
+          name: harness-store-${{ matrix.name }}
+          path: apps/desktop/release/harness-store-*-${{ matrix.file }}
+          if-no-files-found: error
+          compression-level: 0
+
+  # On a tag only: a draft release with every build attached, for the maintainer to review and
+  # publish. Runs once every target has packaged and passed its smoke run.
+  release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Download the builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: harness-store-*
+          path: builds
+          merge-multiple: true
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l builds
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "Harness Store $GITHUB_REF_NAME" \
+            --notes-file .github/release-notes.md \
+            builds/*

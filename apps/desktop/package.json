@@ -12,7 +12,8 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "package": "electron-vite build && electron-builder",
+    "package": "electron-vite build && electron-builder --publish never",
+    "smoke": "node scripts/smoke.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --build tsconfig.json tsconfig.web.json tsconfig.e2e.json",
     "test": "vitest run",
