@@ -50,7 +50,7 @@ Each flow lists steps, decision points and error branches. Screen details are in
 
 ## F4. Update
 
-1. On app start (after 10 s) and every 6 hours, the Runtime checks the Store for newer published versions of Store installs (never Local ones); offline, the check is skipped. A Library card (and the detail page) offers Update for a greater version that runs on this platform, and a badge on the Library nav item counts the updates.
+1. On app start (after 10 s) and then at the interval set in Settings (every hour, 6 hours by default, 24 hours, or Never, which makes no check until the User clicks Check now in Settings), the Runtime checks the Store for newer published versions of Store installs (never Local ones); offline, the check is skipped. A Library card (and the detail page) offers Update for a greater version that runs on this platform, and a badge on the Library nav item counts the updates.
 2. Click Update (the version offered is the one installed).
    - No added permission, same Entry and runtime kind → download with progress and Cancel on the button, verify, replace, done, with no dialog. Toast "Updated {name} to {version}. See the changelog in Version history."
    - Added permission, changed Entry or changed runtime kind → the button reads "Review update"; the re-consent prompt opens before the download, listing what the update adds (diff style: "New: runs shell commands"), the changelog, the trust block with the no-sandbox sentence, and buttons Update, Not now. Update then downloads, verifies and replaces as above.
@@ -89,9 +89,11 @@ The screen keeps its folder, validation and tab when the User visits another scr
 
 ## F7. Usage review
 
-1. Usage page: totals for the selected period (today, 7 days, 30 days, all), then a table grouped by Harness, then by model, with prompt and completion tokens, request count and last used.
-2. Rows with unknown token counts show a dash and a tooltip "This Provider did not report usage".
-3. Filter by Harness or Provider. Export to CSV. Clear usage data (confirm).
+1. Usage page: a note that Usage Records are counted on this machine and never leave it; totals for the selected period (today, 7 days by default, 30 days, all; periods are whole local calendar days ending today) as requests, errors, prompt tokens and completion tokens; then a table grouped by Harness, then by model ("via {Provider}"), with requests, errors, prompt and completion tokens and last used, most recently used first; then a daily breakdown table of the days with records, newest first. Errors are requests whose status is not `ok`; they count in requests but never in token sums.
+2. A token cell whose `ok` requests all lacked counts shows a dash with the tooltip "This Provider did not report usage"; when only some lacked them it shows the known sum with that dash beside it.
+3. Filter by Harness or Provider (every Harness and Provider ever recorded, installed or not). While the page is shown it refreshes as new Usage Records arrive, at most every 2 seconds.
+4. Export CSV: the OS save dialog, then the period and filters on view written at the finest grain the page shows (Harness, Provider and model, day).
+5. Clear usage data (also in Settings): the confirmation "Clear usage data?" / "This deletes every Usage Record on this machine.", then every record is deleted and the page shows its empty state "Launch a Harness to see usage here". With no records at all the page shows that empty state; a period or filter that matches nothing shows zero totals and empty tables.
 
 ## F8. Report a Harness
 
