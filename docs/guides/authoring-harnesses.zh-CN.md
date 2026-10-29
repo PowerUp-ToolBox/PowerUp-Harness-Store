@@ -300,7 +300,7 @@ Runtime 启动 Harness 时会设置以下环境变量。它们摘自规范性来
 - **Node。** `node` Harness 以 `<node> <entry>` 的方式、用 Runtime 的 Node 运行：在 P0 中是 Electron 的 Node 24，尽管 Manifest 声明的是 `"22"`。请编写在两者上都能运行的代码。不保证有系统 Node、Python 或 shell。
 - **UI 类型 `web`。** 窗口会立即以“正在启动”状态打开，一旦端口接受连接，就显示 `http://127.0.0.1:$HARNESS_PORT/`（加上 `ui.path`）；必须在 `ui.readyTimeoutSeconds` 内开始监听，否则启动失败。请监听 `127.0.0.1`，不要用 `localhost`，后者可能解析为 `::1`。页面运行在锁定到该源（origin）的沙盒视图中；指向其他网站的链接会在用户的浏览器中打开。
 - **UI 类型 `terminal`。** 进程运行在一个与内嵌终端大小相同的 pty 中。
-- **停止。** 关闭窗口（或退出应用）会向 Harness 的进程组发送 SIGTERM（Windows 上为 `taskkill /T`），5 秒后再发送 SIGKILL。如果进程自行退出，窗口会保持打开，显示退出码并提供“重新启动”。无论哪种情况，Gateway Token 都会被吊销。
+- **停止。** 关闭窗口（或退出应用）会向 Harness 的进程组发送 SIGTERM（Windows 上为 `taskkill /T`），5 秒后再发送 SIGKILL。Windows 上的控制台程序没有这段宽限期，而每个终端 Harness 和每个 Node Harness 都是控制台程序：`taskkill /T` 无法请求它关闭，因此会立即被强制结束。请随时保存状态，而不要等到退出时才保存。如果进程自行退出，窗口会保持打开，显示退出码并提供“重新启动”。无论哪种情况，Gateway Token 都会被吊销。
 - **日志。** stdout 和 stderr（或 pty 输出）会写入每次启动单独的日志文件，用户通过“查看日志”打开。环境变量和 Gateway Token 永远不会写入日志。
 
 ## 5. 使用 SDK
