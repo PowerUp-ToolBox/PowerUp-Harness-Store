@@ -396,10 +396,12 @@ describe('launching fixture-term', () => {
     const launchId = await launch('acme/fixture-term');
     await waitFor(async () => ((await reports(launchId, 'start')).length > 0 ? true : undefined));
 
+    // Enter is `\r`; the pty hands the Harness the line with the OS's line ending, as a terminal
+    // does (Windows' console reads `\r\n`).
     await windowCall(launchId, 'terminal.input', 'hello\r');
     await expect(
       waitFor(async () => (await reports(launchId, 'input'))[0] as string | undefined),
-    ).resolves.toBe('hello\n');
+    ).resolves.toBe(process.platform === 'win32' ? 'hello\r\n' : 'hello\n');
     await windowCall(launchId, 'terminal.resize', { cols: 120, rows: 40 });
     await expect(waitFor(async () => (await reports(launchId, 'resize'))[0])).resolves.toEqual([
       120, 40,
