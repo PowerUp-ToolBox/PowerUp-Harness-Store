@@ -44,6 +44,8 @@
   "library.loading": "正在加载资源库",
   "takedown.warning": "该 Harness 已被商店管理员下架，可能有害。仅在你信任它时启动。",
   "takedown.confirm": "该 Harness 已从商店移除。仍要启动吗？",
+  "takedown.versionWarning": "已安装的版本 {version} 已被商店管理员下架，可能有害。仅在你信任它时启动。",
+  "takedown.versionConfirm": "已安装的版本 {version} 已从商店移除。仍要启动吗？",
   "takedown.cancel": "取消",
   "takedown.launchAnyway": "仍然启动",
   "uninstall.title": "卸载 {name}？",

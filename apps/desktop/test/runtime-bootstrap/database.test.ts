@@ -116,6 +116,7 @@ describe('openDatabase', () => {
       'store_status',
       'available_manifest',
       'takedown_acknowledged',
+      'installed_version_taken_down',
     ]);
     expect(columns(db, 'launches')).toEqual([
       'launch_id',

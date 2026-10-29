@@ -102,8 +102,8 @@ export interface InstallsService {
   list(): Promise<readonly InstalledHarness[]>;
   /**
    * Records that the User confirmed "Launch anyway" for an installed Harness the update check
-   * found taken down, so the confirmation is not shown again for this Takedown; nothing changes
-   * for one that is not taken down.
+   * found taken down, or whose installed version it found taken down, so the confirmation is not
+   * shown again for this Takedown; nothing changes for one that is not taken down.
    */
   acknowledgeTakedown(harnessId: string): Promise<IpcResult<null>>;
   /**
@@ -708,6 +708,7 @@ export function createInstaller(options: InstallerOptions): InstallsService {
             iconDataUrl: icon,
             platformSupported: entryFor(row.manifest, platform) !== null,
             storeStatus: row.storeStatus,
+            installedVersionTakenDown: row.installedVersionTakenDown,
             takedownAcknowledged: row.takedownAcknowledged,
             availableUpdate:
               row.availableVersion === null || row.availableManifest === null

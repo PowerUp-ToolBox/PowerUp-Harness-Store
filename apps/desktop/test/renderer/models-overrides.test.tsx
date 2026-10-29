@@ -65,6 +65,7 @@ function installed(id: string, name: string, slots: Record<string, ModelSlot>): 
     iconDataUrl: null,
     platformSupported: true,
     storeStatus: null,
+    installedVersionTakenDown: false,
     takedownAcknowledged: false,
     availableUpdate: null,
   };

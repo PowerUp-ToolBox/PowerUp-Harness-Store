@@ -85,6 +85,7 @@ function installed(fields: Partial<InstalledHarness> = {}): InstalledHarness {
     iconDataUrl: null,
     platformSupported: true,
     storeStatus: 'available',
+    installedVersionTakenDown: false,
     takedownAcknowledged: false,
     availableUpdate: null,
     ...fields,

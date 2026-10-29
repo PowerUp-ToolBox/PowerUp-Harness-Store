@@ -12,7 +12,7 @@ import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { downloadPercent, useInstallJobs } from '../install/InstallJobsProvider.js';
 import { isLaunchActive, LaunchAction, useLaunch } from '../library/LaunchAction.js';
-import { TakedownWarning } from '../library/Takedown.js';
+import { TakedownWarning, takedownOf } from '../library/Takedown.js';
 import { UninstallDialog } from '../library/UninstallDialog.js';
 import { ReportDialog, type ReportTarget } from '../report/ReportDialog.js';
 import { LibraryIcon, MoreIcon, SearchIcon } from '../shell/icons.js';
@@ -307,7 +307,9 @@ const dismissedFailures = new Set<string>();
  * the button is the launch's, and the card says "Close the Harness to update". A Harness the
  * Store no longer offers has no Update: an Unpublished one has the note "No longer available in
  * the Store", a taken-down one the red {@link TakedownWarning} instead, and its Launch asks for
- * the one-time takedown confirmation ({@link useLaunch}).
+ * the one-time takedown confirmation ({@link useLaunch}). An install whose installed version
+ * alone was taken down shows the same warning, in place of that note too, and asks the same
+ * confirmation, but keeps the Update to a newer version, which is the remedy.
  */
 function HarnessCard({
   install,
@@ -332,7 +334,7 @@ function HarnessCard({
   const availableUpdate = offeredUpdate(install);
   const job = installJobs.jobs.get(harnessId);
   const running = isLaunchActive(launch);
-  const takenDown = install.storeStatus === 'taken_down';
+  const takedown = takedownOf(install);
   const failure =
     launch === undefined || dismissedFailures.has(launch.launchId) ? null : shownFailure(launch);
 
@@ -455,8 +457,8 @@ function HarnessCard({
           />
         )}
       </div>
-      {takenDown ? <TakedownWarning /> : null}
-      {install.storeStatus === 'unpublished' ? (
+      {takedown === null ? null : <TakedownWarning install={install} />}
+      {install.storeStatus === 'unpublished' && takedown === null ? (
         <p className="hint">{t('store.detail.notInStore')}</p>
       ) : null}
       {availableUpdate !== null && running && job?.kind !== 'failed' ? (

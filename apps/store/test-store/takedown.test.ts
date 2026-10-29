@@ -263,6 +263,7 @@ describe('admin/takedown by an administrator', () => {
         store_status: 'taken_down',
         latest_version: null,
         manifest: null,
+        installed_version_status: null,
       },
     ]);
     const download = await callFunction('download', {

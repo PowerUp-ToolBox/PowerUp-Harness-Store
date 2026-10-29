@@ -44,6 +44,8 @@
   "library.loading": "Loading your Library",
   "takedown.warning": "A Store administrator took this Harness down. It may be harmful: launch it only if you trust it.",
   "takedown.confirm": "This Harness was removed from the Store. Launch anyway?",
+  "takedown.versionWarning": "A Store administrator took down the installed version, {version}. It may be harmful: launch it only if you trust it.",
+  "takedown.versionConfirm": "The installed version, {version}, was removed from the Store. Launch anyway?",
   "takedown.cancel": "Cancel",
   "takedown.launchAnyway": "Launch anyway",
   "uninstall.title": "Uninstall {name}?",

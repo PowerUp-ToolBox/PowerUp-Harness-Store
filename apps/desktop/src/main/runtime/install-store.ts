@@ -22,8 +22,15 @@ export interface InstallRow {
   /** That version's Manifest; null exactly when `availableVersion` is. */
   readonly availableManifest: Manifest | null;
   /**
-   * The User confirmed "Launch anyway" since the update check last changed `storeStatus`: the
-   * launch confirmation of a taken-down Harness shows once per Takedown.
+   * The last update check found the installed version itself taken down (`latest_versions`'
+   * `installed_version_status`); false before one, for a local install, and once another version
+   * is installed.
+   */
+  readonly installedVersionTakenDown: boolean;
+  /**
+   * The User confirmed "Launch anyway" since the update check last changed `storeStatus` or
+   * `installedVersionTakenDown`: the launch confirmation of a taken-down Harness or installed
+   * version shows once per Takedown.
    */
   readonly takedownAcknowledged: boolean;
 }
@@ -36,16 +43,19 @@ export type NewInstall = Omit<
   | 'storeStatus'
   | 'availableVersion'
   | 'availableManifest'
+  | 'installedVersionTakenDown'
   | 'takedownAcknowledged'
 >;
 
 /**
- * What an update check found for an installed Store Harness: its status, and the newer version it
- * can be updated to (null when there is none).
+ * What an update check found for an installed Store Harness: its status, the newer version it
+ * can be updated to (null when there is none), and whether the installed version itself was taken
+ * down.
  */
 export interface UpdateCheckResult {
   readonly storeStatus: InstallStoreStatus;
   readonly available: { readonly version: string; readonly manifest: Manifest } | null;
+  readonly installedVersionTakenDown: boolean;
 }
 
 /**
@@ -79,7 +89,8 @@ export interface InstallStore {
    * Records an install, replacing the Harness's row if it has one (a transient one included) and
    * making it `installed`. A reinstall keeps when the Harness was last launched and its last
    * Workspace, and clears the available update; it keeps the Store status of a Store install, and
-   * its takedown acknowledgement, and clears both for a local one.
+   * clears it for a local one. Whether the installed version was taken down, and the takedown
+   * acknowledgement, are kept by a Store install of the same version and cleared otherwise.
    */
   put(install: NewInstall): void;
   /**
@@ -102,13 +113,14 @@ export interface InstallStore {
   /**
    * Records an update check of the installed Store Harness at `version`; nothing when it is not
    * installed (any more), is a local install, or is now at another version (an update or install
-   * came in between). A new Store status clears the takedown acknowledgement. Whether the row
-   * changed.
+   * came in between). A new Store status, or a change of whether the installed version is taken
+   * down, clears the takedown acknowledgement. Whether the row changed.
    */
   recordUpdateCheck(harnessId: string, version: string, result: UpdateCheckResult): boolean;
   /**
    * Records that the User confirmed launching the installed Harness the update check found taken
-   * down; nothing for one not installed or not taken down. Whether the row changed.
+   * down, or whose installed version it found taken down; nothing for one not installed or not
+   * taken down. Whether the row changed.
    */
   acknowledgeTakedown(harnessId: string): boolean;
   /** Records when the Harness was last launched (ISO-8601 UTC); nothing for one not installed. */
@@ -132,6 +144,7 @@ interface SqlInstallRow {
   state: InstallState;
   store_status: InstallStoreStatus | null;
   available_manifest: string | null;
+  installed_version_taken_down: 0 | 1;
   takedown_acknowledged: 0 | 1;
 }
 
@@ -152,6 +165,7 @@ function fromSql(row: SqlInstallRow): InstallRow {
     availableVersion: row.available_version,
     availableManifest:
       row.available_manifest === null ? null : (JSON.parse(row.available_manifest) as Manifest),
+    installedVersionTakenDown: row.installed_version_taken_down === 1,
     takedownAcknowledged: row.takedown_acknowledged === 1,
   };
 }
@@ -183,6 +197,7 @@ export function createInstallStore(db: DatabaseSync): InstallStore {
     "DELETE FROM installs WHERE harness_id = ? AND state = 'installed'",
   );
   const deleteOverrides = db.prepare('DELETE FROM slot_bindings WHERE scope = ?');
+  // A reinstall of the same Store version keeps what the update check said of that version.
   const upsert = db.prepare(
     `INSERT INTO installs (
        harness_id, version, manifest, install_path, data_dir, installed_at,
@@ -195,26 +210,34 @@ export function createInstallStore(db: DatabaseSync): InstallStore {
        consented_permissions = excluded.consented_permissions, source = excluded.source,
        available_version = NULL, available_manifest = NULL,
        store_status = CASE WHEN excluded.source = 'local' THEN NULL ELSE installs.store_status END,
+       installed_version_taken_down =
+         CASE WHEN excluded.source = 'local' OR excluded.version <> installs.version THEN 0
+           ELSE installs.installed_version_taken_down END,
        takedown_acknowledged =
-         CASE WHEN excluded.source = 'local' THEN 0 ELSE installs.takedown_acknowledged END,
+         CASE WHEN excluded.source = 'local' OR excluded.version <> installs.version THEN 0
+           ELSE installs.takedown_acknowledged END,
        state = 'installed'`,
   );
   const selectChecked = db.prepare(
-    `SELECT store_status, available_version, available_manifest FROM installs
+    `SELECT store_status, available_version, available_manifest, installed_version_taken_down
+     FROM installs
      WHERE harness_id = ? AND version = ? AND source = 'store' AND state = 'installed'`,
   );
   // Every expression of SET reads the row as it was, so the acknowledgement is compared with
-  // the old status.
+  // the old status and the old installed-version flag.
   const updateChecked = db.prepare(
     `UPDATE installs SET
-       takedown_acknowledged =
-         CASE WHEN store_status IS ?1 THEN takedown_acknowledged ELSE 0 END,
-       store_status = ?1, available_version = ?2, available_manifest = ?3
-     WHERE harness_id = ?4 AND version = ?5 AND source = 'store' AND state = 'installed'`,
+       takedown_acknowledged = CASE
+         WHEN store_status IS ?1 AND installed_version_taken_down = ?4 THEN takedown_acknowledged
+         ELSE 0 END,
+       store_status = ?1, available_version = ?2, available_manifest = ?3,
+       installed_version_taken_down = ?4
+     WHERE harness_id = ?5 AND version = ?6 AND source = 'store' AND state = 'installed'`,
   );
   const updateAcknowledged = db.prepare(
     `UPDATE installs SET takedown_acknowledged = 1
-     WHERE harness_id = ? AND state = 'installed' AND store_status = 'taken_down'
+     WHERE harness_id = ? AND state = 'installed'
+       AND (store_status = 'taken_down' OR installed_version_taken_down = 1)
        AND takedown_acknowledged = 0`,
   );
   const updateLaunched = db.prepare(
@@ -253,20 +276,28 @@ export function createInstallStore(db: DatabaseSync): InstallStore {
         return true;
       });
     },
-    recordUpdateCheck(harnessId, version, { storeStatus, available }) {
+    recordUpdateCheck(harnessId, version, { storeStatus, available, installedVersionTakenDown }) {
       const before = selectChecked.get(harnessId, version) as
-        | Pick<SqlInstallRow, 'store_status' | 'available_version' | 'available_manifest'>
+        | Pick<
+            SqlInstallRow,
+            | 'store_status'
+            | 'available_version'
+            | 'available_manifest'
+            | 'installed_version_taken_down'
+          >
         | undefined;
       if (before === undefined) return false;
       const after = {
         store_status: storeStatus,
         available_version: available?.version ?? null,
         available_manifest: available === null ? null : JSON.stringify(available.manifest),
+        installed_version_taken_down: installedVersionTakenDown ? 1 : 0,
       };
       if (
         before.store_status === after.store_status &&
         before.available_version === after.available_version &&
-        before.available_manifest === after.available_manifest
+        before.available_manifest === after.available_manifest &&
+        before.installed_version_taken_down === after.installed_version_taken_down
       ) {
         return false;
       }
@@ -274,6 +305,7 @@ export function createInstallStore(db: DatabaseSync): InstallStore {
         after.store_status,
         after.available_version,
         after.available_manifest,
+        after.installed_version_taken_down,
         harnessId,
         version,
       );

@@ -6,11 +6,15 @@
  * one keeps), no Update, and Launch behind the one-time confirmation, which only "Launch anyway"
  * records (`installs.acknowledgeTakedown`). test/install/store-update.test.ts covers the same in
  * main, from the update check's `taken_down` to a launch that still works.
+ *
+ * P0-12.2 follow-up: an install whose installed version alone was taken down
+ * (`installedVersionTakenDown`) shows the same warning and confirmation, naming that version, in
+ * place of the neutral note too, but keeps Update to a newer version, on the card and the page.
  */
 import type { Manifest } from '@harness-store/manifest';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { InstalledHarness } from '../../src/shared/ipc.js';
+import type { InstalledHarness, StoreDetail } from '../../src/shared/ipc.js';
 import { installFakeApi, renderApp } from './render-app.js';
 
 afterEach(() => {
@@ -48,6 +52,7 @@ function installed(fields: Partial<InstalledHarness> = {}): InstalledHarness {
     iconDataUrl: null,
     platformSupported: true,
     storeStatus: 'taken_down',
+    installedVersionTakenDown: false,
     takedownAcknowledged: false,
     availableUpdate: null,
     ...fields,
@@ -64,6 +69,10 @@ const COPY = {
     launch: 'Launch',
     notInStore: 'No longer available in the Store',
     report: 'Report',
+    versionWarning:
+      'A Store administrator took down the installed version, 1.0.0. It may be harmful: launch it only if you trust it.',
+    versionConfirm: 'The installed version, 1.0.0, was removed from the Store. Launch anyway?',
+    update: 'Update',
   },
   'zh-CN': {
     warning: '该 Harness 已被商店管理员下架，可能有害。仅在你信任它时启动。',
@@ -73,6 +82,9 @@ const COPY = {
     launch: '启动',
     notInStore: '已不在商店中提供',
     report: '举报',
+    versionWarning: '已安装的版本 1.0.0 已被商店管理员下架，可能有害。仅在你信任它时启动。',
+    versionConfirm: '已安装的版本 1.0.0 已从商店移除。仍要启动吗？',
+    update: '更新',
   },
 } as const;
 
@@ -281,5 +293,127 @@ describe('the takedown confirmation', () => {
       expect(api.launch.start).toHaveBeenCalledWith({ harnessId: HARNESS_ID });
     });
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+/** The newer version the Store still offers when only 1.0.0 was taken down. */
+const V1_1: Manifest = { ...MANIFEST, version: '1.1.0' };
+
+/** An install whose installed version alone was taken down, with 1.1.0 offered. */
+const versionTakenDown = (fields: Partial<InstalledHarness> = {}) =>
+  installed({
+    storeStatus: 'available',
+    installedVersionTakenDown: true,
+    availableUpdate: { version: '1.1.0', manifest: V1_1 },
+    ...fields,
+  });
+
+/** The Store's page of the Harness, which still offers 1.1.0. */
+const AVAILABLE: StoreDetail = {
+  platform: 'darwin-arm64',
+  storeStatus: 'available',
+  harness: {
+    harnessId: HARNESS_ID,
+    publisher: { login: 'alice', displayName: 'Alice', avatarUrl: null },
+    iconUrl: null,
+    downloadCount: 3,
+    manifest: V1_1,
+    readme: null,
+    screenshotUrls: [],
+    versions: [
+      {
+        version: '1.1.0',
+        publishedAt: '2026-10-28T09:00:00.000Z',
+        changelog: null,
+        permissionsChanged: false,
+      },
+    ],
+  },
+};
+
+describe.each(['en', 'zh-CN'] as const)(
+  'an install whose version was taken down (%s)',
+  (locale) => {
+    const copy = COPY[locale];
+
+    it('has the red warning naming the version on its Library card, and keeps Update', async () => {
+      setup(versionTakenDown(), locale);
+      await renderApp('#/library');
+      const card = await openCard();
+      const warning = within(card).getByText(copy.versionWarning);
+      expect(warning.className).toBe('takedown-warning');
+      expect(within(card).queryByText(copy.warning)).toBeNull();
+      await waitFor(() => {
+        expect(cardButtons(card)).toEqual([copy.update, copy.launch]);
+      });
+    });
+
+    it('asks before Launch once; "Launch anyway" records it, then launches', async () => {
+      const api = setup(versionTakenDown(), locale);
+      await renderApp('#/library');
+      const card = await openCard();
+      fireEvent.click(await within(card).findByRole('button', { name: copy.launch }));
+      const dialog = screen.getByRole('dialog', { name: copy.versionConfirm });
+      expect(within(dialog).getByText(copy.versionWarning)).toBeDefined();
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: copy.launchAnyway }));
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(api.launch.start).toHaveBeenCalledWith({ harnessId: HARNESS_ID });
+      });
+      expect(api.installs.acknowledgeTakedown).toHaveBeenCalledExactlyOnceWith(HARNESS_ID);
+    });
+
+    it('launches without asking once acknowledged, still with the warning', async () => {
+      const api = setup(versionTakenDown({ takedownAcknowledged: true }), locale);
+      await renderApp('#/library');
+      const card = await openCard();
+      expect(within(card).getByText(copy.versionWarning)).toBeDefined();
+      fireEvent.click(await within(card).findByRole('button', { name: copy.launch }));
+      await waitFor(() => {
+        expect(api.launch.start).toHaveBeenCalledWith({ harnessId: HARNESS_ID });
+      });
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(api.installs.acknowledgeTakedown).not.toHaveBeenCalled();
+    });
+
+    it('has the warning on the Store detail page, which keeps Update, and asks before Launch', async () => {
+      const api = setup(versionTakenDown(), locale);
+      api.store.detail.mockResolvedValue({ ok: true, data: AVAILABLE });
+      await renderApp(`#/store/h/${HARNESS_ID}`);
+      await screen.findByRole('heading', { level: 2, name: 'Writer' });
+      expect(screen.getByText(copy.versionWarning)).toBeDefined();
+      const actions = document.querySelector('.listing-detail-actions');
+      if (!(actions instanceof HTMLElement)) throw new Error('No actions');
+      expect(within(actions).getByRole('button', { name: copy.update })).toBeDefined();
+
+      fireEvent.click(within(actions).getByRole('button', { name: copy.launch }));
+      expect(screen.getByRole('dialog', { name: copy.versionConfirm })).toBeDefined();
+      expect(api.launch.start).not.toHaveBeenCalled();
+    });
+
+    it('shows the warning instead of the neutral note when no published version is left', async () => {
+      setup(versionTakenDown({ storeStatus: 'unpublished', availableUpdate: null }), locale);
+      await renderApp('#/library');
+      const card = await openCard();
+      expect(within(card).getByText(copy.versionWarning)).toBeDefined();
+      expect(within(card).queryByText(copy.notInStore)).toBeNull();
+      await waitFor(() => {
+        expect(cardButtons(card)).toEqual([copy.launch]);
+      });
+    });
+  },
+);
+
+describe('a whole-Harness Takedown', () => {
+  it('wins over a Takedown of the installed version', async () => {
+    setup(installed({ installedVersionTakenDown: true }));
+    await renderApp('#/library');
+    const card = await openCard();
+    expect(within(card).getByText(COPY.en.warning)).toBeDefined();
+    expect(within(card).queryByText(COPY.en.versionWarning)).toBeNull();
+    fireEvent.click(await within(card).findByRole('button', { name: 'Launch' }));
+    expect(screen.getByRole('dialog', { name: COPY.en.confirm })).toBeDefined();
   });
 });

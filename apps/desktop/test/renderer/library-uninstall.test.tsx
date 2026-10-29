@@ -54,6 +54,7 @@ function installed(
     iconDataUrl: null,
     platformSupported: true,
     storeStatus: 'available',
+    installedVersionTakenDown: false,
     takedownAcknowledged: false,
     availableUpdate: null,
     ...fields,

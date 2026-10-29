@@ -451,9 +451,11 @@ export interface IpcMethods {
   'installs.checkUpdates': { input: undefined; output: null };
   /**
    * The User confirmed "Launch anyway" for this installed Harness, which the update check found
-   * taken down (P0-12.2): records it in its `installs` row, so Launch asks no more until the
-   * update check finds another Store status, and reports it with `installs.changed`. Nothing
-   * changes for a Harness that is not taken down, or already acknowledged. `not_installed`.
+   * taken down, or whose installed version it found taken down (P0-12.2): records it in its
+   * `installs` row, so Launch asks no more until the update check finds another Store status or
+   * installed-version status, or another version is installed, and reports it with
+   * `installs.changed`. Nothing changes for a Harness that is not taken down, or already
+   * acknowledged. `not_installed`.
    */
   'installs.acknowledgeTakedown': { input: string; output: null };
   /**
@@ -834,8 +836,15 @@ export interface InstalledHarness {
    */
   readonly storeStatus: InstallStoreStatus | null;
   /**
-   * The User confirmed "Launch anyway" since the update check found it taken down
-   * (`installs.acknowledgeTakedown`); false whenever that check last changed `storeStatus`.
+   * The last update check found the installed version itself taken down, whatever `storeStatus`
+   * says of the Harness (a newer version may still be offered as `availableUpdate`); false before
+   * a check, for a local install, and once another version is installed.
+   */
+  readonly installedVersionTakenDown: boolean;
+  /**
+   * The User confirmed "Launch anyway" since the update check found it, or its installed version,
+   * taken down (`installs.acknowledgeTakedown`); false whenever that check last changed
+   * `storeStatus` or `installedVersionTakenDown`.
    */
   readonly takedownAcknowledged: boolean;
   /**
