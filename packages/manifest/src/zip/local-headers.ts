@@ -288,7 +288,9 @@ async function readLocalHeader(
   if (inconsistency !== undefined) return fail(inconsistency);
 
   if ((flags & FLAG_DATA_DESCRIPTOR) === 0) return { header, end: dataEnd };
-  const descriptor = await window.read(
+  // Peeked, so the window stays on the local header: central directory records that share it
+  // then cost no read each.
+  const descriptor = await window.peek(
     dataEnd,
     Math.min(MAX_DATA_DESCRIPTOR_SIZE, limit - dataEnd),
   );
@@ -620,6 +622,9 @@ class WindowedReader {
   readonly #limit: number;
   #start = 0;
   #bytes: Uint8Array = new Uint8Array(0);
+  /** The bytes {@link peek} last read outside the window. */
+  #peekStart = 0;
+  #peeked: Uint8Array = new Uint8Array(0);
 
   constructor(reader: RandomAccessReader, limit: number) {
     this.#reader = reader;
@@ -635,5 +640,24 @@ class WindowedReader {
     }
     const at = offset - this.#start;
     return this.#bytes.subarray(at, at + length);
+  }
+
+  /**
+   * Reads a few bytes (a data descriptor) without moving the window: from the window when it
+   * holds them, else from the last bytes peeked, else with a read of exactly `length` bytes.
+   * Many central directory records that point at one local header with a data descriptor past
+   * the window then cost one read of the header's window and one of the descriptor, not two
+   * windows each.
+   */
+  async peek(offset: number, length: number): Promise<Uint8Array> {
+    if (offset >= this.#start && offset + length <= this.#start + this.#bytes.length) {
+      return this.read(offset, length);
+    }
+    if (offset < this.#peekStart || offset + length > this.#peekStart + this.#peeked.length) {
+      this.#peeked = await this.#reader.read(offset, length);
+      this.#peekStart = offset;
+    }
+    const at = offset - this.#peekStart;
+    return this.#peeked.subarray(at, at + length);
   }
 }

@@ -763,6 +763,33 @@ describe('ArchiveSource: bounded work while opening', () => {
     );
   });
 
+  it('reads a local header that 1 000 records point at once, not once per record', async () => {
+    // The stream (about 100 KB) is longer than the 64 KB window, so the data descriptor after it
+    // lies outside the window that holds the local header. Before the fix, reading it moved the
+    // window, and every record read the header's 64 KB and the descriptor's 64 KB again: about
+    // 128 MB for these 1 000 records, gigabytes for 100 000.
+    const records = [
+      zerosEntry('a.bin'),
+      ...Array.from({ length: 999 }, () => ({ ...zerosEntry('a.bin'), listedAt: 0 })),
+    ];
+    const reader = sparseReader(buildZip(records), 0);
+    const source = await ArchiveSource.open(reader);
+
+    const [first, ...copies] = source.listEntries().entries;
+    expect(first).not.toHaveProperty('unsupported');
+    expect(copies).toHaveLength(999);
+    for (const copy of copies) {
+      expect(copy.unsupported).toEqual({
+        reason: 'inconsistent',
+        detail: 'it shares bytes of the archive with "a.bin"',
+      });
+    }
+    // The end record, the central directory (about 50 KB), the header's window, the descriptor and
+    // the stream, inflated once in slices: a bounded number of reads, not two windows per record.
+    expect(reader.reads).toBeLessThan(40);
+    expect(reader.bytesRead).toBeLessThan(MB);
+  });
+
   it('confirms at most 500 MB in all, and reports the entries past it as inconsistent', async () => {
     // Five honest 100 MB entries: each is charged its 100 MB and the most its last byte inflates
     // to, so the first four are confirmed and the fifth, with MAX_OVERRUN, does not fit what is
