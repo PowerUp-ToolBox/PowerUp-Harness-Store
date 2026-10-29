@@ -18,10 +18,13 @@ import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createHarnessWindowHandlers } from '../../src/main/runtime/harness-window-handlers.js';
 import { spawnNodePty, type PtySpawnOptions } from '../../src/main/runtime/pty.js';
+import { terminalText } from '../../src/main/runtime/smoke.js';
 import type { HarnessWindows } from '../../src/main/runtime/supervisor.js';
 import type { HarnessWindowEventName } from '../../src/shared/harness-ipc.js';
 import type { IpcEventName, IpcEvents, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { removeFolder, WAIT_MS } from '../support/harness-processes.js';
+import { createTerminalScreens } from '../support/terminal-screen.js';
 
 /**
  * Ticket P0-05.2, launching a terminal Harness, through the Supervisor seam: the real Runtime with
@@ -31,7 +34,7 @@ import { createFakeCipher } from '../support/fake-cipher.js';
  * handlers, and reports its terminal ready at once.
  *
  * The signal tests run on macOS and Linux only: Windows has no signals (the Supervisor uses
- * taskkill there, untested until CI runs on Windows).
+ * taskkill there; the stop and launch tests run on windows-latest in CI).
  */
 
 const FIXTURES = join(import.meta.dirname, '../fixtures/harnesses');
@@ -42,6 +45,8 @@ const SIZE = { cols: 100, rows: 30 };
 let root: string;
 let userData: string;
 let signalFile: string;
+/** Where fixture-term writes the environment it got. */
+let envFile: string;
 let fake: FakeProvider;
 let runtime: Runtime;
 let windows: ReturnType<typeof createFakeWindows>;
@@ -55,6 +60,7 @@ beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'harness-store-launch-'));
   userData = join(root, 'userData');
   signalFile = join(root, 'signals.txt');
+  envFile = join(root, 'env.json');
   fake = await startFakeProvider({ aliases: { 'model-a': 'fake/echo' } });
   states = [];
   spawned = [];
@@ -75,7 +81,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await runtime.shutdown();
   await fake.close();
-  rmSync(root, { recursive: true, force: true });
+  removeFolder(root);
 });
 
 /** The Runtime on `userData`, its Harnesses inheriting a deliberately polluted environment. */
@@ -110,6 +116,7 @@ function start(): Promise<Runtime> {
       openrouter_api_key: 'parent-openrouter',
       HARNESS_WORKSPACE: '/parent/workspace',
       FIXTURE_SIGNAL_FILE: signalFile,
+      FIXTURE_ENV_FILE: envFile,
     }),
     openPath: (path) => {
       opened.push(path);
@@ -148,11 +155,13 @@ function createFakeWindows() {
   const sent: { launchId: string; event: HarnessWindowEventName; payload: unknown }[] = [];
   const opens: string[] = [];
   const focused: string[] = [];
+  const screens = createTerminalScreens(SIZE);
   const fakes = {
     open,
     sent,
     opens,
     focused,
+    screens,
     openTerminal(spec, onClosed) {
       opens.push(spec.launchId);
       open.set(spec.launchId, onClosed);
@@ -167,7 +176,9 @@ function createFakeWindows() {
     reloadWeb: () => undefined,
     layoutWeb: () => undefined,
     send(launchId, event, payload) {
-      if (open.has(launchId)) sent.push({ launchId, event, payload });
+      if (!open.has(launchId)) return;
+      sent.push({ launchId, event, payload });
+      if (event === 'terminal.data') screens.write(launchId, payload as string);
     },
     focus(launchId) {
       focused.push(launchId);
@@ -191,20 +202,31 @@ function output(launchId: string): string {
     .join('');
 }
 
-/** The values of the fixture's `FIXTURE <kind> <json>` lines printed in full so far. */
-function reports(launchId: string, kind: string): unknown[] {
-  return output(launchId)
+/**
+ * The values of the fixture's `FIXTURE <kind> <json>` lines printed in full so far, read from its
+ * window's terminal as xterm.js renders it (test/support/terminal-screen.ts): Windows' ConPTY draws
+ * the screen with bytes of its own. A line still being printed does not parse yet.
+ */
+async function reports(launchId: string, kind: string): Promise<unknown[]> {
+  return (await windows.screens.text(launchId))
     .split('\n')
-    .slice(0, -1)
-    .map((line) => line.replace(/\r$/, ''))
     .filter((line) => line.startsWith(`FIXTURE ${kind} `))
-    .map((line) => JSON.parse(line.slice(`FIXTURE ${kind} `.length)) as unknown);
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line.slice(`FIXTURE ${kind} `.length)) as unknown];
+      } catch {
+        return [];
+      }
+    });
 }
 
-async function waitFor<T>(read: () => T | undefined, timeoutMs = 5000): Promise<T> {
+async function waitFor<T>(
+  read: () => T | undefined | Promise<T | undefined>,
+  timeoutMs = WAIT_MS,
+): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const value = read();
+    const value = await read();
     if (value !== undefined) return value;
     if (Date.now() > deadline) throw new Error('Timed out waiting');
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -272,6 +294,11 @@ async function expectRevoked(token: string, launchId: string) {
   expect(row?.token_revoked_at).toBe(row?.ended_at);
 }
 
+/** The environment fixture-term got, which it wrote before it printed `start`. */
+function startedEnv(): Record<string, string> {
+  return JSON.parse(readFileSync(envFile, 'utf8')) as Record<string, string>;
+}
+
 /** Whether the process `pid` still runs (or has exited and is not reaped yet). */
 function isAlive(pid: number): boolean {
   try {
@@ -289,11 +316,11 @@ describe('launching fixture-term', () => {
   it('runs it in a pty with the launch contract environment, in its Data Directory', async () => {
     await install('fixture-term');
     const launchId = await launch('acme/fixture-term');
-    const [started] = (await waitFor(() => {
-      const found = reports(launchId, 'start');
+    const [started] = (await waitFor(async () => {
+      const found = await reports(launchId, 'start');
       return found.length > 0 ? found : undefined;
-    })) as [{ env: Record<string, string>; cwd: string; size: number[] }];
-    const { env } = started;
+    })) as [{ cwd: string; size: number[] }];
+    const env = startedEnv();
     const dataDir = join(userData, 'data', 'acme', 'fixture-term');
 
     expect(env.HARNESS_GATEWAY_URL).toBe(gatewayUrl());
@@ -367,14 +394,29 @@ describe('launching fixture-term', () => {
   it('passes what the User types and the terminal size to the pty', async () => {
     await install('fixture-term');
     const launchId = await launch('acme/fixture-term');
-    await waitFor(() => (reports(launchId, 'start').length > 0 ? true : undefined));
+    await waitFor(async () => ((await reports(launchId, 'start')).length > 0 ? true : undefined));
 
+    // Enter is `\r`; the pty hands the Harness the line with the OS's line ending, as a terminal
+    // does (Windows' console reads `\r\n`).
     await windowCall(launchId, 'terminal.input', 'hello\r');
-    await expect(waitFor(() => reports(launchId, 'input')[0] as string | undefined)).resolves.toBe(
-      'hello\n',
-    );
+    await expect(
+      waitFor(async () => (await reports(launchId, 'input'))[0] as string | undefined),
+    ).resolves.toBe(process.platform === 'win32' ? 'hello\r\n' : 'hello\n');
+    // The window's terminal takes its new size first; ConPTY then draws its screen at that size.
+    windows.screens.resize(launchId, { cols: 120, rows: 40 });
     await windowCall(launchId, 'terminal.resize', { cols: 120, rows: 40 });
-    await expect(waitFor(() => reports(launchId, 'resize')[0])).resolves.toEqual([120, 40]);
+    if (process.platform === 'win32') {
+      // A Windows console program reading lines is never told its console was resized (libuv
+      // notices only during raw reads), so fixture-term cannot report it there. ConPTY announces
+      // the size it was given instead, as `CSI 8 ; rows ; cols t`, when it draws the screen again.
+      await expect(
+        waitFor(() => (output(launchId).includes('\u001b[8;40;120t') ? true : undefined)),
+      ).resolves.toBe(true);
+      return;
+    }
+    await expect(waitFor(async () => (await reports(launchId, 'resize'))[0])).resolves.toEqual([
+      120, 40,
+    ]);
   });
 
   it.skipIf(process.platform === 'win32')(
@@ -382,11 +424,8 @@ describe('launching fixture-term', () => {
     async () => {
       await install('fixture-term');
       const launchId = await launch('acme/fixture-term');
-      const [started] = (await waitFor(() => {
-        const found = reports(launchId, 'start');
-        return found.length > 0 ? found : undefined;
-      })) as [{ env: Record<string, string> }];
-      const token = started.env.HARNESS_GATEWAY_TOKEN ?? '';
+      await waitFor(async () => ((await reports(launchId, 'start')).length > 0 ? true : undefined));
+      const token = startedEnv().HARNESS_GATEWAY_TOKEN ?? '';
 
       windows.close(launchId);
       await waitForState(launchId, 'stopped');
@@ -439,7 +478,7 @@ describe('launching fixture-term', () => {
       await install('fixture-term');
       const launchId = await launch('acme/fixture-term');
       // Once it listens for SIGTERM.
-      await waitFor(() => (reports(launchId, 'start').length > 0 ? true : undefined));
+      await waitFor(async () => ((await reports(launchId, 'start')).length > 0 ? true : undefined));
       await runtime.shutdown();
 
       expect(lastState(launchId)).toMatchObject({ state: 'stopped', exitCode: 0 });
@@ -453,7 +492,7 @@ describe('launching fixture-term', () => {
     async () => {
       await install('fixture-term');
       const launchId = await launch('acme/fixture-term');
-      await waitFor(() => (reports(launchId, 'start').length > 0 ? true : undefined));
+      await waitFor(async () => ((await reports(launchId, 'start')).length > 0 ? true : undefined));
       // The Supervisor's step of quitting alone: the database is still open, so only the
       // refusal of launches from then on can answer.
       await runtime.supervisor.stopAll();
@@ -505,8 +544,8 @@ describe('the shutdown sequence, for the processes a Harness started', () => {
     async () => {
       await install('fixture-leaves-helper');
       const launchId = await launch('acme/fixture-leaves-helper');
-      const [{ helperPid }] = (await waitFor(() => {
-        const found = reports(launchId, 'start');
+      const [{ helperPid }] = (await waitFor(async () => {
+        const found = await reports(launchId, 'start');
         return found.length > 0 ? found : undefined;
       })) as [{ helperPid: number }];
       try {
@@ -568,7 +607,8 @@ describe('a Harness that exits on its own', () => {
       data: null,
     });
     expect(opened).toEqual([logPath('fixture-crash', launchId)]);
-    expect(readFileSync(logPath('fixture-crash', launchId), 'utf8')).toMatch(
+    // Read without the terminal's control sequences, which ConPTY adds around what it printed.
+    expect(terminalText(readFileSync(logPath('fixture-crash', launchId), 'utf8'))).toMatch(
       /\[pty\] fixture-crash: failing on purpose\n[^\n]*\[runtime\] Exited with code 3\n/,
     );
 
@@ -672,6 +712,7 @@ describe('launch records and logs', () => {
     expect(row?.token_revoked_at).toBe(row?.ended_at);
   });
 
+  // On Windows node-pty reports each exit a second after it, once it flushed ConPTY's output.
   it('keeps the 20 newest launch logs of a Harness', async () => {
     await install('fixture-crash');
     const logs = join(userData, 'logs', 'acme', 'fixture-crash');
@@ -680,5 +721,5 @@ describe('launch records and logs', () => {
       await waitForState(launchId, 'failed');
     }
     expect(readdirSync(logs)).toHaveLength(20);
-  }, 30_000);
+  }, 60_000);
 });

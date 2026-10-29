@@ -33,7 +33,12 @@ import {
 } from './launch-log.js';
 import type { LaunchStore } from './launch-store.js';
 import { spawnPiped, type PipedSpawner } from './piped-process.js';
-import { processTreeAlive, processTreeEndsWithin, signalProcessTree } from './process-tree.js';
+import {
+  processTreeAlive,
+  processTreeEndsWithin,
+  signalProcessTree,
+  type StopSignal,
+} from './process-tree.js';
 import type { PtyExit, PtyProcess, PtySpawner } from './pty.js';
 import {
   DEFAULT_READY_TIMEOUT_SECONDS,
@@ -263,8 +268,11 @@ interface Launch {
   log: LaunchLog | null;
   /** The command a terminal launch runs once its window reports its size. */
   command: SpawnCommand | null;
-  /** The process, once started. */
-  pid: number | null;
+  /**
+   * The process, once started. Its `pid` is read each time it is needed: a pty's is 0 on Windows
+   * until ConPTY has connected (see {@link PtyProcess.pid}).
+   */
+  process: { readonly pid: number } | null;
   /** A terminal launch's pty, once started. */
   pty: PtyProcess | null;
   /** A web launch's `HARNESS_PORT`. */
@@ -540,11 +548,11 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       exitCode === 0 ? { state: 'stopped' } : { state: 'failed', reason: 'exit_nonzero' };
     // A process it started still runs in its group (a server it forked, say): the shutdown
     // sequence stops the group before the launch ends, as nothing could stop it afterwards.
-    const { pid } = launch;
-    if (pid !== null && processTreeAlive(pid)) {
+    const child = launch.process;
+    if (child !== null && processTreeAlive(child.pid)) {
       runtimeLine(launch, 'Processes it started are still running');
       launch.stopRequested = true;
-      launch.stopping = stopProcess(launch, pid, end);
+      launch.stopping = stopProcess(launch, child, end);
       return;
     }
     void finish(launch, end);
@@ -564,7 +572,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       await finish(launch, { state: 'failed', reason: 'spawn_error' });
       return;
     }
-    launch.pid = child.pid;
+    launch.process = child;
     runtimeLine(
       launch,
       `Started ${[command.file, ...command.args].join(' ')} (pid ${String(child.pid)}), port ${String(port)}`,
@@ -577,7 +585,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     });
     // The window closed, or the app began quitting, while it was starting.
     if (stopWasRequested(launch)) {
-      launch.stopping ??= stopProcess(launch, child.pid, { state: 'stopped' });
+      launch.stopping ??= stopProcess(launch, child, { state: 'stopped' });
       return;
     }
     setState(launch, 'waiting-ready');
@@ -600,7 +608,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
         `Did not accept connections on ${LOOPBACK}:${String(port)} within ${String(seconds)} s`,
       );
       launch.stopRequested = true;
-      launch.stopping ??= stopProcess(launch, child.pid, {
+      launch.stopping ??= stopProcess(launch, child, {
         state: 'failed',
         reason: 'ready_timeout',
       });
@@ -623,11 +631,10 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       return;
     }
     launch.pty = child;
-    launch.pid = child.pid;
-    runtimeLine(
-      launch,
-      `Started ${[command.file, ...command.args].join(' ')} (pid ${String(child.pid)})`,
-    );
+    launch.process = child;
+    // On Windows the pid is not known yet (see PtyProcess.pid); the signal lines name it.
+    const started = `Started ${[command.file, ...command.args].join(' ')}`;
+    runtimeLine(launch, child.pid > 0 ? `${started} (pid ${String(child.pid)})` : started);
     child.onData((data) => {
       launch.log?.write('pty', data);
       if (launch.windowOpen) windows.send(launch.launchId, 'terminal.data', data);
@@ -643,15 +650,24 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
    * the process, or any process of its group, is still there after the grace period: a process
    * the Harness started may ignore SIGTERM although the Harness itself exits on it.
    */
-  const stopProcess = async (launch: Launch, pid: number, end: LaunchEnd) => {
+  const stopProcess = async (launch: Launch, child: { readonly pid: number }, end: LaunchEnd) => {
     setState(launch, 'stopping');
-    runtimeLine(launch, `Sent SIGTERM to ${String(pid)} and its children`);
-    signalProcessTree(pid, 'SIGTERM');
+    // A pty whose pid is not known yet (Windows, just spawned) gets nothing now; SIGKILL, after
+    // the grace period, reads it again.
+    const signal = (name: StopSignal) => {
+      const { pid } = child;
+      if (pid <= 0) {
+        runtimeLine(launch, `Could not send ${name}: the process id is not known yet`);
+        return;
+      }
+      runtimeLine(launch, `Sent ${name} to ${String(pid)} and its children`);
+      signalProcessTree(pid, name);
+    };
+    signal('SIGTERM');
     const graceEnds = Date.now() + STOP_GRACE_MS;
     const exitedInTime = await settlesWithin(launch.exited, STOP_GRACE_MS);
-    if (!exitedInTime || !(await processTreeEndsWithin(pid, graceEnds - Date.now()))) {
-      runtimeLine(launch, `Sent SIGKILL to ${String(pid)} and its children`);
-      signalProcessTree(pid, 'SIGKILL');
+    if (!exitedInTime || !(await processTreeEndsWithin(child.pid, graceEnds - Date.now()))) {
+      signal('SIGKILL');
       if (!(await settlesWithin(launch.exited, KILL_WAIT_MS))) {
         runtimeLine(launch, 'The process did not report its exit; the launch is recorded as ended');
       }
@@ -664,9 +680,9 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     if (launch.finished !== null) return launch.finished;
     if (launch.stopping !== null) return launch.stopping;
     launch.stopRequested = true;
-    const { pid } = launch;
-    if (pid !== null) {
-      launch.stopping = stopProcess(launch, pid, { state: 'stopped' });
+    const child = launch.process;
+    if (child !== null) {
+      launch.stopping = stopProcess(launch, child, { state: 'stopped' });
       return launch.stopping;
     }
     // A terminal launch waiting for its window to report its size: nothing runs yet.
@@ -740,7 +756,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       tokenIssued: false,
       log: null,
       command: null,
-      pid: null,
+      process: null,
       pty: null,
       port: null,
       windowOpen: false,
@@ -762,9 +778,9 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
       const end: LaunchEnd = { state: 'failed', reason: 'spawn_error' };
       // A process already started is stopped with the shutdown sequence before the launch ends,
       // so it never runs on, unseen, beside a new launch of the same Harness.
-      if (launch.pid !== null && !launch.processExited) {
+      if (launch.process !== null && !launch.processExited) {
         launch.stopRequested = true;
-        launch.stopping ??= stopProcess(launch, launch.pid, end);
+        launch.stopping ??= stopProcess(launch, launch.process, end);
       } else {
         void finish(launch, end);
       }

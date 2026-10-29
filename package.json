@@ -11,9 +11,12 @@
   "scripts": {
     "build": "pnpm --recursive run build",
     "lint": "pnpm --recursive run lint && pnpm run lint:root && pnpm run format:check",
-    "lint:root": "eslint \"*.{js,mjs,cjs}\"",
+    "lint:root": "eslint \"*.{js,mjs,cjs}\" \"scripts/*.mjs\"",
     "typecheck": "pnpm --recursive run typecheck",
     "test": "pnpm --recursive run test",
+    "e2e": "pnpm build && pnpm --filter @harness-store/desktop run e2e",
+    "check:catalogs": "pnpm --filter @harness-store/desktop exec vitest run test/i18n/catalogs.test.ts",
+    "ci:local": "node scripts/ci-local.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

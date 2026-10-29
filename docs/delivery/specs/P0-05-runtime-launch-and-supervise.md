@@ -92,7 +92,7 @@ The Runtime's Process Supervisor and local installer. "Install this folder local
 - Gateway integration via the **Gateway HTTP seam**: fixture-web calls the Gateway with its token against the fake Provider and gets a completion; a fixture Harness installed from a folder declares its Slots to `/v1/harness/context`.
 - Renderer: jsdom tests of the Publish panel, the consent dialog, the Library cards and menu, the Workspace sheet and the Harness window page (both UI Kinds, every state), in en and zh-CN.
 - There is no Electron E2E setup yet, so flows a ticket asked to check with Playwright for Electron are covered through the Supervisor seam and jsdom. That the web content view reaches neither Node nor IPC, denies permissions and sends external links to the browser was checked by hand in Electron 45 on macOS, besides the window-options and navigation-rule unit tests; opening the OS file browser was not checked by hand.
-- Platforms: signal, process-group, pty and binary tests ran on macOS and Linux; binary tests skip on Windows. The Windows paths (`taskkill /T`, ConPTY, the process tree once its root exited) are implemented but untested; CI is Linux only for now.
+- Platforms: signal, process-group, pty and binary tests ran on macOS and Linux; binary tests skip on Windows. Since P0-13 the Supervisor and installer tests also run on windows-latest in CI, covering `taskkill /T`, ConPTY and the pty pid, which node-pty fills in only once ConPTY connects (the Supervisor reads it at each stop step).
 
 ## Out of Scope
 
@@ -102,7 +102,7 @@ The Runtime's Process Supervisor and local installer. "Install this folder local
 ## Further Notes
 
 - Deviations from the requirements as written: R-0503's window opens at once on a Starting state and shows the page when the port is ready; R-0506's window stays open after the process exits on its own, showing the exit code, instead of closing; R-0507's Node is Electron's own (Node 24), not a separately bundled Node LTS 22.
-- Windows process-tree termination and pty behaviour are the riskiest parts and are untested until a Windows CI job exists. On Windows the tree cannot be looked up once its root has exited, so helpers a Harness leaves behind may survive there.
+- Windows process-tree termination and pty behaviour are the riskiest parts; P0-13's windows-latest CI job covers them. On Windows the tree cannot be looked up once its root has exited, so helpers a Harness leaves behind may survive there.
 - A separately bundled Node adds size per platform (acceptable per ADR-0003) and would close the gap with the Manifest's `runtime.node: "22"`.
 
 ## Blocked by

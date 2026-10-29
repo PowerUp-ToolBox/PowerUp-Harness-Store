@@ -47,6 +47,18 @@ export default defineConfig(
     },
   },
   {
+    // The Playwright journeys belong to tsconfig.e2e.json, not to the nearest tsconfig.json.
+    name: 'harness-store/desktop-e2e',
+    files: ['e2e/**/*.ts'],
+    languageOptions: {
+      parserOptions: {
+        projectService: false,
+        project: './tsconfig.e2e.json',
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+  {
     // Every string the User sees comes from the en and zh-CN catalogs. JSX text with a letter (any
     // script) and literal text in the attributes above fail the lint; punctuation and whitespace
     // between elements do not. test/i18n/lint-rule.test.ts proves the rule fires.

@@ -45,6 +45,7 @@ import type { StoreDownloader } from '../../src/main/runtime/store-download.js';
 import type { HarnessWindows } from '../../src/main/runtime/supervisor.js';
 import type { IpcEventName, IpcEvents, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { removeFolder, WAIT_MS } from '../support/harness-processes.js';
 
 const FIXTURES = join(import.meta.dirname, '../fixtures/harnesses');
 const PLATFORM = `${process.platform}-${process.arch}`;
@@ -102,7 +103,7 @@ describe('uninstall over IPC', () => {
   afterEach(async () => {
     await runtime.shutdown();
     await fake.close();
-    rmSync(root, { recursive: true, force: true });
+    removeFolder(root);
   });
 
   function call(method: string, input?: unknown) {
@@ -151,7 +152,7 @@ describe('uninstall over IPC', () => {
   }
 
   async function waitForState(launchId: string, state: LaunchStatus['state']) {
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + WAIT_MS;
     while (!states.some((each) => each.launchId === launchId && each.state === state)) {
       if (Date.now() > deadline) throw new Error(`Timed out waiting for ${state}`);
       await new Promise((resolve) => setTimeout(resolve, 20));

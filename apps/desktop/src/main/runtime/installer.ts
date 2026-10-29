@@ -58,6 +58,13 @@ const DOWNLOAD_PREFIX = 'download-';
 export const UNINSTALLED_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
+ * How an uninstall retries deleting a file Windows still holds (`EBUSY`, `EPERM`): the process of
+ * a Harness that has just stopped, or an antivirus scanning what it wrote, may keep one open for a
+ * moment after the launch ended.
+ */
+const REMOVE_RETRIES = { maxRetries: 5, retryDelay: 200 } as const;
+
+/**
  * The file an uninstall writes in the Harness's logs folder, holding when it was uninstalled (an
  * ISO 8601 time), so its logs are kept 30 days from then. Not a `.log`, so no launch log counts it.
  */
@@ -656,11 +663,11 @@ export function createInstaller(options: InstallerOptions): InstallsService {
         try {
           // Only folders of the install layout are ever deleted, whatever the row says.
           if (isInside(paths.harnesses, row.installPath)) {
-            await rm(row.installPath, { recursive: true, force: true });
+            await rm(row.installPath, { recursive: true, force: true, ...REMOVE_RETRIES });
             await removeEmptyFolders(dirname(row.installPath), paths.harnesses);
           }
           if (isInside(paths.data, row.dataDir)) {
-            await rm(row.dataDir, { recursive: true, force: true });
+            await rm(row.dataDir, { recursive: true, force: true, ...REMOVE_RETRIES });
             await removeEmptyFolders(dirname(row.dataDir), paths.data);
           }
           store.remove(harnessId);

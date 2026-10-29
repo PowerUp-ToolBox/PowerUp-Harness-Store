@@ -51,8 +51,9 @@ describe('pnpm workspace', () => {
       'pnpm run lint:root',
       'pnpm run format:check',
     ]);
-    // Root-level JS (eslint.config.js) belongs to no package, so no package lints it.
-    expect(rootManifest.scripts?.['lint:root']).toBe('eslint "*.{js,mjs,cjs}"');
+    // Root-level JS (eslint.config.js) and the root scripts/ (ci-local.mjs) belong to no
+    // package, so no package lints them.
+    expect(rootManifest.scripts?.['lint:root']).toBe('eslint "*.{js,mjs,cjs}" "scripts/*.mjs"');
     expect(rootManifest.scripts?.['format:check']).toBe('prettier --check .');
   });
 

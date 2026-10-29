@@ -11,6 +11,7 @@ Status: **design complete; P0 implementation has started** with the monorepo sca
 - [`docs/tech/`](./docs/tech) — [architecture](./docs/tech/architecture.md), [Manifest spec](./docs/tech/manifest-spec.md), [Gateway protocol](./docs/tech/gateway-protocol.md), [data model](./docs/tech/data-model.md), [API](./docs/tech/api.md), [security](./docs/tech/security.md)
 - [`docs/ux/`](./docs/ux) — [principles](./docs/ux/design-principles.md), [flows](./docs/ux/flows.md), [screens](./docs/ux/screens.md)
 - [`docs/guides/authoring-harnesses.md`](./docs/guides/authoring-harnesses.md) — for Publishers: build, test and publish a Harness with the SDK ([简体中文](./docs/guides/authoring-harnesses.zh-CN.md))
+- [`docs/guides/local-e2e-testing.md`](./docs/guides/local-e2e-testing.md) — for maintainers: run the end-to-end journey locally, automated or by hand against the local Store
 - [`docs/delivery/specs/`](./docs/delivery/specs) — one spec per feature, mirrored to GitHub issues labelled `spec` + phase (`P0`, `P0.5`, `P1`, `P2`), ordered by ID and linked by "blocked by".
 
 ## Phases
@@ -35,7 +36,60 @@ pnpm test        # every package's test script (Vitest; no Docker needed)
 
 On a fresh clone, run `pnpm build` before `pnpm lint`, `pnpm typecheck` or `pnpm test`: packages depend on each other through `workspace:*` and import each other's built `dist/` (a package's own tests may import it by its package name too). Rebuild after changing a package that another one imports.
 
-CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs exactly these commands, in this order, on every push and pull request. A second job, `store`, starts a local Supabase stack in Docker and runs the Store tests against it (see [`apps/store`](./apps/store/README.md)).
+CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs on every push and pull request. Its first job, `lint-typecheck`, runs `pnpm build`, `pnpm lint`, `pnpm typecheck` and `pnpm check:catalogs` (the `en` and `zh-CN` catalogs of the desktop app have the same keys; a failure names each missing key). Every other job needs it alone, so a lint failure skips them all, and they then run in parallel, each installing and building on its own runner:
+
+| Job | What it runs |
+|---|---|
+| `unit` | `pnpm test`: every package's tests, no Docker |
+| `gateway-conformance` | the Model Gateway conformance suite against the fake Provider |
+| `store-tests` | starts a local Supabase stack in Docker, serves the Edge Functions, runs the Store tests against them, and stops the stack (see [`apps/store`](./apps/store/README.md)) |
+| `supervisor-tests` | the desktop app's Supervisor and installer tests (`test:launch`, `test:install`) on macOS, Windows and Linux, each passing or failing on its own |
+| `e2e-smoke` | the Store-less Desktop E2E journey (Playwright for Electron over the built app): first-run wizard with a fake Ollama, install `hello-web` from its folder, launch, one chat through the Model Gateway, its Usage Record, uninstall; on macOS, Windows and Linux |
+| `acceptance` | the acceptance journey, the P0 definition of done: the same User also signs in as a Publisher, publishes `hello-web`, finds it with Store search and installs it from the Store, against a local Supabase stack and a fake GitHub, within 10 minutes; Linux only (macOS runners have no Docker) |
+
+The Desktop E2E journeys live in [`apps/desktop/e2e`](./apps/desktop/e2e); a failed journey is retried once in CI, one that passed only on its retry is listed as flaky in the job summary, and a failed job uploads its Playwright traces, screenshots and logs. To run them yourself (Docker for `acceptance`), and to walk the same journey by hand against the local Store, see [`docs/guides/local-e2e-testing.md`](./docs/guides/local-e2e-testing.md):
+
+```sh
+pnpm e2e         # build, then both journeys; E2E_OLLAMA_PORT=11435 when a real Ollama has 11434
+```
+
+To reproduce a CI failure without pushing, run the same jobs once on your own OS (no OS matrix):
+
+```sh
+pnpm ci:local                       # build, then every job in CI order; lint-typecheck failing skips the rest
+pnpm ci:local unit supervisor-tests # only the jobs named
+pnpm ci:local --list                # the job names
+```
+
+The full run includes `store-tests`, which needs Docker and **stops your local Supabase stack and deletes its data** (Harnesses you published, profiles, an `is_admin` flag), before it starts and again at the end; name the other jobs to keep it. It points Auth's GitHub provider at the fake GitHub of the sign-in tests, as in CI, even when `apps/store/supabase/.env` has a real OAuth app; run `pnpm db:start` in `apps/store` afterwards to sign in with that app again. It runs with the dependencies you installed, and never passes a `CONFORMANCE_*` variable on, so the conformance suite stays on the fake Provider, as in CI. Ctrl-C stops the command running, starts no other job and still stops the stack. `acceptance` needs Docker too: it restarts the stack the same way but keeps its data, replaces the Store catalogue with the seed, and stops the stack at the end.
+
+A second workflow, [`nightly.yml`](./.github/workflows/nightly.yml), runs the conformance suite against real Providers every night and on demand (Actions → Nightly → Run workflow), with the repository secrets `CONFORMANCE_ANTHROPIC_API_KEY`, `CONFORMANCE_OPENAI_API_KEY` and, for an OpenAI-compatible endpoint, `CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL`, `CONFORMANCE_OPENAI_COMPATIBLE_MODEL` and `CONFORMANCE_OPENAI_COMPATIBLE_API_KEY` (the repository variables `CONFORMANCE_ANTHROPIC_MODEL` and `CONFORMANCE_OPENAI_MODEL` change the models). A Provider whose secret is not set is skipped, not failed. It never runs on a pull request.
+
+Which checks a pull request must pass is a branch protection setting of the repository (Settings → Branches → the `main` rule → Require status checks), not something the workflow files can set. Mark the `ci` jobs as required. GitHub lists each check by the job's name, not its id, and a check appears there once it has run on the repository:
+
+| Check to mark as required | Job id |
+|---|---|
+| Lint, typecheck and catalogs | `lint-typecheck` |
+| Unit tests | `unit` |
+| Model Gateway conformance (fake Provider) | `gateway-conformance` |
+| Store backend on a local Supabase stack | `store-tests` |
+| Supervisor and installer (macos-latest) | `supervisor-tests` |
+| Supervisor and installer (windows-latest) | `supervisor-tests` |
+| Supervisor and installer (ubuntu-latest) | `supervisor-tests` |
+| Desktop E2E smoke (macos-latest) | `e2e-smoke` |
+| Desktop E2E smoke (windows-latest) | `e2e-smoke` |
+| Desktop E2E smoke (ubuntu-latest) | `e2e-smoke` |
+| Acceptance journey (local Store) | `acceptance` |
+
+Never mark the Nightly workflow's "Model Gateway conformance (real Providers)" as required, nor the Build workflow's jobs.
+
+A third workflow, [`build.yml`](./.github/workflows/build.yml), packages the unsigned desktop app on every push to `main`, on every `v*` tag and on demand (Actions → Build → Run workflow), never on a pull request: a dmg for macOS arm64 and x64, an nsis installer for Windows x64 and an AppImage for Linux x64, each on a runner of its own platform. Each build is then started once headless with the post-build smoke run, which installs and runs `examples/hello-term` for one turn against the fake Provider with the app's own Node runtime; a failure fails that build. The builds are the run's artifacts (`harness-store-macos-arm64`, …). A tag `v1.2.3` builds version 1.2.3 and also creates a draft GitHub release with the four builds and [`.github/release-notes.md`](./.github/release-notes.md), which tells testers how to open an unsigned app; review and publish it by hand. Nothing is code-signed or notarised yet (roadmap: before the public launch). To build and smoke-test for your own OS:
+
+```sh
+pnpm build
+pnpm --filter @harness-store/desktop package   # into apps/desktop/release/
+pnpm --filter @harness-store/desktop smoke     # exits 0 when hello-term answered once
+```
 
 To check a Harness Package (a folder or a zip) the way the Store will, build the Manifest package and run its CLI: `pnpm --filter @harness-store/manifest build`, then `node packages/manifest/bin/harness-manifest.js validate <path>`. See [`packages/manifest`](./packages/manifest/README.md#command-line-harness-manifest-validate) for its options, output and exit status.
 

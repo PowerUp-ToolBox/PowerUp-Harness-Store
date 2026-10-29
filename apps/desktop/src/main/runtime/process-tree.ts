@@ -13,14 +13,18 @@ export type StopSignal = 'SIGTERM' | 'SIGKILL';
  * gone, the process alone is tried; a process that has already exited is not an error.
  *
  * On Windows there are no signals: SIGTERM is `taskkill /T /PID <pid>` (asks every window of the
- * tree to close) and SIGKILL `taskkill /T /F /PID <pid>`. This path is not tested yet: CI runs on
- * Linux only.
+ * tree to close, so it cannot end a console process, which has none) and SIGKILL `taskkill /T /F /PID
+ * <pid>`.
+ *
+ * A pid that is not a process's (0 or less) is never signalled: `kill(0)` would reach the
+ * Runtime's own process group.
  */
 export function signalProcessTree(
   pid: number,
   signal: StopSignal,
   platform: NodeJS.Platform = process.platform,
 ): void {
+  if (pid <= 0) return;
   if (platform === 'win32') {
     const force = signal === 'SIGKILL' ? ['/F'] : [];
     execFile('taskkill', ['/T', ...force, '/PID', String(pid)], { windowsHide: true }, () => {
@@ -74,7 +78,7 @@ export function processTreeAlive(
   pid: number,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  if (platform === 'win32') return false;
+  if (platform === 'win32' || pid <= 0) return false;
   try {
     process.kill(-pid, 0);
     return true;

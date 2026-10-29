@@ -1,13 +1,30 @@
-# Packaging for the current OS: `pnpm --filter @harness-store/desktop package`. It is a manual step;
-# the root `pnpm build` (and CI) only compiles with electron-vite. Main and preload bundle all their
-# dependencies (electron.vite.config.ts) but node-pty, the one runtime `dependency`: a native module
-# for terminal Harnesses, shipped from node_modules and kept outside the asar archive, as native
-# code and its macOS spawn-helper cannot run from inside it. Its N-API prebuilds need no rebuild
-# for Electron. Code signing and auto-update are deferred (P0-04 Out of Scope).
+# Packaging for the current OS: `pnpm --filter @harness-store/desktop package`, after the root
+# `pnpm build`. CI's `build` workflow (.github/workflows/build.yml) packages each target on its own
+# runner on pushes to main and on tags: dmg for darwin-arm64 and darwin-x64 (`--arm64`, `--x64`),
+# nsis for win32-x64, AppImage for linux-x64. Each build is then started once with the smoke run of
+# scripts/smoke.mjs, which installs and runs examples/hello-term for one turn; a failure fails the
+# job. The root `pnpm build` (and the `ci` workflow) only compiles with electron-vite.
+#
+# Main and preload bundle all their dependencies (electron.vite.config.ts) but node-pty, the one
+# runtime `dependency`: a native module for terminal Harnesses, shipped from node_modules and kept
+# outside the asar archive, as native code and its macOS spawn-helper cannot run from inside it.
+# Its N-API prebuilds for every target ship as they are and need no rebuild for Electron, so
+# `npmRebuild` stays off; each target's own runner proves them with the smoke run.
+#
+# The Node runtime of Node Harnesses is the app's own executable with ELECTRON_RUN_AS_NODE=1
+# (src/main/runtime/bootstrap.ts): Electron's RunAsNode fuse must stay enabled, its default. No
+# separate Node binary ships; a build whose runtime is missing or broken fails the smoke run.
+#
+# Unsigned: no code signing (`identity: null`, and CI sets CSC_IDENTITY_AUTO_DISCOVERY=false) and
+# no notarisation, both deferred to before the public launch (roadmap). Auto-update of the app is
+# not in P0. .github/release-notes.md tells testers how to open an unsigned build.
 appId: io.github.powerup-toolbox.harness-store
 productName: Harness Store
 directories:
   output: release
+# harness-store-0.1.0-mac-arm64.dmg, harness-store-0.1.0-win-x64.exe, … (no spaces, for CLI downloads).
+# The version is package.json's (0.0.0), or the tag's on a release (-c.extraMetadata.version).
+artifactName: harness-store-${version}-${os}-${arch}.${ext}
 files:
   - out/**
   - package.json
@@ -22,6 +39,8 @@ win:
   target: nsis
 linux:
   target: AppImage
+  # The executable in linux-unpacked/ and the AppImage, which scripts/smoke.mjs starts.
+  executableName: harness-store
 # The Store sign-in comes back from the browser as harnessstore://auth-callback (P0-07.2). macOS
 # reads this from Info.plist; on Windows the app registers it at runtime
 # (app.setAsDefaultProtocolClient in src/main/index.ts). On Linux it only goes into the .desktop

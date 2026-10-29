@@ -7,6 +7,7 @@ import {
   createLocalDetector,
   DETECT_TIMEOUT_MS,
   localProbeTargets,
+  localProbeTargetsWithOllama,
 } from '../../src/main/runtime/local-detection.js';
 import { REFUSED_BASE_URL } from '../support/refused-port.js';
 
@@ -51,6 +52,25 @@ describe('localProbeTargets', () => {
       { providerId: 'lmstudio', baseUrl: 'http://127.0.0.1:1234/v1' },
     ]);
   });
+});
+
+describe('localProbeTargetsWithOllama', () => {
+  it('moves only Ollama to the URL given, without a trailing slash', () => {
+    expect(localProbeTargetsWithOllama('http://127.0.0.1:11435/v1/')).toEqual([
+      { providerId: 'ollama', baseUrl: 'http://127.0.0.1:11435/v1' },
+      { providerId: 'lmstudio', baseUrl: 'http://127.0.0.1:1234/v1' },
+    ]);
+    expect(localProbeTargetsWithOllama('http://localhost:9/v1')[0]?.baseUrl).toBe(
+      'http://localhost:9/v1',
+    );
+  });
+
+  it.each(['https://127.0.0.1:11435/v1', 'http://192.168.1.2:11434/v1', 'not a url', ''])(
+    'refuses %j: only a loopback http URL',
+    (url) => {
+      expect(() => localProbeTargetsWithOllama(url)).toThrow(/loopback http URL/);
+    },
+  );
 });
 
 describe('createLocalDetector', () => {

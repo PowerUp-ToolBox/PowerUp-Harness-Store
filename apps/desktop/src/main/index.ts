@@ -3,6 +3,8 @@
  * Electron's APIs; the services and IPC handlers live in src/main/runtime/, which never imports
  * Electron, so they are unit-tested under plain Node.
  */
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   app,
@@ -32,12 +34,14 @@ import { startRuntime, type Runtime } from './runtime/bootstrap.js';
 import { createDispatcher, UntrustedSenderError } from './runtime/dispatcher.js';
 import { createHandlers } from './runtime/handlers.js';
 import { createHarnessWindowHandlers } from './runtime/harness-window-handlers.js';
+import { localProbeTargetsWithOllama } from './runtime/local-detection.js';
 import {
   harnessPartition,
   isAllowedExternalUrl,
   mainWindowOptions,
 } from './runtime/main-window.js';
 import { createSafeStorageCipher } from './runtime/secret-cipher.js';
+import { endSmoke, runSmoke, smokeRequest, type SmokeRequestResult } from './runtime/smoke.js';
 import { STORE_ASSET_SCHEME, storeAssetSource } from '../shared/store-assets.js';
 import { AUTH_SCHEME } from './runtime/store-auth.js';
 import { initialWindowBounds } from './runtime/window-state.js';
@@ -45,6 +49,19 @@ import { initialWindowBounds } from './runtime/window-state.js';
 // A fresh profile for manual runs and E2E: must be set before `ready`.
 const userDataDir = process.env.HARNESS_STORE_USER_DATA_DIR;
 if (userDataDir) app.setPath('userData', resolve(userDataDir));
+
+// Development and E2E only, ignored by a packaged app: where local detection looks for Ollama, so
+// the E2E journey's fake Ollama can listen elsewhere when a real one has 11434 (apps/desktop/e2e).
+const devOllamaUrl = app.isPackaged ? undefined : process.env.HARNESS_STORE_DEV_OLLAMA_URL;
+const localProbeTargets = devOllamaUrl ? localProbeTargetsWithOllama(devOllamaUrl) : undefined;
+
+// Development and E2E only, ignored by a packaged app: the Linux keyring safeStorage uses
+// (Chromium's `--password-store`). Set here because Playwright's Electron loader appends
+// `password-store=basic` before this script runs, which a `--password-store` argument cannot
+// override; Chromium reads the switch only after this script, so the value set here wins
+// (apps/desktop/e2e/support/app.ts).
+const devPasswordStore = app.isPackaged ? undefined : process.env.HARNESS_STORE_DEV_PASSWORD_STORE;
+if (devPasswordStore) app.commandLine.appendSwitch('password-store', devPasswordStore);
 
 let mainWindow: BrowserWindow | null = null;
 /** The Runtime from the moment `start` begins it; null before that. */
@@ -61,8 +78,14 @@ protocol.registerSchemesAsPrivileged([
   { scheme: STORE_ASSET_SCHEME, privileges: { standard: true, secure: true } },
 ]);
 
-// One Runtime per profile: a second launch focuses the existing window instead.
-if (!app.requestSingleInstanceLock()) {
+// The post-build smoke run (./runtime/smoke.ts), asked for by environment variables only: it runs
+// instead of the app, with no window, on a profile of its own, then exits.
+const smoke = smokeRequest(process.env);
+
+if (smoke !== null) {
+  runSmokeInstead(smoke);
+} else if (!app.requestSingleInstanceLock()) {
+  // One Runtime per profile: a second launch focuses the existing window instead.
   app.quit();
 } else {
   // The Store sign-in comes back from the browser as harnessstore://auth-callback. Packaged builds
@@ -197,6 +220,7 @@ async function start(): Promise<void> {
     // Connection tests, model listings and local detection use Node's fetch, as the Model
     // Gateway's upstream calls do, so a passing test means the Gateway reaches the same place.
     providerFetch: (input, init) => globalThis.fetch(input, init),
+    ...(localProbeTargets === undefined ? {} : { localProbeTargets }),
     // safeStorage is usable from `ready` on, which start() runs after.
     secretCipher: createSafeStorageCipher(safeStorage, process.platform),
     // "Install this folder locally" and the Workspace sheet: the native folder picker, as a sheet
@@ -349,4 +373,48 @@ function saveWindowState(window: BrowserWindow, started: Runtime): void {
   } catch (error) {
     console.error('Could not save the window state', error);
   }
+}
+
+/**
+ * The post-build smoke run instead of the app (scripts/smoke.mjs): on a new temporary profile,
+ * deleted afterwards, with no window, no single-instance lock and no `harnessstore:` registration.
+ * The app exits 0 when the run passed, 1 otherwise (a refused request included), even when the
+ * profile cannot be deleted ({@link endSmoke}).
+ */
+function runSmokeInstead(smoke: SmokeRequestResult): void {
+  if (!smoke.ok) {
+    console.error(`[smoke] ${smoke.error}`);
+    app.exit(1);
+    return;
+  }
+  const dataDir = mkdtempSync(join(tmpdir(), 'harness-store-smoke-'));
+  app.setPath('userData', dataDir);
+  if (process.platform === 'darwin') app.dock?.hide();
+  void app
+    .whenReady()
+    .then(() =>
+      runSmoke({
+        ...smoke.request,
+        dataDir,
+        version: app.getVersion(),
+        log: (line) => {
+          console.log(line);
+        },
+      }),
+    )
+    .catch((error: unknown) => {
+      console.error('[smoke] The smoke run could not start', error);
+      return false;
+    })
+    .then((passed) => {
+      endSmoke(passed, {
+        dataDir,
+        exit: (code) => {
+          app.exit(code);
+        },
+        logError: (line, error) => {
+          console.error(line, error);
+        },
+      });
+    });
 }
