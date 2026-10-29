@@ -46,6 +46,8 @@ let extraEnv: Record<string, string>;
 let opened: string[];
 /** When set, starting the process fails with it, after the Runtime issued the launch's token. */
 let spawnFailure: Error | undefined;
+/** When the Runtime began starting each process: none of a Harness's own timers runs before. */
+let spawnedAt: number[];
 /** Whether the Harness's port accepted a connection right when its launch reported `ready`. */
 let acceptedWhenReady: Promise<boolean>[];
 /** When set, the OS's answers when the Runtime asks for a free port; the real ones otherwise. */
@@ -62,6 +64,7 @@ beforeEach(async () => {
   extraEnv = {};
   opened = [];
   spawnFailure = undefined;
+  spawnedAt = [];
   acceptedWhenReady = [];
   askPort = undefined;
   showWebFailure = undefined;
@@ -89,8 +92,10 @@ beforeEach(async () => {
     spawnPty: () => {
       throw new Error('No pty in these tests');
     },
-    spawnProcess: (options) =>
-      spawnFailure === undefined ? spawnPiped(options) : Promise.reject(spawnFailure),
+    spawnProcess: (options) => {
+      spawnedAt.push(Date.now());
+      return spawnFailure === undefined ? spawnPiped(options) : Promise.reject(spawnFailure);
+    },
     freePort: () => (askPort ?? freePort)(),
     harnessEnvironment: () => ({
       ...process.env,
@@ -552,8 +557,10 @@ describe('waiting for the port', () => {
     await install('fixture-slow-ready');
     const launchId = await launch('acme/fixture-slow-ready');
     const ready = await waitForState(launchId, 'ready', 8000);
-    const waiting = statesOf(launchId).find((each) => each.state === 'waiting-ready');
-    expect(ready.at - (waiting?.at ?? 0)).toBeGreaterThanOrEqual(1900);
+    // Measured from the spawn, not from `waiting-ready`: the process runs, and its 2 s timer
+    // counts, from the spawn, while `waiting-ready` comes only once the Runtime's event loop has
+    // taken the spawn event, which a busy machine delays by hundreds of milliseconds.
+    expect(ready.at - (spawnedAt[0] ?? Infinity)).toBeGreaterThanOrEqual(2000);
     expect(statesOf(launchId).map((each) => each.state)).not.toContain('failed');
 
     // Ready, and its page shown, only after the Harness began accepting connections.
@@ -576,7 +583,7 @@ describe('waiting for the port', () => {
       const failed = await waitForState(launchId, 'failed', 10_000);
       const waiting = statesOf(launchId).find((each) => each.state === 'waiting-ready');
       const stopping = statesOf(launchId).find((each) => each.state === 'stopping');
-      // The timeout runs from the spawn; polling every 250 ms adds a little.
+      // The timeout runs from `waiting-ready`, by the same clock; polling every 250 ms adds a little.
       const timedOutAfter = (stopping?.at ?? 0) - (waiting?.at ?? 0);
       expect(timedOutAfter).toBeGreaterThanOrEqual(4900);
       expect(timedOutAfter).toBeLessThan(5600);

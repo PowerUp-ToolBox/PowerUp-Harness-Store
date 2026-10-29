@@ -58,12 +58,19 @@ describe('pickPort', () => {
 describe('waitForPort', () => {
   it('is ready as soon as the port accepts a connection, polling every 250 ms', async () => {
     const port = await pickPort();
-    const started = Date.now();
-    setTimeout(() => void listen(port), 600);
+    // Measured from when the port began listening, not from a clock taken before the 600 ms
+    // timer: Node starts a timer at its event loop's cached time, which can be earlier than
+    // Date.now(), so the timer may fire before 600 ms have passed by Date.now().
+    let listeningAt = Infinity;
+    setTimeout(() => {
+      void listen(port).then(() => {
+        listeningAt = Date.now();
+      });
+    }, 600);
     await expect(waitForPort(port, 5000)).resolves.toBe('ready');
-    const elapsed = Date.now() - started;
-    expect(elapsed).toBeGreaterThanOrEqual(600);
-    expect(elapsed).toBeLessThan(1200);
+    const readyAt = Date.now();
+    expect(readyAt).toBeGreaterThanOrEqual(listeningAt);
+    expect(readyAt - listeningAt).toBeLessThan(600);
   });
 
   it('times out at its timeout when nothing listens', async () => {

@@ -526,6 +526,8 @@ describe('the shutdown sequence', () => {
       expect(readFileSync(signalFile, 'utf8')).toBe('SIGTERM\n');
       const stopped = await waitForState(launchId, 'stopped', 10_000);
       const elapsed = Date.now() - closedAt;
+      // The grace period is a timer, which Node starts at its event loop's cached time; that can
+      // be a little earlier than closedAt, hence the 100 ms below 5 s.
       expect(elapsed).toBeGreaterThanOrEqual(4900);
       expect(elapsed).toBeLessThan(8000);
       // Killed by signal 9: 128 + 9.
@@ -556,6 +558,7 @@ describe('the shutdown sequence, for the processes a Harness started', () => {
         const stopped = await waitForState(launchId, 'stopped', 10_000);
         const elapsed = Date.now() - closedAt;
         // The Harness itself exited on SIGTERM; its helper held the stop for the grace period.
+        // That period ends by Date.now(), from after closedAt; the 100 ms are only a margin.
         expect(stopped.exitCode).toBe(0);
         expect(elapsed).toBeGreaterThanOrEqual(4900);
         expect(elapsed).toBeLessThan(8000);
