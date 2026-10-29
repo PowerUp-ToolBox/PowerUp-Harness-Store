@@ -56,8 +56,8 @@ React single-page app. No business logic beyond view state; every action goes th
 ### 2.4 Shared packages
 - `packages/manifest`: Manifest JSON Schema, TypeScript types, `validateManifest()` and `validatePackage()` (structure + file presence). Used by the desktop app, the Publish flow and the `publish` Edge Function. Single source of truth.
 - `packages/gateway`: the Model Gateway server and Provider adapters (Vercel AI SDK).
-- `packages/sdk`: `@harness-store/sdk` for Node Harness authors.
-- `examples/`: reference Harnesses used in tests and as the first Store listings.
+- `packages/sdk`: `@harness-store/sdk` for Node Harnesses: the launch environment, the official OpenAI client pointed at the Gateway, Model Slot helpers and typed Gateway errors. It reaches the Gateway over HTTP only.
+- `examples/`: reference Harnesses used in tests and as the first Store listings. Each builds a self-contained Harness folder (`out/`: Manifest, README, assets and one bundled Entry), which is what is validated, installed and published.
 
 ## 3. Repository layout (pnpm monorepo)
 
@@ -67,8 +67,8 @@ apps/store          Supabase project: migrations, RLS policies, edge functions, 
 packages/manifest   schema + validators (no runtime deps beyond a JSON Schema lib)
 packages/gateway    Model Gateway + Provider adapters
 packages/sdk        @harness-store/sdk (Node)
-examples/hello-web  reference Harness, UI Kind web, Node
-examples/hello-term reference Harness, UI Kind terminal, Node
+examples/hello-web  reference Harness, UI Kind web, Node (built to out/)
+examples/hello-term reference Harness, UI Kind terminal, Node (built to out/)
 docs/               this documentation
 ```
 
@@ -121,6 +121,6 @@ No sandboxing of Harness processes. No agent loop in the platform. No consumer-s
 
 1. **Gateway HTTP seam**: run `packages/gateway` in-process against a fake OpenAI-compatible Provider server; assert on HTTP responses, streaming, errors and Usage Records. This is the primary seam for all model-routing behaviour.
 2. **Manifest validation seam**: pure functions in `packages/manifest` with fixture packages.
-3. **Supervisor seam**: spawn fixture Harnesses (tiny Node scripts) and assert injected environment, window readiness, lifecycle and token revocation. Runs without a display where possible (window creation mocked).
+3. **Supervisor seam**: spawn fixture Harnesses (tiny Node scripts) and assert injected environment, window readiness, lifecycle and token revocation. Runs without a display where possible (window creation mocked). The built reference Harnesses are installed and launched through it too, against a real Gateway and the fake Provider.
 4. **Store seam**: Supabase local stack; call Edge Functions and PostgREST over HTTP.
 5. **Desktop E2E seam**: Playwright for Electron, a handful of smoke journeys (first run, install, launch, publish) with Providers faked.
