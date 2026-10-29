@@ -36,6 +36,7 @@ function setup() {
     consentedPermissions: manifest.permissions,
     source: 'local',
     storeStatus: null,
+    takedownAcknowledged: false,
     availableVersion: null,
     availableManifest: null,
   };

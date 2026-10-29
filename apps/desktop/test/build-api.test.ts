@@ -57,6 +57,7 @@ describe('buildApi (window.api)', () => {
       'dataSize',
       'list',
       'checkUpdates',
+      'acknowledgeTakedown',
     ]);
     expect(Object.keys(api.launch)).toEqual([
       'start',

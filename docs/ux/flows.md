@@ -56,7 +56,7 @@ Each flow lists steps, decision points and error branches. Screen details are in
    - Added permission, changed Entry or changed runtime kind → the button reads "Review update"; the re-consent prompt opens before the download, listing what the update adds (diff style: "New: runs shell commands"), the changelog, the trust block with the no-sandbox sentence, and buttons Update, Not now. Update then downloads, verifies and replaces as above.
    - Download or integrity error → inline error under the button; the old version stays installed and launchable. Update retries.
 3. A Harness that is running cannot be updated; "Close the Harness to update" shows under the button.
-4. An installed version that was Unpublished or taken down remains launchable; the card shows a note "No longer available in the Store" and Update is hidden.
+4. An installed version that was Unpublished or taken down remains launchable and Update is hidden. Unpublished: the card shows a note "No longer available in the Store". Taken down (P0-12): a red warning on the card and the detail page, and Launch first asks once per Takedown "This Harness was removed from the Store. Launch anyway?".
 
 ## F5. Publish
 

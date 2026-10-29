@@ -266,6 +266,12 @@ export function createHandlers(services: Services): IpcHandlers {
       if (input !== undefined) return fail('invalid_input', { method: 'installs.checkUpdates' });
       return (await services.updates.check()) ? ok(null) : fail('store_unreachable');
     },
+    'installs.acknowledgeTakedown': (input) => {
+      if (!isHarnessIdInput(input) || !input.includes('/')) {
+        return fail('invalid_input', { method: 'installs.acknowledgeTakedown' });
+      }
+      return services.installs.acknowledgeTakedown(input);
+    },
     'launch.start': (input) => {
       const request = parseLaunchRequest(input);
       if (request === null) return fail('invalid_input', { method: 'launch.start' });

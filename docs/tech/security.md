@@ -21,6 +21,7 @@
 ## Store policy (P0)
 - Listing terms require: Gateway-only model access, accurate Declared Permissions, no credential harvesting, no obfuscated payloads, license compliance.
 - Enforcement in P0 is reactive: Report → admin review → Takedown. Automated scanning is P1-07.
+- The administrator works from the admin CLI in `apps/store` (P0-12.2), with the service-role key, and for `takedown` the project's JWT secret, read from their own shell's environment only, never committed and never printed. A taken-down Harness leaves Store discovery at once; an existing install keeps working, with a red warning and a one-time "Launch anyway?" confirmation (the platform never deletes a User's tools remotely). Only a whole-Harness Takedown reaches installs in P0: the update check reads a Harness's status, not each version's.
 
 ## Store-side controls
 - RLS on all tables; writes only through Edge Functions with server-side validation using the same `packages/manifest` code as the client.

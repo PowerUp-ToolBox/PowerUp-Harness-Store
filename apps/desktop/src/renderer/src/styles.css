@@ -3051,6 +3051,21 @@ textarea[aria-invalid='true'] {
 }
 
 /*
+ * The red warning of an installed Harness that was taken down (P0-12.2), on its Library card and
+ * its detail page.
+ */
+.takedown-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--color-error);
+  border-radius: 8px;
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/*
  * A Library card's failed launch and overflow menu (P0-05.6): the error line with Show logs and
  * Dismiss, and the three-dot menu under the card's top right corner.
  */

@@ -450,6 +450,13 @@ export interface IpcMethods {
    */
   'installs.checkUpdates': { input: undefined; output: null };
   /**
+   * The User confirmed "Launch anyway" for this installed Harness, which the update check found
+   * taken down (P0-12.2): records it in its `installs` row, so Launch asks no more until the
+   * update check finds another Store status, and reports it with `installs.changed`. Nothing
+   * changes for a Harness that is not taken down, or already acknowledged. `not_installed`.
+   */
+  'installs.acknowledgeTakedown': { input: string; output: null };
+  /**
    * Launches an installed Harness (docs/tech/architecture.md §4) and answers as soon as its launch
    * has begun; how it goes arrives as `launch.state` events. One instance per Harness: while it
    * runs, the answer is `focused` and its window comes to the front instead (a launch that is
@@ -826,6 +833,11 @@ export interface InstalledHarness {
    * for a local install, which is never checked.
    */
   readonly storeStatus: InstallStoreStatus | null;
+  /**
+   * The User confirmed "Launch anyway" since the update check found it taken down
+   * (`installs.acknowledgeTakedown`); false whenever that check last changed `storeStatus`.
+   */
+  readonly takedownAcknowledged: boolean;
   /**
    * The newer version the Store offers, which runs on this platform; null when there is none (a
    * local install, a Harness the Store no longer offers, or no check yet).
@@ -1471,6 +1483,7 @@ const METHOD_NAMES: Readonly<Record<IpcMethodName, true>> = {
   'installs.dataSize': true,
   'installs.list': true,
   'installs.checkUpdates': true,
+  'installs.acknowledgeTakedown': true,
   'launch.start': true,
   'launch.chooseWorkspace': true,
   'launch.lastWorkspace': true,

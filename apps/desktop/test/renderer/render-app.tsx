@@ -466,6 +466,9 @@ export function installFakeApi(
       checkUpdates: vi.fn((): Promise<IpcResult<null>> =>
         Promise.resolve({ ok: true, data: null }),
       ),
+      acknowledgeTakedown: vi.fn<(harnessId: string) => Promise<IpcResult<null>>>(() =>
+        Promise.resolve({ ok: true, data: null }),
+      ),
     },
     launch: {
       start: vi.fn((request: LaunchRequest): Promise<IpcResult<LaunchStarted>> =>

@@ -115,6 +115,7 @@ describe('openDatabase', () => {
       'state',
       'store_status',
       'available_manifest',
+      'takedown_acknowledged',
     ]);
     expect(columns(db, 'launches')).toEqual([
       'launch_id',

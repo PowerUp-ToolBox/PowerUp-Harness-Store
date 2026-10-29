@@ -47,6 +47,7 @@ const INSTALLED: InstalledHarness = {
   iconDataUrl: null,
   platformSupported: true,
   storeStatus: null,
+  takedownAcknowledged: false,
   availableUpdate: null,
 };
 

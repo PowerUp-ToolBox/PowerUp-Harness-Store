@@ -12,6 +12,7 @@ import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { downloadPercent, useInstallJobs } from '../install/InstallJobsProvider.js';
 import { isLaunchActive, LaunchAction, useLaunch } from '../library/LaunchAction.js';
+import { TakedownWarning } from '../library/Takedown.js';
 import { UninstallDialog } from '../library/UninstallDialog.js';
 import { ReportDialog, type ReportTarget } from '../report/ReportDialog.js';
 import { LibraryIcon, MoreIcon, SearchIcon } from '../shell/icons.js';
@@ -304,8 +305,9 @@ const dismissedFailures = new Set<string>();
  * it needs the User's consent again, with Launch as the secondary link; its download shows its
  * progress and Cancel in place of the button, and its failure under it. While the Harness runs
  * the button is the launch's, and the card says "Close the Harness to update". A Harness the
- * Store no longer offers (Unpublished or taken down) has the note "No longer available in the
- * Store" and no Update.
+ * Store no longer offers has no Update: an Unpublished one has the note "No longer available in
+ * the Store", a taken-down one the red {@link TakedownWarning} instead, and its Launch asks for
+ * the one-time takedown confirmation ({@link useLaunch}).
  */
 function HarnessCard({
   install,
@@ -330,8 +332,7 @@ function HarnessCard({
   const availableUpdate = offeredUpdate(install);
   const job = installJobs.jobs.get(harnessId);
   const running = isLaunchActive(launch);
-  const noLongerInStore =
-    install.storeStatus === 'unpublished' || install.storeStatus === 'taken_down';
+  const takenDown = install.storeStatus === 'taken_down';
   const failure =
     launch === undefined || dismissedFailures.has(launch.launchId) ? null : shownFailure(launch);
 
@@ -454,7 +455,10 @@ function HarnessCard({
           />
         )}
       </div>
-      {noLongerInStore ? <p className="hint">{t('store.detail.notInStore')}</p> : null}
+      {takenDown ? <TakedownWarning /> : null}
+      {install.storeStatus === 'unpublished' ? (
+        <p className="hint">{t('store.detail.notInStore')}</p>
+      ) : null}
       {availableUpdate !== null && running && job?.kind !== 'failed' ? (
         <p className="hint">{t('library.closeToUpdate')}</p>
       ) : null}

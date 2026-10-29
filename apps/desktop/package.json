@@ -29,6 +29,7 @@
     "test:usage": "vitest run usage",
     "test:settings": "vitest run settings",
     "test:report": "vitest run report",
+    "test:takedown": "vitest run takedown store-update",
     "test:store-browsing": "vitest run store-home store-assets store-search store-detail store-publisher render-markdown primary-action tags"
   },
   "devDependencies": {

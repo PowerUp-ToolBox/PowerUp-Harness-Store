@@ -46,6 +46,7 @@ function installed(workspace: Manifest['workspace']): InstalledHarness {
     iconDataUrl: null,
     platformSupported: true,
     storeStatus: null,
+    takedownAcknowledged: false,
     availableUpdate: null,
   };
 }

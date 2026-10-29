@@ -1,5 +1,5 @@
 /**
- * Ticket P0-10.2: the update check and updating a Store install, through the Runtime's IPC handlers
+ * Tickets P0-10.2 and P0-12.2: the update check and updating a Store install, through the Runtime's IPC handlers
  * (the Supervisor/Installer seam, architecture §8 item 3) against a fake Store on a real HTTP port.
  * The fake Store answers `latest_versions` and `download` as api.md says, and serves real zips
  * built here with fflate from the `fixture-term` folder, its manifest.json changed per version:
@@ -12,6 +12,12 @@
  * unpacked; a failed, cancelled or refused update leaves the old version installed and launchable;
  * the Data Directory's files are untouched by an update; a running Harness is not updated; local
  * installs are never asked about nor updated.
+ *
+ * P0-12.2 (How to verify, step 4): a `store_status` of `taken_down` reaching an existing install
+ * through the update check marks it, drops the update it had and offers none (the Store's
+ * `download` refuses it too), and leaves it launchable; the one-time launch confirmation's
+ * acknowledgement (`installs.acknowledgeTakedown`) is kept in its row until the check finds
+ * another status.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -68,6 +74,8 @@ let server: Server;
 let baseUrl: string;
 /** Every version the Store has of each Harness, the latest last. */
 let published: Map<string, Published[]>;
+/** Harnesses the Store no longer offers: `latest_versions` says so, and `download` refuses them. */
+let withdrawn: Map<string, 'taken_down' | 'unpublished'>;
 let downloadCalls: Record<string, unknown>[];
 let latestCalls: string[][];
 /** When set, the signed URL sends the first 64 bytes and then nothing. */
@@ -109,6 +117,10 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
       response,
       200,
       ids.map((id) => {
+        const status = withdrawn.get(id);
+        if (status !== undefined) {
+          return { harness_id: id, store_status: status, latest_version: null, manifest: null };
+        }
         const latest = published.get(id)?.at(-1);
         return latest === undefined
           ? { harness_id: id, store_status: 'not_found', latest_version: null, manifest: null }
@@ -125,7 +137,9 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
   if (request.method === 'POST' && url.pathname === '/functions/v1/download') {
     const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
     downloadCalls.push(body);
-    const versions = published.get(String(body.harness_id)) ?? [];
+    const versions = withdrawn.has(String(body.harness_id))
+      ? []
+      : (published.get(String(body.harness_id)) ?? []);
     const found =
       body.version === null
         ? versions.at(-1)
@@ -257,6 +271,7 @@ function createFakeWindows() {
 
 beforeEach(async () => {
   published = new Map();
+  withdrawn = new Map();
   downloadCalls = [];
   latestCalls = [];
   stallPackage = false;
@@ -630,5 +645,106 @@ describe('a running Harness (How to verify, step 4)', () => {
       error: { code: 'harness_running' },
     });
     await expectStillV1();
+  });
+});
+
+describe('a Takedown reaching an existing install (P0-12.2, How to verify step 4)', () => {
+  it('marks it taken down, drops and offers no update, and leaves it launchable', async () => {
+    publish('1.0.0');
+    await installFromStore();
+    publish('1.1.0');
+    await runtime.updates.check();
+    await expect(listed()).resolves.toMatchObject({ availableUpdate: { version: '1.1.0' } });
+    events = [];
+
+    withdrawn.set(TERM, 'taken_down');
+    await runtime.updates.check();
+    await expect(listed()).resolves.toMatchObject({
+      version: '1.0.0',
+      storeStatus: 'taken_down',
+      takedownAcknowledged: false,
+      availableUpdate: null,
+    });
+    expect(installRows()).toMatchObject([
+      {
+        store_status: 'taken_down',
+        available_version: null,
+        available_manifest: null,
+        takedown_acknowledged: 0,
+      },
+    ]);
+    expect(events).toEqual([{ event: 'installs.changed', payload: { harnessId: TERM } }]);
+
+    // The Store's download refuses it, and v1 stays.
+    await expect(update('1.1.0', false)).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'not_found' },
+    });
+    await expectStillV1();
+
+    // Main does not enforce the confirmation: the renderer asks it before launch.start.
+    const launchId = await launchAndWait();
+    windows.close(launchId);
+  });
+
+  it('keeps the acknowledgement until the update check finds another status', async () => {
+    publish('1.0.0');
+    await installFromStore();
+    withdrawn.set(TERM, 'taken_down');
+    await runtime.updates.check();
+    events = [];
+
+    await expect(call('installs.acknowledgeTakedown', TERM)).resolves.toEqual({
+      ok: true,
+      data: null,
+    });
+    await expect(listed()).resolves.toMatchObject({
+      storeStatus: 'taken_down',
+      takedownAcknowledged: true,
+    });
+    // Kept in SQLite, so a restart asks no more.
+    expect(installRows()).toMatchObject([{ takedown_acknowledged: 1 }]);
+    expect(events).toEqual([{ event: 'installs.changed', payload: { harnessId: TERM } }]);
+
+    // Acknowledging again, or a check that finds it still taken down, changes nothing.
+    events = [];
+    await expect(call('installs.acknowledgeTakedown', TERM)).resolves.toMatchObject({ ok: true });
+    await runtime.updates.check();
+    await expect(listed()).resolves.toMatchObject({ takedownAcknowledged: true });
+    expect(events).toEqual([]);
+
+    // Reinstated, then taken down again: a new Takedown asks again.
+    withdrawn.delete(TERM);
+    await runtime.updates.check();
+    await expect(listed()).resolves.toMatchObject({
+      storeStatus: 'available',
+      takedownAcknowledged: false,
+    });
+    withdrawn.set(TERM, 'taken_down');
+    await runtime.updates.check();
+    await expect(listed()).resolves.toMatchObject({
+      storeStatus: 'taken_down',
+      takedownAcknowledged: false,
+    });
+  });
+
+  it('records nothing for an install that is not taken down, and refuses one not installed', async () => {
+    publish('1.0.0');
+    await installFromStore();
+    withdrawn.set(TERM, 'unpublished');
+    await runtime.updates.check();
+    events = [];
+
+    await expect(call('installs.acknowledgeTakedown', TERM)).resolves.toEqual({
+      ok: true,
+      data: null,
+    });
+    expect(installRows()).toMatchObject([
+      { store_status: 'unpublished', takedown_acknowledged: 0 },
+    ]);
+    expect(events).toEqual([]);
+    await expect(call('installs.acknowledgeTakedown', 'acme/not-installed')).resolves.toMatchObject(
+      { ok: false, error: { code: 'not_installed' } },
+    );
   });
 });

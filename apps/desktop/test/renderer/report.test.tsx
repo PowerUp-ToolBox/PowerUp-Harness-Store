@@ -74,6 +74,7 @@ function installed(fields: Partial<InstalledHarness> = {}): InstalledHarness {
     iconDataUrl: null,
     platformSupported: true,
     storeStatus: 'available',
+    takedownAcknowledged: false,
     availableUpdate: null,
     ...fields,
   };
@@ -185,6 +186,7 @@ describe('Report dialog', () => {
         publisher: 'me',
         source: 'local',
         storeStatus: null,
+        takedownAcknowledged: false,
       }),
     ]);
     await renderApp('#/library');

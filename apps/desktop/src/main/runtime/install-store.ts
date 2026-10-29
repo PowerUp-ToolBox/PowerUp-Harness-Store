@@ -21,12 +21,22 @@ export interface InstallRow {
   readonly availableVersion: string | null;
   /** That version's Manifest; null exactly when `availableVersion` is. */
   readonly availableManifest: Manifest | null;
+  /**
+   * The User confirmed "Launch anyway" since the update check last changed `storeStatus`: the
+   * launch confirmation of a taken-down Harness shows once per Takedown.
+   */
+  readonly takedownAcknowledged: boolean;
 }
 
 /** What an install writes; the launch history and the update check keep their own columns. */
 export type NewInstall = Omit<
   InstallRow,
-  'lastLaunchedAt' | 'lastWorkspace' | 'storeStatus' | 'availableVersion' | 'availableManifest'
+  | 'lastLaunchedAt'
+  | 'lastWorkspace'
+  | 'storeStatus'
+  | 'availableVersion'
+  | 'availableManifest'
+  | 'takedownAcknowledged'
 >;
 
 /**
@@ -68,8 +78,8 @@ export interface InstallStore {
   /**
    * Records an install, replacing the Harness's row if it has one (a transient one included) and
    * making it `installed`. A reinstall keeps when the Harness was last launched and its last
-   * Workspace, and clears the available update; it keeps the Store status of a Store install and
-   * clears it for a local one.
+   * Workspace, and clears the available update; it keeps the Store status of a Store install, and
+   * its takedown acknowledgement, and clears both for a local one.
    */
   put(install: NewInstall): void;
   /**
@@ -92,9 +102,15 @@ export interface InstallStore {
   /**
    * Records an update check of the installed Store Harness at `version`; nothing when it is not
    * installed (any more), is a local install, or is now at another version (an update or install
-   * came in between). Whether the row changed.
+   * came in between). A new Store status clears the takedown acknowledgement. Whether the row
+   * changed.
    */
   recordUpdateCheck(harnessId: string, version: string, result: UpdateCheckResult): boolean;
+  /**
+   * Records that the User confirmed launching the installed Harness the update check found taken
+   * down; nothing for one not installed or not taken down. Whether the row changed.
+   */
+  acknowledgeTakedown(harnessId: string): boolean;
   /** Records when the Harness was last launched (ISO-8601 UTC); nothing for one not installed. */
   markLaunched(harnessId: string, at: string): void;
   /** Records the Workspace the Harness was last launched with; nothing for one not installed. */
@@ -116,6 +132,7 @@ interface SqlInstallRow {
   state: InstallState;
   store_status: InstallStoreStatus | null;
   available_manifest: string | null;
+  takedown_acknowledged: 0 | 1;
 }
 
 // The JSON columns hold what was written: validated Manifests and Declared Permissions.
@@ -135,6 +152,7 @@ function fromSql(row: SqlInstallRow): InstallRow {
     availableVersion: row.available_version,
     availableManifest:
       row.available_manifest === null ? null : (JSON.parse(row.available_manifest) as Manifest),
+    takedownAcknowledged: row.takedown_acknowledged === 1,
   };
 }
 
@@ -177,15 +195,27 @@ export function createInstallStore(db: DatabaseSync): InstallStore {
        consented_permissions = excluded.consented_permissions, source = excluded.source,
        available_version = NULL, available_manifest = NULL,
        store_status = CASE WHEN excluded.source = 'local' THEN NULL ELSE installs.store_status END,
+       takedown_acknowledged =
+         CASE WHEN excluded.source = 'local' THEN 0 ELSE installs.takedown_acknowledged END,
        state = 'installed'`,
   );
   const selectChecked = db.prepare(
     `SELECT store_status, available_version, available_manifest FROM installs
      WHERE harness_id = ? AND version = ? AND source = 'store' AND state = 'installed'`,
   );
+  // Every expression of SET reads the row as it was, so the acknowledgement is compared with
+  // the old status.
   const updateChecked = db.prepare(
-    `UPDATE installs SET store_status = ?, available_version = ?, available_manifest = ?
-     WHERE harness_id = ? AND version = ? AND source = 'store' AND state = 'installed'`,
+    `UPDATE installs SET
+       takedown_acknowledged =
+         CASE WHEN store_status IS ?1 THEN takedown_acknowledged ELSE 0 END,
+       store_status = ?1, available_version = ?2, available_manifest = ?3
+     WHERE harness_id = ?4 AND version = ?5 AND source = 'store' AND state = 'installed'`,
+  );
+  const updateAcknowledged = db.prepare(
+    `UPDATE installs SET takedown_acknowledged = 1
+     WHERE harness_id = ? AND state = 'installed' AND store_status = 'taken_down'
+       AND takedown_acknowledged = 0`,
   );
   const updateLaunched = db.prepare(
     'UPDATE installs SET last_launched_at = ? WHERE harness_id = ?',
@@ -248,6 +278,9 @@ export function createInstallStore(db: DatabaseSync): InstallStore {
         version,
       );
       return true;
+    },
+    acknowledgeTakedown(harnessId) {
+      return Number(updateAcknowledged.run(harnessId).changes) > 0;
     },
     markLaunched(harnessId, at) {
       updateLaunched.run(at, harnessId);

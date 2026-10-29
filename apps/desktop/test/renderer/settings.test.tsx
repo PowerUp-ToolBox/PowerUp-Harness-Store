@@ -52,6 +52,7 @@ function installed(harnessId: string, update?: string): InstalledHarness {
     iconDataUrl: null,
     platformSupported: true,
     storeStatus: 'available',
+    takedownAcknowledged: false,
     availableUpdate:
       update === undefined ? null : { version: update, manifest: { ...manifest, version: update } },
   };

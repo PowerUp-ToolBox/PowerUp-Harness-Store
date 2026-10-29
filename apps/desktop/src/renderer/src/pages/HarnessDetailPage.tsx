@@ -12,6 +12,7 @@ import { ErrorMessage } from '../components/ErrorMessage.js';
 import { useI18n } from '../i18n/I18nProvider.js';
 import { downloadPercent, useInstallJobs } from '../install/InstallJobsProvider.js';
 import { isLaunchActive, useLaunchStatus } from '../library/LaunchAction.js';
+import { TakedownWarning } from '../library/Takedown.js';
 import { UninstallDialog } from '../library/UninstallDialog.js';
 import { ListingDetail, type SlotUse } from '../listing/ListingDetail.js';
 import { connectionName } from '../models/names.js';
@@ -48,7 +49,9 @@ const UNANSWERED: IpcError = {
  * A Harness the Store no longer offers (taken down, Unpublished-only, unknown) is the "no longer
  * available" page when it is not installed; an installed one keeps its page, built from its
  * installed Manifest, with Launch and the note "No longer available in the Store" (flows F4 step
- * 4). Back returns to where the User came from (the Store's search keeps its text, tags and
+ * 4). An installed Harness the update check found taken down (its install's `storeStatus`, the
+ * Library card's source too, not this page's Store read) shows the red {@link TakedownWarning} in
+ * place of that note, and its Launch asks for the one-time takedown confirmation. Back returns to where the User came from (the Store's search keeps its text, tags and
  * platform toggle), or to the Store home when the page was opened directly.
  *
  * The footer's Report opens the Report dialog (flows F8) for the version in the page's header:
@@ -180,7 +183,9 @@ export function HarnessDetailPage() {
         }}
         onError={setError}
       />
-      {install !== null && harness === null ? (
+      {install?.storeStatus === 'taken_down' ? (
+        <TakedownWarning />
+      ) : install !== null && harness === null ? (
         <p className="hint">{t('store.detail.notInStore')}</p>
       ) : null}
       {shownError === null ? null : <ActionError error={shownError} />}

@@ -101,6 +101,12 @@ export interface InstallsService {
   /** Every installed Harness, the most recently launched first, then by name. */
   list(): Promise<readonly InstalledHarness[]>;
   /**
+   * Records that the User confirmed "Launch anyway" for an installed Harness the update check
+   * found taken down, so the confirmation is not shown again for this Takedown; nothing changes
+   * for one that is not taken down.
+   */
+  acknowledgeTakedown(harnessId: string): Promise<IpcResult<null>>;
+  /**
    * Whether an install of the Harness is copying or putting its files in place now, or an
    * uninstall is deleting them: the Supervisor launches nothing from a folder that is about to be
    * replaced or deleted.
@@ -702,6 +708,7 @@ export function createInstaller(options: InstallerOptions): InstallsService {
             iconDataUrl: icon,
             platformSupported: entryFor(row.manifest, platform) !== null,
             storeStatus: row.storeStatus,
+            takedownAcknowledged: row.takedownAcknowledged,
             availableUpdate:
               row.availableVersion === null || row.availableManifest === null
                 ? null
@@ -709,6 +716,13 @@ export function createInstaller(options: InstallerOptions): InstallsService {
           };
         }),
       );
+    },
+
+    async acknowledgeTakedown(harnessId) {
+      await recovered;
+      if (store.get(harnessId) === undefined) return fail('not_installed');
+      if (store.acknowledgeTakedown(harnessId)) options.onChanged?.(harnessId);
+      return ok(null);
     },
 
     isInstalling: (harnessId) => installing.has(harnessId),
@@ -746,6 +760,8 @@ export function createInstallsStub(): InstallsService {
     uninstall: () => Promise.resolve(fail('not_implemented', { method: 'installs.uninstall' })),
     dataSize: () => Promise.resolve(fail('not_implemented', { method: 'installs.dataSize' })),
     list: () => Promise.resolve([]),
+    acknowledgeTakedown: () =>
+      Promise.resolve(fail('not_implemented', { method: 'installs.acknowledgeTakedown' })),
     isInstalling: () => false,
   };
 }

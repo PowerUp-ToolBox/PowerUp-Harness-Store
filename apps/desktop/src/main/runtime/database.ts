@@ -7,6 +7,7 @@ import m0005 from './migrations/0005_installs_and_launches.sql?raw';
 import m0006 from './migrations/0006_install_state.sql?raw';
 import m0007 from './migrations/0007_update_check.sql?raw';
 import m0008 from './migrations/0008_usage_records_timestamp.sql?raw';
+import m0009 from './migrations/0009_takedown_acknowledged.sql?raw';
 
 /** The local SQLite file's name in the app data root (data-model.md, install layout). */
 export const DATABASE_FILE_NAME = 'harness-store.sqlite';
@@ -25,6 +26,7 @@ export const MIGRATIONS: readonly string[] = [
   m0006,
   m0007,
   m0008,
+  m0009,
 ];
 
 /**

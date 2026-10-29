@@ -467,6 +467,22 @@ describe('the takedown note and the Publisher-only read policy', () => {
     expect(reply).toEqual({ status: 200, body: [] });
   });
 
+  it('refuses a direct PostgREST write of taken_down to anon, another Publisher and the owner', async () => {
+    const [published] = await versionsOf(harness);
+    for (const caller of ['anon', { token: other.token }, { token: owner.token }] as const) {
+      const reply = await rest(caller, 'PATCH', `harness_versions?id=eq.${published?.id ?? ''}`, {
+        status: 'taken_down',
+        takedown_note: 'Bypassing the function.',
+      });
+      expect(isPermissionDenied(reply), JSON.stringify(caller)).toBe(true);
+    }
+    expect((await versionsOf(harness))[0]).toMatchObject({
+      version: '1.0.0',
+      status: 'published',
+      takedown_note: null,
+    });
+  });
+
   it('keeps admin_actions out of reach of anon and every Publisher', async () => {
     for (const caller of ['anon', { token: owner.token }, { token: admin.token }] as const) {
       expect(isPermissionDenied(await rest(caller, 'GET', 'admin_actions'))).toBe(true);
