@@ -14,7 +14,7 @@ Harness Store runs third-party code without a sandbox and publishes listings wit
 
 ## Solution
 
-A Report dialog reachable from the detail page's footer and from a Store install's Library card menu (flow F8 in `docs/ux/flows.md`), submitted anonymously through IPC to the Store's `report` function; a minimal administrator path to list and dismiss Reports and to take down a version or a whole Harness through the `admin/takedown` function, all from a small admin CLI in the Store app (no admin UI in P0); and client behaviour for an installed Harness that was taken down: it is gone from Store discovery, shows a red warning in the Library and on its detail page, has no Update, and stays launchable after a one-time confirmation. `docs/tech/api.md` gives the IPC calls and the CLI's Store calls, `docs/tech/data-model.md` the settings keys and the `installs` column, and `docs/ux/screens.md` the dialog, the warning and their copy.
+A Report dialog reachable from the detail page's footer and from a Store install's Library card menu (flow F8 in `docs/ux/flows.md`), submitted anonymously through IPC to the Store's `report` function; a minimal administrator path to list and dismiss Reports and to take down a version or a whole Harness through the `admin/takedown` function, all from a small admin CLI in the Store app (no admin UI in P0); and client behaviour for an installed Harness that was taken down: it is gone from Store discovery, shows a red warning in the Library and on its detail page, has no Update, and stays launchable after a one-time confirmation. When only the installed version was taken down, the update check learns it from an extended `latest_versions`, and the install shows the same warning and confirmation naming that version while Update to a newer published version stays offered. `docs/tech/api.md` gives the IPC calls, the update check's RPC and the CLI's Store calls, `docs/tech/data-model.md` the settings keys and the `installs` columns, and `docs/ux/screens.md` the dialog, the warning and their copy.
 
 ## User Stories
 
@@ -28,7 +28,7 @@ A Report dialog reachable from the detail page's footer and from a Store install
 8. As a User, I want a confirmation after submitting, so that I know it went through.
 9. As a User, I want repeated reports of the same Harness from my install to be gently rate-limited, so that the system is not abusable while I am not punished for a double click.
 10. As a User, I want an offline or server error to be shown with Retry and my text preserved, so that I do not have to retype.
-11. As a User who installed a Harness that was later taken down, I want a clear red warning on its Library card and detail page, so that I can decide whether to keep using it.
+11. As a User who installed a Harness that was later taken down, whole or only the version I installed, I want a clear red warning on its Library card and detail page, so that I can decide whether to keep using it.
 12. As a User, I want a taken-down Harness to remain launchable after I confirm once, so that the platform does not delete my tools remotely.
 13. As a User, I want a taken-down Harness to have Update hidden and to never reappear in Store lists or search, so that removal is complete on the discovery side.
 14. As a Store administrator, I want to list Reports, or only open ones, grouped by Harness with counts per reason and the latest details, so that I can triage.
