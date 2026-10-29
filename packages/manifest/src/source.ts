@@ -22,7 +22,7 @@ export type UnsupportedEntry =
   | { reason: 'compression_method'; method: number }
   | { reason: 'inconsistent'; detail: string };
 
-/** One entry of a Harness Package, as listed without reading any content. */
+/** One entry of a Harness Package, as listed (see {@link PackageListing}). */
 export interface PackageEntry {
   /**
    * The name as stored (decoded): the zip entry name, or the path relative to the folder with `/`
@@ -47,7 +47,11 @@ export interface PackageEntry {
   unsupported?: UnsupportedEntry;
 }
 
-/** Everything the archive-safety rules need, gathered without reading any file's content. */
+/**
+ * Everything the archive-safety rules need: validatePackage() reads no file for them. To gather
+ * it, an `ArchiveSource` reads the data of entries with a data descriptor while it opens (500 MB
+ * at most for the whole archive), to confirm where each one ends.
+ */
 export interface PackageListing {
   entries: readonly PackageEntry[];
   /**
