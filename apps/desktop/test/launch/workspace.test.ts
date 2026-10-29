@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -9,9 +9,11 @@ import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createHarnessWindowHandlers } from '../../src/main/runtime/harness-window-handlers.js';
 import { spawnNodePty, type PtySpawnOptions } from '../../src/main/runtime/pty.js';
+import { terminalText } from '../../src/main/runtime/smoke.js';
 import type { HarnessWindows } from '../../src/main/runtime/supervisor.js';
 import type { IpcEventName, IpcEvents, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { removeFolder, WAIT_MS } from '../support/harness-processes.js';
 
 /**
  * Ticket P0-05.4, the Workspace, through the Supervisor seam: the real Runtime with its SQLite
@@ -90,7 +92,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await runtime.shutdown();
   await fake.close();
-  rmSync(root, { recursive: true, force: true });
+  removeFolder(root);
 });
 
 function call(method: string, input?: unknown) {
@@ -154,16 +156,19 @@ interface WorkspaceReport {
   readonly workspace: string | null;
 }
 
-/** What the fixture of `launchId` printed about its working directory and Workspace. */
+/**
+ * What the fixture of `launchId` printed about its working directory and Workspace, read from the
+ * text without the terminal's control sequences (Windows' ConPTY adds its own).
+ */
 function report(launchId: string): Promise<WorkspaceReport> {
   return waitFor(() => {
-    const line = windows.sent
+    const printed = windows.sent
       .filter((each) => each.launchId === launchId && each.event === 'terminal.data')
       .map((each) => each.payload as string)
-      .join('')
+      .join('');
+    const line = terminalText(printed)
       .split('\n')
       .slice(0, -1)
-      .map((each) => each.replace(/\r$/, ''))
       .find((each) => each.startsWith('FIXTURE workspace '));
     return line === undefined
       ? undefined
@@ -171,7 +176,7 @@ function report(launchId: string): Promise<WorkspaceReport> {
   });
 }
 
-async function waitFor<T>(read: () => T | undefined, timeoutMs = 5000): Promise<T> {
+async function waitFor<T>(read: () => T | undefined, timeoutMs = WAIT_MS): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = read();
@@ -314,7 +319,7 @@ describe('a Harness that requires a Workspace', () => {
     await report(launchId);
     windows.close(launchId);
     await waitForState(launchId, 'stopped');
-    rmSync(project, { recursive: true });
+    removeFolder(project);
 
     await expect(call('launch.lastWorkspace', harnessId)).resolves.toEqual({
       ok: true,

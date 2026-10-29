@@ -21,6 +21,10 @@ export interface PtyExit {
 
 /** A process running in a pseudo-terminal: what the Supervisor needs of node-pty's `IPty`. */
 export interface PtyProcess {
+  /**
+   * The process id. On Windows it is 0 for a moment after spawning: node-pty learns it once
+   * ConPTY has connected, so it is read when needed, not kept from the spawn.
+   */
   readonly pid: number;
   onData(listener: (data: string) => void): void;
   onExit(listener: (exit: PtyExit) => void): void;
@@ -37,7 +41,8 @@ export type PtySpawner = (options: PtySpawnOptions) => PtyProcess;
  * app whose node-pty cannot load still starts, and only terminal launches fail (`spawn_error`).
  *
  * On macOS and Linux the process becomes a session leader (`setsid`), so its process group is the
- * whole tree the Supervisor signals. `TERM` is `xterm-256color`, what xterm.js understands.
+ * whole tree the Supervisor signals. `TERM` is `xterm-256color`, what xterm.js understands: node-pty
+ * sets it from `name` on macOS and Linux only, so it is in the environment on Windows too.
  */
 export const spawnNodePty: PtySpawner = (options) => {
   const pty = createRequire(import.meta.url)('node-pty') as typeof NodePty;
@@ -46,10 +51,12 @@ export const spawnNodePty: PtySpawner = (options) => {
     cols: options.cols,
     rows: options.rows,
     cwd: options.cwd,
-    env: { ...options.env },
+    env: { ...options.env, TERM: 'xterm-256color' },
   });
   return {
-    pid: child.pid,
+    get pid() {
+      return child.pid;
+    },
     onData(listener) {
       child.onData(listener);
     },

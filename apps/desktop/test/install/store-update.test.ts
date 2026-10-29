@@ -29,7 +29,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -57,6 +56,7 @@ import type {
   LaunchStatus,
 } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { removeFolder, WAIT_MS } from '../support/harness-processes.js';
 
 const FIXTURES = join(import.meta.dirname, '../fixtures/harnesses');
 const ANON_KEY = 'fake-anon-key';
@@ -375,7 +375,7 @@ afterEach(async () => {
   await fake.close();
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
-  rmSync(root, { recursive: true, force: true });
+  removeFolder(root);
 });
 
 function call(method: string, input?: unknown) {
@@ -447,7 +447,7 @@ async function expectStillV1() {
   expect(downloads()).toEqual([]);
 }
 
-async function waitFor<T>(read: () => T | undefined, timeoutMs = 5000): Promise<T> {
+async function waitFor<T>(read: () => T | undefined, timeoutMs = WAIT_MS): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = read();

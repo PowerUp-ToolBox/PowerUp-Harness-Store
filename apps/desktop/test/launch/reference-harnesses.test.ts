@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { createRequire } from 'node:module';
 import { connect } from 'node:net';
@@ -13,10 +13,12 @@ import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createHarnessWindowHandlers } from '../../src/main/runtime/harness-window-handlers.js';
 import { spawnPiped, type PipedSpawnOptions } from '../../src/main/runtime/piped-process.js';
 import { spawnNodePty } from '../../src/main/runtime/pty.js';
+import { terminalText } from '../../src/main/runtime/smoke.js';
 import type { HarnessWindows, WebWindowSpec } from '../../src/main/runtime/supervisor.js';
 import type { HarnessWindowEventName } from '../../src/shared/harness-ipc.js';
 import type { IpcEventName, IpcEvents, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { removeFolder, WAIT_MS } from '../support/harness-processes.js';
 
 /**
  * Tickets P0-06.2 and P0-06.3, the reference Harnesses end to end through the Supervisor seam: the
@@ -73,7 +75,7 @@ afterEach(async () => {
   await runtime?.shutdown();
   runtime = undefined;
   await fake.close();
-  rmSync(root, { recursive: true, force: true });
+  removeFolder(root);
 });
 
 /** The Runtime on `userData` in `locale`, with `model-a` as the Default Model of `default`. */
@@ -193,31 +195,38 @@ function createFakeWindows() {
   return fakes;
 }
 
-/**
- * Everything the pty of `launchId` printed so far, without the terminal's control sequences: CSI
- * sequences and window titles (OSC, which Windows' ConPTY writes and macOS and Linux ptys do not).
- */
-function screen(launchId: string): string {
+/** Everything the pty of `launchId` printed so far, as it came. */
+function printed(launchId: string): string {
   return windows.sent
     .filter((each) => each.launchId === launchId && each.event === 'terminal.data')
     .map((each) => each.payload as string)
-    .join('')
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '') // eslint-disable-line no-control-regex
-    .replace(/\x1b\][^\x07]*\x07/g, '') // eslint-disable-line no-control-regex
-    .replace(/\r/g, '');
+    .join('');
 }
+
+/**
+ * What the pty of `launchId` printed so far, without the terminal's control sequences
+ * ({@link terminalText}): CSI sequences and window titles (OSC, which Windows' ConPTY writes and
+ * macOS and Linux ptys do not), a cursor forward read as the spaces ConPTY draws with it.
+ */
+const screen = (launchId: string): string => terminalText(printed(launchId));
 
 /** What the User types into the Harness window's terminal: Enter sends `\r`. */
 async function type(launchId: string, text: string) {
   await expect(windowCall(launchId, 'terminal.input', text)).resolves.toMatchObject({ ok: true });
 }
 
-async function waitFor<T>(read: () => T | undefined, what: string, timeoutMs = 5000): Promise<T> {
+async function waitFor<T>(
+  read: () => T | undefined,
+  what: string | (() => string),
+  timeoutMs = WAIT_MS,
+): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = read();
     if (value !== undefined) return value;
-    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for ${typeof what === 'string' ? what : what()}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
@@ -228,7 +237,9 @@ const count = (text: string, part: string) => text.split(part).length - 1;
 const waitForScreen = (launchId: string, part: string, times = 1) =>
   waitFor(
     () => (count(screen(launchId), part) >= times ? true : undefined),
-    `${JSON.stringify(part)} on screen; got ${JSON.stringify(screen(launchId))}`,
+    () =>
+      `${JSON.stringify(part)} on screen; got ${JSON.stringify(screen(launchId))}, ` +
+      `printed as ${JSON.stringify(printed(launchId))}`,
   );
 
 /** Waits for the prompt the loop prints when it is ready for the next line. */

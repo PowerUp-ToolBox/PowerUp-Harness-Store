@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startFakeProvider, type FakeProvider } from '@harness-store/gateway/testing/fake-provider';
@@ -14,6 +14,7 @@ import {
   terminalText,
   type SmokeOptions,
 } from '../../src/main/runtime/smoke.js';
+import { removeFolder } from '../support/harness-processes.js';
 
 /**
  * Ticket P0-13.3, the post-build smoke run (src/main/runtime/smoke.ts) under plain Node: the real
@@ -45,7 +46,7 @@ beforeEach(() => {
 afterEach(async () => {
   await fake?.close();
   fake = undefined;
-  rmSync(root, { recursive: true, force: true });
+  removeFolder(root);
 });
 
 function smoke(overrides: Partial<SmokeOptions> = {}) {
@@ -107,7 +108,9 @@ describe('smokeRequest', () => {
 const conptyLike: PtySpawner = (options) => {
   const pty = spawnNodePty(options);
   return {
-    pid: pty.pid,
+    get pid() {
+      return pty.pid;
+    },
     onData(listener) {
       pty.onData((data) => {
         listener(`\x1b[?25l${data.replace(/> $/, '>\x1b[K').replace(/ /g, '\x1b[1C')}\x1b[?25h`);

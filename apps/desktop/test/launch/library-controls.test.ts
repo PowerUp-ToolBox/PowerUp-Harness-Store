@@ -16,9 +16,11 @@ import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createHarnessWindowHandlers } from '../../src/main/runtime/harness-window-handlers.js';
 import { spawnNodePty, type PtySpawnOptions } from '../../src/main/runtime/pty.js';
+import { terminalText } from '../../src/main/runtime/smoke.js';
 import type { HarnessWindows } from '../../src/main/runtime/supervisor.js';
 import type { IpcEventName, IpcEvents, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { removeFolder, WAIT_MS } from '../support/harness-processes.js';
 
 /**
  * Ticket P0-05.6, the Library's running controls as main serves them: the real Runtime with its
@@ -90,7 +92,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await runtime.shutdown();
   await fake.close();
-  rmSync(root, { recursive: true, force: true });
+  removeFolder(root);
 });
 
 function call(method: string, input?: unknown) {
@@ -147,7 +149,7 @@ function createFakeWindows() {
   return fakes;
 }
 
-async function waitFor<T>(read: () => T | undefined, timeoutMs = 5000): Promise<T> {
+async function waitFor<T>(read: () => T | undefined, timeoutMs = WAIT_MS): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = read();
@@ -242,7 +244,8 @@ describe('Show logs', () => {
     });
     const log = join(logsDir('fixture-crash'), `${launchId}.log`);
     expect(opened).toEqual([log]);
-    expect(readFileSync(log, 'utf8')).toMatch(
+    // Read without the terminal's control sequences, which ConPTY adds around what it printed.
+    expect(terminalText(readFileSync(log, 'utf8'))).toMatch(
       /\[pty\] fixture-crash: failing on purpose\n[^\n]*\[runtime\] Exited with code 3\n/,
     );
   });

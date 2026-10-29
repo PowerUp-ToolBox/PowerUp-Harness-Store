@@ -4,7 +4,6 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -23,6 +22,7 @@ import type { HarnessWindows, WebWindowSpec } from '../../src/main/runtime/super
 import type { HarnessWindowEventName } from '../../src/shared/harness-ipc.js';
 import type { IpcEventName, IpcEvents, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { removeFolder, WAIT_MS } from '../support/harness-processes.js';
 
 /**
  * Ticket P0-05.5, the binary runtime kind, through the Supervisor seam: the real Runtime with its
@@ -109,7 +109,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await runtime.shutdown();
   await fake.close();
-  rmSync(root, { recursive: true, force: true });
+  removeFolder(root);
 });
 
 function call(method: string, input?: unknown) {
@@ -178,7 +178,7 @@ function createFakeWindows() {
   return fakes;
 }
 
-async function waitFor<T>(read: () => T | undefined, timeoutMs = 5000): Promise<T> {
+async function waitFor<T>(read: () => T | undefined, timeoutMs = WAIT_MS): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = read();

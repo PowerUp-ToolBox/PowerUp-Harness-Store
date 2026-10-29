@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,7 @@ import { freePort } from '../../src/main/runtime/web-port.js';
 import type { WebContentArea } from '../../src/shared/harness-ipc.js';
 import type { IpcEventName, IpcEvents, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { removeFolder, WAIT_MS } from '../support/harness-processes.js';
 
 /**
  * Ticket P0-05.3, launching a web Harness, through the Supervisor seam: the real Runtime with its
@@ -117,7 +118,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await runtime.shutdown();
   await fake.close();
-  rmSync(root, { recursive: true, force: true });
+  removeFolder(root);
 });
 
 function call(method: string, input?: unknown) {
@@ -211,7 +212,7 @@ function accepts(port: number): Promise<boolean> {
   });
 }
 
-async function waitFor<T>(read: () => T | undefined, timeoutMs = 5000): Promise<T> {
+async function waitFor<T>(read: () => T | undefined, timeoutMs = WAIT_MS): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = read();

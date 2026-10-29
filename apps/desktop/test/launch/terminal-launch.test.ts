@@ -18,10 +18,12 @@ import { createDispatcher } from '../../src/main/runtime/dispatcher.js';
 import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createHarnessWindowHandlers } from '../../src/main/runtime/harness-window-handlers.js';
 import { spawnNodePty, type PtySpawnOptions } from '../../src/main/runtime/pty.js';
+import { terminalText } from '../../src/main/runtime/smoke.js';
 import type { HarnessWindows } from '../../src/main/runtime/supervisor.js';
 import type { HarnessWindowEventName } from '../../src/shared/harness-ipc.js';
 import type { IpcEventName, IpcEvents, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
+import { removeFolder, WAIT_MS } from '../support/harness-processes.js';
 
 /**
  * Ticket P0-05.2, launching a terminal Harness, through the Supervisor seam: the real Runtime with
@@ -75,7 +77,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await runtime.shutdown();
   await fake.close();
-  rmSync(root, { recursive: true, force: true });
+  removeFolder(root);
 });
 
 /** The Runtime on `userData`, its Harnesses inheriting a deliberately polluted environment. */
@@ -191,17 +193,19 @@ function output(launchId: string): string {
     .join('');
 }
 
-/** The values of the fixture's `FIXTURE <kind> <json>` lines printed in full so far. */
+/**
+ * The values of the fixture's `FIXTURE <kind> <json>` lines printed in full so far, read from the
+ * text without the terminal's control sequences (Windows' ConPTY adds its own).
+ */
 function reports(launchId: string, kind: string): unknown[] {
-  return output(launchId)
+  return terminalText(output(launchId))
     .split('\n')
     .slice(0, -1)
-    .map((line) => line.replace(/\r$/, ''))
     .filter((line) => line.startsWith(`FIXTURE ${kind} `))
     .map((line) => JSON.parse(line.slice(`FIXTURE ${kind} `.length)) as unknown);
 }
 
-async function waitFor<T>(read: () => T | undefined, timeoutMs = 5000): Promise<T> {
+async function waitFor<T>(read: () => T | undefined, timeoutMs = WAIT_MS): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = read();
@@ -568,7 +572,8 @@ describe('a Harness that exits on its own', () => {
       data: null,
     });
     expect(opened).toEqual([logPath('fixture-crash', launchId)]);
-    expect(readFileSync(logPath('fixture-crash', launchId), 'utf8')).toMatch(
+    // Read without the terminal's control sequences, which ConPTY adds around what it printed.
+    expect(terminalText(readFileSync(logPath('fixture-crash', launchId), 'utf8'))).toMatch(
       /\[pty\] fixture-crash: failing on purpose\n[^\n]*\[runtime\] Exited with code 3\n/,
     );
 
@@ -672,6 +677,7 @@ describe('launch records and logs', () => {
     expect(row?.token_revoked_at).toBe(row?.ended_at);
   });
 
+  // On Windows node-pty reports each exit a second after it, once it flushed ConPTY's output.
   it('keeps the 20 newest launch logs of a Harness', async () => {
     await install('fixture-crash');
     const logs = join(userData, 'logs', 'acme', 'fixture-crash');
@@ -680,5 +686,5 @@ describe('launch records and logs', () => {
       await waitForState(launchId, 'failed');
     }
     expect(readdirSync(logs)).toHaveLength(20);
-  }, 30_000);
+  }, 60_000);
 });
