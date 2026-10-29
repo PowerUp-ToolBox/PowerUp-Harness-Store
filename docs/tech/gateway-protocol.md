@@ -75,7 +75,7 @@ Validation (`400 invalid_request`, details in `message`):
 - a **Slot name** declared in the Harness Manifest (`default`, `fast`, ...), the normal case;
 - an explicit **`provider/model`** id (see §6), for advanced Harnesses; allowed only if the User has an enabled Connection for that Provider.
 
-A `model` containing `/` is an explicit id, split at the first `/` (`openrouter/anthropic/claude-sonnet-4-5` is the model `anthropic/claude-sonnet-4-5` at `openrouter`). The Provider part must be a Provider id of §6, or `openai-compatible:<name>` with `<name>` matching `^[a-z0-9][a-z0-9-]*$`, and the model part must be a valid model name for it; otherwise the request gets `404 unknown_slot`. A model name is non-empty, has no whitespace, `?`, `#`, `%` or `\`, and no empty, `.` or `..` segment between its `/`s, so no adapter can turn it into another request URL. A `google` model name, which the adapter puts into the request path, must also be a Gemini model name: `^(?:(?:models|tunedModels)/)?[A-Za-z0-9][A-Za-z0-9._-]*$`. A `model` without `/` is a Slot name (Slot names never contain `/`). An explicit id never consults the Slot Bindings; it needs an enabled Connection for its Provider (a disabled Connection counts as none), else `403 provider_not_connected`.
+A `model` containing `/` is an explicit id, split at the first `/` (`openrouter/anthropic/claude-sonnet-5-5` is the model `anthropic/claude-sonnet-5-5` at `openrouter`). The Provider part must be a Provider id of §6, or `openai-compatible:<name>` with `<name>` matching `^[a-z0-9][a-z0-9-]*$`, and the model part must be a valid model name for it; otherwise the request gets `404 unknown_slot`. A model name is non-empty, has no whitespace, `?`, `#`, `%` or `\`, and no empty, `.` or `..` segment between its `/`s, so no adapter can turn it into another request URL. A `google` model name, which the adapter puts into the request path, must also be a Gemini model name: `^(?:(?:models|tunedModels)/)?[A-Za-z0-9][A-Za-z0-9._-]*$`. A `model` without `/` is a Slot name (Slot names never contain `/`). An explicit id never consults the Slot Bindings; it needs an enabled Connection for its Provider (a disabled Connection counts as none), else `403 provider_not_connected`.
 
 A request is checked in this order: body validation (`400`), then model resolution (`404`, `409`, `403`), then the upstream call (`502`, `504`). Only a request that gets as far as the upstream call reaches a Provider.
 
@@ -154,7 +154,7 @@ A **Provider id** is a fixed string; a **Connection** is the User's credential/e
 | `anthropic` | @ai-sdk/anthropic | API key | `https://api.anthropic.com/v1` |
 | `openai` | @ai-sdk/openai | API key | `https://api.openai.com/v1`, Chat Completions |
 | `google` | @ai-sdk/google | API key | Gemini API, `https://generativelanguage.googleapis.com/v1beta` |
-| `openrouter` | @openrouter/ai-sdk-provider | API key | `https://openrouter.ai/api/v1`; model ids are OpenRouter's, e.g. `openrouter/anthropic/claude-sonnet-4-5` |
+| `openrouter` | @openrouter/ai-sdk-provider | API key | `https://openrouter.ai/api/v1`; model ids are OpenRouter's, e.g. `openrouter/anthropic/claude-sonnet-5-5` |
 | `ollama` | openai-compatible | none; base URL default `http://127.0.0.1:11434/v1` | auto-detected |
 | `lmstudio` | openai-compatible | none; default `http://127.0.0.1:1234/v1` | auto-detected |
 | `deepseek` | openai-compatible preset | API key | `https://api.deepseek.com/v1` |

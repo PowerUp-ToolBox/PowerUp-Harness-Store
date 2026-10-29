@@ -55,7 +55,7 @@ const ADAPTERS: Record<AdapterKind, (settings: AdapterSettings) => Model> = {
     createGoogleGenerativeAI({ baseURL: baseUrl, ...(apiKey !== undefined && { apiKey }), fetch })(
       model,
     ),
-  // The model name is OpenRouter's own (`anthropic/claude-sonnet-4-5`), passed through as is.
+  // The model name is OpenRouter's own (`anthropic/claude-sonnet-5-5`), passed through as is.
   // `compatibility: 'strict'` asks for usage on streams (`stream_options.include_usage`).
   openrouter: ({ model, baseUrl, apiKey, fetch, strictJsonSchema }) =>
     createOpenRouter({
