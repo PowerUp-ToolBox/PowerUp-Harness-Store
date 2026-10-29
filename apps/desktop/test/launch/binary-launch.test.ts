@@ -45,6 +45,8 @@ const SIZE = { cols: 100, rows: 30 };
 let root: string;
 let userData: string;
 let signalFile: string;
+/** Where fixture-term, which fixture-binary-term becomes, writes the environment it got. */
+let envFile: string;
 let fake: FakeProvider;
 let runtime: Runtime;
 let windows: ReturnType<typeof createFakeWindows>;
@@ -55,6 +57,7 @@ beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'harness-store-binary-'));
   userData = join(root, 'userData');
   signalFile = join(root, 'signals.txt');
+  envFile = join(root, 'env.json');
   fake = await startFakeProvider({ aliases: { 'model-a': 'fake/echo' } });
   states = [];
   spawned = [];
@@ -92,6 +95,7 @@ beforeEach(async () => {
       HARNESS_WORKSPACE: '/parent/workspace',
       HARNESS_PORT: '1',
       FIXTURE_SIGNAL_FILE: signalFile,
+      FIXTURE_ENV_FILE: envFile,
       FIXTURE_NODE: process.execPath,
       FIXTURE_HARNESSES: FIXTURES,
     }),
@@ -297,11 +301,12 @@ describe.skipIf(process.platform === 'win32')('launching a binary Harness', () =
     const [started] = (await waitFor(() => {
       const found = reports(launchId, 'start');
       return found.length > 0 ? found : undefined;
-    })) as [{ env: Record<string, string>; cwd: string; size: number[] }];
+    })) as [{ cwd: string; size: number[] }];
+    const env = JSON.parse(readFileSync(envFile, 'utf8')) as Record<string, string>;
     const dataDir = join(userData, 'data', 'acme', 'fixture-binary-term');
-    expectContract(started.env, 'acme/fixture-binary-term');
-    expect(started.env).not.toHaveProperty('HARNESS_PORT');
-    expect(started.env.TERM).toBe('xterm-256color');
+    expectContract(env, 'acme/fixture-binary-term');
+    expect(env).not.toHaveProperty('HARNESS_PORT');
+    expect(env.TERM).toBe('xterm-256color');
     expect(realpathSync(started.cwd)).toBe(realpathSync(dataDir));
     expect(started.size).toEqual([SIZE.cols, SIZE.rows]);
 
@@ -313,7 +318,7 @@ describe.skipIf(process.platform === 'win32')('launching a binary Harness', () =
       'spawning',
       'ready',
     ]);
-    const token = started.env.HARNESS_GATEWAY_TOKEN ?? '';
+    const token = env.HARNESS_GATEWAY_TOKEN ?? '';
     await expect(context(token)).resolves.toMatchObject({
       status: 200,
       body: { harnessId: 'acme/fixture-binary-term', version: '1.0.0', locale: 'zh-CN' },

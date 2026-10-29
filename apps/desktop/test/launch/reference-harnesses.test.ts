@@ -13,12 +13,12 @@ import { createHandlers } from '../../src/main/runtime/handlers.js';
 import { createHarnessWindowHandlers } from '../../src/main/runtime/harness-window-handlers.js';
 import { spawnPiped, type PipedSpawnOptions } from '../../src/main/runtime/piped-process.js';
 import { spawnNodePty } from '../../src/main/runtime/pty.js';
-import { terminalText } from '../../src/main/runtime/smoke.js';
 import type { HarnessWindows, WebWindowSpec } from '../../src/main/runtime/supervisor.js';
 import type { HarnessWindowEventName } from '../../src/shared/harness-ipc.js';
 import type { IpcEventName, IpcEvents, IpcResult, LaunchStatus } from '../../src/shared/ipc.js';
 import { createFakeCipher } from '../support/fake-cipher.js';
 import { removeFolder, WAIT_MS } from '../support/harness-processes.js';
+import { createTerminalScreens } from '../support/terminal-screen.js';
 
 /**
  * Tickets P0-06.2 and P0-06.3, the reference Harnesses end to end through the Supervisor seam: the
@@ -157,9 +157,11 @@ function createFakeWindows() {
   const webSpecs: WebWindowSpec[] = [];
   const onWebClosed = new Map<string, () => void>();
   const shown = new Map<string, { url: string; statusWhenShown: Promise<number> }>();
+  const screens = createTerminalScreens(SIZE);
   const fakes = {
     open,
     sent,
+    screens,
     webSpecs,
     shown,
     openTerminal(spec) {
@@ -182,7 +184,9 @@ function createFakeWindows() {
     reloadWeb: () => undefined,
     layoutWeb: () => undefined,
     send(launchId, event, payload) {
-      if (open.has(launchId)) sent.push({ launchId, event, payload });
+      if (!open.has(launchId)) return;
+      sent.push({ launchId, event, payload });
+      if (event === 'terminal.data') screens.write(launchId, payload as string);
     },
     focus: (launchId) => open.has(launchId),
     close(launchId) {
@@ -204,11 +208,11 @@ function printed(launchId: string): string {
 }
 
 /**
- * What the pty of `launchId` printed so far, without the terminal's control sequences
- * ({@link terminalText}): CSI sequences and window titles (OSC, which Windows' ConPTY writes and
- * macOS and Linux ptys do not), a cursor forward read as the spaces ConPTY draws with it.
+ * The text of the terminal of `launchId`'s window, as xterm.js renders what its pty printed so far
+ * (test/support/terminal-screen.ts): Windows' ConPTY draws the same screen with other bytes than the
+ * Harness wrote, and drops the blank after a prompt at the end of a row.
  */
-const screen = (launchId: string): string => terminalText(printed(launchId));
+const screen = (launchId: string): Promise<string> => windows.screens.text(launchId);
 
 /** What the User types into the Harness window's terminal: Enter sends `\r`. */
 async function type(launchId: string, text: string) {
@@ -216,16 +220,16 @@ async function type(launchId: string, text: string) {
 }
 
 async function waitFor<T>(
-  read: () => T | undefined,
-  what: string | (() => string),
+  read: () => T | undefined | Promise<T | undefined>,
+  what: string | (() => Promise<string>),
   timeoutMs = WAIT_MS,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const value = read();
+    const value = await read();
     if (value !== undefined) return value;
     if (Date.now() > deadline) {
-      throw new Error(`Timed out waiting for ${typeof what === 'string' ? what : what()}`);
+      throw new Error(`Timed out waiting for ${typeof what === 'string' ? what : await what()}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -233,17 +237,35 @@ async function waitFor<T>(
 
 const count = (text: string, part: string) => text.split(part).length - 1;
 
-/** Waits until the screen shows `part` at least `times` times. */
-const waitForScreen = (launchId: string, part: string, times = 1) =>
+/** Waits until the screen shows what `found` counts at least `times` times. */
+const waitForCount = (
+  launchId: string,
+  found: (text: string) => number,
+  times: number,
+  what: string,
+) =>
   waitFor(
-    () => (count(screen(launchId), part) >= times ? true : undefined),
-    () =>
-      `${JSON.stringify(part)} on screen; got ${JSON.stringify(screen(launchId))}, ` +
+    async () => (found(await screen(launchId)) >= times ? true : undefined),
+    async () =>
+      `${what} on screen; got ${JSON.stringify(await screen(launchId))}, ` +
       `printed as ${JSON.stringify(printed(launchId))}`,
   );
 
-/** Waits for the prompt the loop prints when it is ready for the next line. */
-const waitForPrompt = (launchId: string, times: number) => waitForScreen(launchId, '\n> ', times);
+/** Waits until the screen shows `part` at least `times` times. */
+const waitForScreen = (launchId: string, part: string, times = 1) =>
+  waitForCount(launchId, (text) => count(text, part), times, JSON.stringify(part));
+
+/**
+ * Waits for the prompt the loop prints when it is ready for the next line: `times` lines that
+ * begin with `>`, the prompt (`> `) alone or with what the User typed after it.
+ */
+const waitForPrompt = (launchId: string, times: number) =>
+  waitForCount(
+    launchId,
+    (text) => text.split('\n').filter((line) => line.startsWith('>')).length,
+    times,
+    `${String(times)} prompts`,
+  );
 
 const lastState = (launchId: string) => states.filter((each) => each.launchId === launchId).at(-1);
 const waitForEnd = (launchId: string) =>
@@ -287,11 +309,12 @@ describe('hello-term (examples/hello-term/out)', () => {
     });
     const launchId = await launch(harnessId, null);
     await waitForPrompt(launchId, 1);
-    const banner = screen(launchId);
+    const banner = await screen(launchId);
+    // The screen's lines end at their last character: the prompt `> ` reads `>`.
     expect(banner).toBe(
       'Hello Term 0.1.0\n' +
         'Type a message and press Enter. /model shows the model of each Model Slot, /quit exits.\n' +
-        '\n> ',
+        '\n>',
     );
 
     const message = 'Hello from the reference test';
@@ -327,7 +350,7 @@ describe('hello-term (examples/hello-term/out)', () => {
       event: 'window.state',
       payload: expect.objectContaining({ state: 'stopped', exitCode: 0 }) as unknown,
     });
-    expect(screen(launchId)).toMatch(/\/quit\nBye\.\n$/);
+    expect(await screen(launchId)).toMatch(/\/quit\nBye\.$/);
 
     // Exactly one Usage Record, this Harness's, written during this launch.
     const [launchRow] = rows('launches');
@@ -356,11 +379,11 @@ describe('hello-term (examples/hello-term/out)', () => {
     const workspace = mkdtempSync(join(root, 'project-'));
     const launchId = await launch(harnessId, workspace);
     await waitForPrompt(launchId, 1);
-    expect(screen(launchId)).toBe(
+    expect(await screen(launchId)).toBe(
       'Hello Term 0.1.0\n' +
         `工作目录：${workspace}\n` +
         '输入消息后按 Enter。/model 显示每个模型槽位的模型，/quit 退出。\n' +
-        '\n> ',
+        '\n>',
     );
 
     await type(launchId, '你好\r');
@@ -377,7 +400,7 @@ describe('hello-term (examples/hello-term/out)', () => {
 
     await type(launchId, '\x03');
     await expect(waitForEnd(launchId)).resolves.toMatchObject({ state: 'stopped', exitCode: 0 });
-    expect(screen(launchId)).toMatch(/再见。\n$/);
+    expect(await screen(launchId)).toMatch(/再见。$/);
     expect(rows('usage_records')).toHaveLength(2);
   });
 
