@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startFakeProvider, type FakeProvider } from '@harness-store/gateway/testing/fake-provider';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaultNodeCommand } from '../../src/main/runtime/node-runtime.js';
 import { spawnNodePty, type PtySpawner } from '../../src/main/runtime/pty.js';
 import {
   endSmoke,
@@ -20,12 +22,14 @@ import { removeFolder } from '../support/harness-processes.js';
  * Ticket P0-13.3, the post-build smoke run (src/main/runtime/smoke.ts) under plain Node: the real
  * Runtime installs examples/hello-term/out, binds `default` to `qwen3:8b` on an `ollama`
  * Connection at the fake Provider, and runs one turn in a pty. A built app runs the same code
- * with its own executable as the Node runtime (apps/desktop/scripts/smoke.mjs); here the Node
- * runtime is this test's Node, and the failure cases break it on purpose, as a build missing its
- * Node runtime would be.
+ * on its own Node runtime (apps/desktop/scripts/smoke.mjs, src/main/runtime/node-runtime.ts); here
+ * the Node runtime is this test's Node, and the failure cases break it on purpose, as a build
+ * missing its Node runtime would be. On Windows it also runs on the node.exe a Windows build ships
+ * (vendor/, from scripts/fetch-node.mjs), and shows why Electron's own executable cannot be it.
  */
 
 const HELLO_TERM = join(import.meta.dirname, '../../../../examples/hello-term/out');
+const DESKTOP = join(import.meta.dirname, '../..');
 
 let root: string;
 let fake: FakeProvider | undefined;
@@ -125,6 +129,9 @@ const conptyLike: PtySpawner = (options) => {
     resize: (cols, rows) => {
       pty.resize(cols, rows);
     },
+    dispose: () => {
+      pty.dispose();
+    },
   };
 };
 
@@ -199,6 +206,43 @@ describe('runSmoke', { timeout: 20_000 }, () => {
     fake = await startFakeProvider({ aliases: { 'llama3:8b': 'fake/echo' } });
     await expect(smoke({ timeoutMs: 3000 })).resolves.toBe(false);
     expect(lines.join('\n')).toContain('FAILED: Timed out after 3 s');
+  });
+});
+
+// The Node runtime of a Windows app (src/main/runtime/node-runtime.ts): the node.exe it ships, as the
+// development app finds it in vendor/ once scripts/fetch-node.mjs has run (CI runs it before these
+// tests). Electron's own executable, the Node runtime on macOS and Linux, is a GUI-subsystem
+// program: Windows never attaches it to the pseudoconsole, so as Node it reads and prints nothing
+// in a pty, and hello-term ends at once with exit code 0 and an empty terminal.
+describe.runIf(process.platform === 'win32')('runSmoke on Windows', { timeout: 30_000 }, () => {
+  const electron = createRequire(import.meta.url)('electron') as string;
+
+  it('passes on the node.exe a Windows app runs Node Harnesses on', async () => {
+    const runtime = defaultNodeCommand({
+      platform: 'win32',
+      arch: process.arch,
+      execPath: electron,
+      isPackaged: false,
+      resourcesPath: join(electron, '..', 'resources'),
+      appPath: DESKTOP,
+      nodeVersion: process.versions.node,
+      exists: existsSync,
+    });
+    if (runtime.warning !== undefined) throw new Error(runtime.warning);
+    fake = await startFakeProvider({ aliases: { 'qwen3:8b': 'fake/echo' } });
+    await expect(smoke({ nodeCommand: runtime.command })).resolves.toBe(true);
+    expect(lines.join('\n')).toContain(`Started ${runtime.command.path} `);
+    expect(chatModels()).toEqual(['qwen3:8b']);
+  });
+
+  it("fails on Electron's own executable as Node, which gets no console in a pty", async () => {
+    fake = await startFakeProvider({ aliases: { 'qwen3:8b': 'fake/echo' } });
+    const nodeCommand = { path: electron, env: { ELECTRON_RUN_AS_NODE: '1' } };
+    await expect(smoke({ nodeCommand, timeoutMs: 20_000 })).resolves.toBe(false);
+    expect(lines.join('\n')).toContain(
+      'FAILED: The Harness ended stopped, exit code 0 before its prompt',
+    );
+    expect(chatModels()).toEqual([]);
   });
 });
 

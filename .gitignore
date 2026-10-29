@@ -2,6 +2,8 @@ node_modules/
 dist/
 out/
 release/
+# The node.exe of Windows builds, which apps/desktop/scripts/fetch-node.mjs downloads.
+apps/desktop/vendor/
 .DS_Store
 *.log
 .env

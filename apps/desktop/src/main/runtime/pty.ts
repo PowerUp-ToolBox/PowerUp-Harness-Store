@@ -30,6 +30,13 @@ export interface PtyProcess {
   onExit(listener: (exit: PtyExit) => void): void;
   write(data: string): void;
   resize(cols: number, rows: number): void;
+  /**
+   * Frees the pty once its process has exited. On Windows that closes the pseudoconsole, which
+   * node-pty only does in its `kill` (ending whatever still runs attached to it), never when the
+   * process exits: without it each launch would leave a console host process behind. Elsewhere it
+   * does nothing. Never throws.
+   */
+  dispose(): void;
 }
 
 /** Starts a process in a pty; throws when it cannot (the file cannot be executed, no pty). */
@@ -72,6 +79,14 @@ export const spawnNodePty: PtySpawner = (options) => {
     },
     resize(cols, rows) {
       child.resize(cols, rows);
+    },
+    dispose() {
+      if (process.platform !== 'win32') return;
+      try {
+        child.kill();
+      } catch {
+        // Already closed.
+      }
     },
   };
 };

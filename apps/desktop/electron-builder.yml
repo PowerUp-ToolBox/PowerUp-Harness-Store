@@ -11,9 +11,13 @@
 # Its N-API prebuilds for every target ship as they are and need no rebuild for Electron, so
 # `npmRebuild` stays off; each target's own runner proves them with the smoke run.
 #
-# The Node runtime of Node Harnesses is the app's own executable with ELECTRON_RUN_AS_NODE=1
-# (src/main/runtime/bootstrap.ts): Electron's RunAsNode fuse must stay enabled, its default. No
-# separate Node binary ships; a build whose runtime is missing or broken fails the smoke run.
+# The Node runtime of Node Harnesses (src/main/runtime/node-runtime.ts) is, on macOS and Linux, the
+# app's own executable with ELECTRON_RUN_AS_NODE=1: Electron's RunAsNode fuse must stay enabled,
+# its default. On Windows the app's executable is a GUI-subsystem program, which gets no console in
+# the pty of a terminal Harness, so the Windows build alone ships the official node.exe of
+# Electron's Node version as resources/node/node.exe: scripts/fetch-node.mjs downloads and checks
+# it into vendor/node/win32-<arch>/ before packaging (the `package` script and CI run it). A build
+# whose runtime is missing or broken fails the smoke run.
 #
 # Unsigned: no code signing (`identity: null`, and CI sets CSC_IDENTITY_AUTO_DISCOVERY=false) and
 # no notarisation, both deferred to before the public launch (roadmap). Auto-update of the app is
@@ -37,6 +41,10 @@ mac:
   identity: null
 win:
   target: nsis
+  # Outside the asar archive, as a program must be to run. Only Windows ships it.
+  extraResources:
+    - from: vendor/node/win32-${arch}/node.exe
+      to: node/node.exe
 linux:
   target: AppImage
   # The executable in linux-unpacked/ and the AppImage, which scripts/smoke.mjs starts.

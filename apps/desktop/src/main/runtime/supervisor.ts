@@ -111,8 +111,9 @@ export interface WebWindowSpec extends HarnessWindowSpec {
 
 /**
  * How the Runtime runs a Node Harness: the program and the variables it needs to act as Node. In
- * the app that is Electron's own executable with `ELECTRON_RUN_AS_NODE=1` (the Runtime's Node, so
- * no system Node is needed); under plain Node in tests, Node itself.
+ * the app that is Electron's own executable with `ELECTRON_RUN_AS_NODE=1` on macOS and Linux, and
+ * the node.exe of Electron's Node version the build ships on Windows (node-runtime.ts), so no
+ * system Node is needed; under plain Node in tests, Node itself.
  */
 export interface NodeCommand {
   readonly path: string;
@@ -641,6 +642,7 @@ export function createSupervisor(options: SupervisorOptions): Supervisor {
     });
     child.onExit((exit) => {
       onProcessExit(launch, exit);
+      child.dispose();
     });
     setState(launch, 'ready');
   };
