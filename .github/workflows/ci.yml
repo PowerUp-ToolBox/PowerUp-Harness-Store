@@ -183,7 +183,8 @@ jobs:
 
   # The Supervisor seam (docs/tech/architecture.md §8, item 3) on each desktop OS: the real Runtime
   # launching Harnesses in a pty (node-pty) and as piped processes, and the installer's extraction,
-  # executable bits and paths. Each OS passes or fails on its own (no fail-fast).
+  # executable bits and paths. Each OS passes or fails on its own (no fail-fast). On Windows the
+  # smoke tests also run hello-term on the node.exe a Windows build ships, fetched first.
   supervisor-tests:
     name: Supervisor and installer (${{ matrix.os }})
     needs: lint-typecheck
@@ -213,6 +214,11 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # The node.exe Node Harnesses run on in a Windows app (apps/desktop/scripts/fetch-node.mjs),
+      # into apps/desktop/vendor/; nothing to fetch on macOS and Linux.
+      - name: Fetch the Windows Node runtime
+        run: pnpm --filter @harness-store/desktop run fetch-node
+
       - name: Supervisor tests
         run: pnpm --filter @harness-store/desktop run test:launch
 
@@ -222,7 +228,10 @@ jobs:
   # The Desktop E2E seam (docs/tech/architecture.md §8, item 5) on each desktop OS: the Store-less
   # journey of apps/desktop/e2e over the built app (first-run wizard with the fake Provider as
   # Ollama, "Install this folder locally" with hello-web, launch, one chat through the Model
-  # Gateway, the Usage Record, uninstall). Linux runs it on a virtual display.
+  # Gateway, the Usage Record, uninstall), then the post-build smoke run of the `build` workflow
+  # on the unpackaged app (hello-term for one turn in a pty). Both run their Harness on the Node
+  # runtime the app picks for the OS: on Windows the node.exe fetched first, as a build ships it.
+  # Linux runs them on a virtual display.
   e2e-smoke:
     name: Desktop E2E smoke (${{ matrix.os }})
     needs: lint-typecheck
@@ -252,6 +261,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Fetch the Windows Node runtime
+        run: pnpm --filter @harness-store/desktop run fetch-node
+
       # Ubuntu 24.04 forbids the unprivileged user namespaces Chromium's sandbox needs; this lifts
       # that for the runner instead of starting Electron with --no-sandbox.
       - name: Allow the Electron sandbox
@@ -265,6 +277,17 @@ jobs:
             xvfb-run -a pnpm --filter @harness-store/desktop run e2e:smoke
           else
             pnpm --filter @harness-store/desktop run e2e:smoke
+          fi
+
+      # apps/desktop/scripts/smoke.mjs with Electron started on apps/desktop: pull requests never
+      # package, so this is where a broken Node runtime of terminal Harnesses shows before a merge.
+      - name: Smoke run (unpackaged)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a pnpm --filter @harness-store/desktop run smoke:unpackaged
+          else
+            pnpm --filter @harness-store/desktop run smoke:unpackaged
           fi
 
       - name: Flaky and failed journeys

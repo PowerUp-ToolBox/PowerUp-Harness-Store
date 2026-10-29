@@ -5,8 +5,9 @@ name: Build
 # and architecture, so the post-build smoke run starts the very build that is uploaded: dmg for
 # macOS arm64 and x64, nsis for Windows x64, AppImage for Linux x64. The smoke run
 # (apps/desktop/scripts/smoke.mjs) installs and runs examples/hello-term for one turn against the
-# fake Provider, with the app's own executable as the Node runtime; a failure fails that target's
-# job, and nothing is uploaded for it.
+# fake Provider, on the Node runtime the build runs Node Harnesses on (the app's own executable on
+# macOS and Linux, the node.exe it ships on Windows); a failure fails that target's job, and nothing
+# is uploaded for it.
 #
 # This workflow runs on its own, alongside `ci`, and does not wait for it: `ci` lints and tests the
 # same commit, and a red `ci` on main is what blocks a release.
@@ -79,6 +80,12 @@ jobs:
       # electron-vite's out/, the packages it bundles, and examples/hello-term/out for the smoke run.
       - name: Build
         run: pnpm build
+
+      # The node.exe of Electron's Node version, checked against nodejs.org's SHASUMS256.txt, which
+      # electron-builder.yml ships as resources/node/node.exe (apps/desktop/scripts/fetch-node.mjs).
+      - name: Fetch the Windows Node runtime
+        if: runner.os == 'Windows'
+        run: pnpm --filter @harness-store/desktop run fetch-node --arch ${{ matrix.arch }}
 
       # A tag v1.2.3 builds version 1.2.3; main and manual runs keep package.json's 0.0.0.
       - name: Package
