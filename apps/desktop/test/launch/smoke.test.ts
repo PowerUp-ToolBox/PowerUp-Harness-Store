@@ -3,12 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startFakeProvider, type FakeProvider } from '@harness-store/gateway/testing/fake-provider';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnNodePty, type PtySpawner } from '../../src/main/runtime/pty.js';
 import {
   endSmoke,
   runSmoke,
+  showsPrompt,
   SMOKE_HARNESS_VARIABLE,
   SMOKE_PROVIDER_VARIABLE,
   smokeRequest,
+  terminalText,
   type SmokeOptions,
 } from '../../src/main/runtime/smoke.js';
 
@@ -96,7 +99,54 @@ describe('smokeRequest', () => {
   });
 });
 
-describe('runSmoke', () => {
+/**
+ * node-pty, with what the Harness prints rendered the way Windows' ConPTY may render it: every
+ * space as a cursor forward, the blank after a prompt at the end of a row as an erase, each chunk
+ * between hiding and showing the cursor.
+ */
+const conptyLike: PtySpawner = (options) => {
+  const pty = spawnNodePty(options);
+  return {
+    pid: pty.pid,
+    onData(listener) {
+      pty.onData((data) => {
+        listener(`\x1b[?25l${data.replace(/> $/, '>\x1b[K').replace(/ /g, '\x1b[1C')}\x1b[?25h`);
+      });
+    },
+    onExit: (listener) => {
+      pty.onExit(listener);
+    },
+    write: (data) => {
+      pty.write(data);
+    },
+    resize: (cols, rows) => {
+      pty.resize(cols, rows);
+    },
+  };
+};
+
+describe('terminalText', () => {
+  it('drops control sequences and carriage returns, and turns a cursor forward into spaces', () => {
+    expect(
+      terminalText(
+        '\x1b]0;Hello Term\x07\x1b[?25lHello\x1b[1CTerm\x1b[3C0.1.0\x1b[K\r\n' +
+          '\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\\x1b[>4;1m\x1b=\x1b[2;1H>\x1b[98X\x1b[?25h',
+      ),
+    ).toBe('Hello Term   0.1.0\nlink>');
+  });
+
+  it('sees the prompt with or without the space after it', () => {
+    expect(showsPrompt('Hello Term 0.1.0\nhint\n\n> ')).toBe(true);
+    expect(showsPrompt(terminalText('hint\r\n\r\n>\x1b[K\x1b[3;2H'))).toBe(true);
+    expect(showsPrompt('Hello Term 0.1.0\n')).toBe(false);
+    expect(showsPrompt('> smoke 1\nsmoke 1\n')).toBe(false);
+  });
+});
+
+// Each run stops hello-term with the shutdown sequence. On Windows the polite step of it
+// (`taskkill` without /F) cannot end a console process in a pty, so the run takes the whole
+// STOP_GRACE_MS (5 s) on top of its own time, past Vitest's default 5 s.
+describe('runSmoke', { timeout: 20_000 }, () => {
   it('installs hello-term, gets one echoed answer through the Model Gateway and one Usage Record', async () => {
     fake = await startFakeProvider({ aliases: { 'qwen3:8b': 'fake/echo' } });
     await expect(smoke()).resolves.toBe(true);
@@ -105,6 +155,12 @@ describe('runSmoke', () => {
     expect(lines.join('\n')).toMatch(
       /Answer received \("smoke [0-9a-f-]+"\) and one Usage Record on ollama\/qwen3:8b/,
     );
+  });
+
+  it('passes when the pty renders the screen as ConPTY does, not byte for byte', async () => {
+    fake = await startFakeProvider({ aliases: { 'qwen3:8b': 'fake/echo' } });
+    await expect(smoke({ spawnPty: conptyLike })).resolves.toBe(true);
+    expect(chatModels()).toEqual(['qwen3:8b']);
   });
 
   it('fails when the Node runtime is missing', async () => {

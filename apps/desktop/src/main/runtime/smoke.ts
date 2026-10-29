@@ -227,12 +227,14 @@ export async function runSmoke(options: SmokeOptions): Promise<boolean> {
       }
     };
 
-    await waitFor('its prompt', () => windows.screen(launchId).includes('> '));
+    await waitFor('its prompt', () => showsPrompt(windows.screen(launchId)));
     step(`Launched ${launchId}; the Harness printed its prompt`);
-    const message = `smoke ${randomUUID()}`;
+    const nonce = randomUUID();
+    const message = `smoke ${nonce}`;
     supervisor.window(launchId)?.terminalInput(`${message}\r`);
-    // Once as typed, once as the fake Provider's echo through the Model Gateway.
-    await waitFor('the answer', () => windows.screen(launchId).split(message).length - 1 >= 2);
+    // Once as typed, once as the fake Provider's echo through the Model Gateway. The nonce alone,
+    // which has no space: how a terminal renders the space before it is not this run's concern.
+    await waitFor('the answer', () => windows.screen(launchId).split(nonce).length - 1 >= 2);
     await waitFor('its Usage Record', () => usage.includes(harnessId));
     const [record] = services.usage.query({
       from: null,
@@ -271,6 +273,32 @@ export async function runSmoke(options: SmokeOptions): Promise<boolean> {
   return passed;
 }
 
+/**
+ * The text a pty printed, without its control sequences: a cursor forward (`ESC [ n C`) becomes n
+ * spaces, every other CSI sequence, OSC sequence (ended by BEL or ST) and two-byte escape is
+ * dropped, and so are carriage returns. On macOS and Linux the pty passes the Harness's bytes
+ * through, so this is what it wrote; Windows' ConPTY instead renders its screen buffer again, and
+ * may draw a space as a cursor forward and a blank run at the end of a row as an erase.
+ */
+export function terminalText(raw: string): string {
+  /* eslint-disable no-control-regex */
+  return raw
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[(\d*)C/g, (_sequence, count: string) => ' '.repeat(Number(count || '1')))
+    .replace(/\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g, '')
+    .replace(/\x1b[\x20-\x2f]*[\x30-\x7e]/g, '')
+    .replace(/\r/g, '');
+  /* eslint-enable no-control-regex */
+}
+
+/**
+ * Whether a terminal Harness is waiting at its prompt: the last thing it printed is `>` (hello-term's
+ * `> `), with or without the space, which ConPTY may leave out as a blank at the end of the row.
+ */
+export function showsPrompt(text: string): boolean {
+  return text.trimEnd().endsWith('>');
+}
+
 /** The smoke run stores no secret: an Ollama Connection has no key. */
 const NO_SECRETS: SecretCipher = {
   isAvailable: () => Promise.resolve(false),
@@ -300,12 +328,8 @@ function createHeadlessWindows() {
       runtime = started;
     },
     launchIds: () => [...output.keys()],
-    /** What the pty of `launchId` printed, without CSI and OSC sequences or carriage returns. */
-    screen: (launchId: string) =>
-      (output.get(launchId) ?? '')
-        .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '') // eslint-disable-line no-control-regex
-        .replace(/\x1b\][^\x07]*\x07/g, '') // eslint-disable-line no-control-regex
-        .replace(/\r/g, ''),
+    /** What the pty of `launchId` printed, as {@link terminalText}. */
+    screen: (launchId: string) => terminalText(output.get(launchId) ?? ''),
     openTerminal(spec, onClosed) {
       output.set(spec.launchId, '');
       onClose.set(spec.launchId, onClosed);
