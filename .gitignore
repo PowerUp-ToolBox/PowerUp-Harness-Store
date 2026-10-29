@@ -9,6 +9,8 @@ release/
 !.env.example
 .supabase/
 coverage/
+# Playwright output (apps/desktop/e2e): traces, screenshots, the JSON report.
+test-results/
 *.tsbuildinfo
 .eslintcache
 

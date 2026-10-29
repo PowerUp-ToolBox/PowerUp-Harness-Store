@@ -14,8 +14,15 @@
  * the fake GitHub of the sign-in tests) over any set in this shell or in supabase/.env, as CI has
  * no other: a real OAuth app configured there for manual testing would fail those tests.
  *
+ * `e2e-smoke` and `acceptance` run the Desktop E2E journeys (apps/desktop/e2e) on the built app,
+ * with the fake Provider as Ollama on port 11434 (set E2E_OLLAMA_PORT when a real Ollama has it).
+ * `acceptance` needs Docker too: its Playwright setup restarts the local Supabase stack with the
+ * fake GitHub, keeping its data, replaces the catalogue with the seed, and stops the stack again at
+ * the end. On Linux run them under `xvfb-run` when there is no display.
+ *
  * Commands get this shell's environment without any CONFORMANCE_* variable, so the Gateway
- * conformance suite never reaches a real Provider from here, as in `ci`.
+ * conformance suite never reaches a real Provider from here, as in `ci`; the E2E journeys pass the
+ * app only the OS's own variables.
  *
  * Ctrl-C ends the command running and starts nothing else but the stop of the stack.
  *
@@ -120,7 +127,24 @@ const JOBS = [
         () => pnpm(['--filter', '@harness-store/desktop', 'run', 'test:install']),
       ),
   },
+  { id: 'e2e-smoke', run: () => pnpm(['--filter', '@harness-store/desktop', 'run', 'e2e:smoke']) },
+  {
+    id: 'acceptance',
+    run: () =>
+      hasDocker('acceptance') &&
+      pnpm(['--filter', '@harness-store/desktop', 'run', 'e2e:acceptance']),
+  },
 ];
+
+/** Whether Docker runs (asked with `commandEnv`); when not, says that `job` needs it. */
+function hasDocker(job, commandEnv = env) {
+  if (spawnSync('docker', ['info'], { env: commandEnv, stdio: 'ignore' }).status === 0) return true;
+  console.error(
+    `\n${job} needs Docker, which is not running or not installed: start Docker and run ` +
+      `\`pnpm ci:local ${job}\` again.`,
+  );
+  return false;
+}
 
 async function storeTests() {
   const jobEnv = storeEnv();
@@ -132,14 +156,7 @@ async function storeTests() {
       always,
       commandEnv: jobEnv,
     });
-  const docker = spawnSync('docker', ['info'], { env: jobEnv, stdio: 'ignore' });
-  if (docker.status !== 0) {
-    console.error(
-      '\nstore-tests needs Docker, which is not running or not installed: start Docker and run ' +
-        '`pnpm ci:local store-tests` again.',
-    );
-    return false;
-  }
+  if (!hasDocker('store-tests', jobEnv)) return false;
   let functions;
   try {
     console.log(

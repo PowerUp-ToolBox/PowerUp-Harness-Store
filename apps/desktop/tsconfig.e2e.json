@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Desktop E2E journeys (Playwright for Electron, e2e/), run by `pnpm e2e`",
+  // Not in tsconfig.json: these run under Playwright's own loader, never under Vitest, and import
+  // the Store's local-stack helpers by relative path (`.ts` extensions, as apps/store writes them).
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node"],
+    "tsBuildInfoFile": "node_modules/.tmp/tsconfig.e2e.tsbuildinfo"
+  },
+  "include": ["e2e", "../store/scripts/local-stack.ts", "../store/test-store/fake-github.ts"]
+}

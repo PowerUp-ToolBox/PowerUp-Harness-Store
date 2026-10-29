@@ -32,6 +32,7 @@ import { startRuntime, type Runtime } from './runtime/bootstrap.js';
 import { createDispatcher, UntrustedSenderError } from './runtime/dispatcher.js';
 import { createHandlers } from './runtime/handlers.js';
 import { createHarnessWindowHandlers } from './runtime/harness-window-handlers.js';
+import { localProbeTargetsWithOllama } from './runtime/local-detection.js';
 import {
   harnessPartition,
   isAllowedExternalUrl,
@@ -45,6 +46,11 @@ import { initialWindowBounds } from './runtime/window-state.js';
 // A fresh profile for manual runs and E2E: must be set before `ready`.
 const userDataDir = process.env.HARNESS_STORE_USER_DATA_DIR;
 if (userDataDir) app.setPath('userData', resolve(userDataDir));
+
+// Development and E2E only, ignored by a packaged app: where local detection looks for Ollama, so
+// the E2E journey's fake Ollama can listen elsewhere when a real one has 11434 (apps/desktop/e2e).
+const devOllamaUrl = app.isPackaged ? undefined : process.env.HARNESS_STORE_DEV_OLLAMA_URL;
+const localProbeTargets = devOllamaUrl ? localProbeTargetsWithOllama(devOllamaUrl) : undefined;
 
 let mainWindow: BrowserWindow | null = null;
 /** The Runtime from the moment `start` begins it; null before that. */
@@ -197,6 +203,7 @@ async function start(): Promise<void> {
     // Connection tests, model listings and local detection use Node's fetch, as the Model
     // Gateway's upstream calls do, so a passing test means the Gateway reaches the same place.
     providerFetch: (input, init) => globalThis.fetch(input, init),
+    ...(localProbeTargets === undefined ? {} : { localProbeTargets }),
     // safeStorage is usable from `ready` on, which start() runs after.
     secretCipher: createSafeStorageCipher(safeStorage, process.platform),
     // "Install this folder locally" and the Workspace sheet: the native folder picker, as a sheet

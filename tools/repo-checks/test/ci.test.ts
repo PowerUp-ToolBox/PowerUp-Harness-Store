@@ -52,13 +52,15 @@ const CONFORMANCE_ENV = {
   CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL: 'https://provider.example/v1',
 };
 
-/** The jobs of `ci`, in workflow order. P0-13.2 appends the Desktop E2E jobs. */
+/** The jobs of `ci`, in workflow order. */
 const CI_JOBS = [
   'lint-typecheck',
   'unit',
   'gateway-conformance',
   'store-tests',
   'supervisor-tests',
+  'e2e-smoke',
+  'acceptance',
 ];
 
 /** Runs the local parity script (scripts/ci-local.mjs) with `args`, which never start a job. */
@@ -214,6 +216,66 @@ describe('CI workflow', () => {
     ]);
   });
 
+  it('e2e-smoke runs the Store-less Desktop E2E journey on macOS, Windows and Linux, each on its own', () => {
+    const job = workflow.jobs?.['e2e-smoke'];
+    expect(job?.strategy?.matrix?.os).toEqual(['macos-latest', 'windows-latest', 'ubuntu-latest']);
+    expect(job?.['runs-on']).toBe('${{ matrix.os }}');
+    expect(job?.strategy?.['fail-fast']).toBe(false);
+    const journey = commandsOf('e2e-smoke').find((command) => command.includes('e2e:smoke'));
+    // On a virtual display on Linux, as is everywhere else.
+    expect(journey).toContain('xvfb-run -a pnpm --filter @harness-store/desktop run e2e:smoke');
+    expect(journey).toContain('\n  pnpm --filter @harness-store/desktop run e2e:smoke');
+  });
+
+  it('acceptance runs the acceptance journey on Linux, with a keyring for the session and a virtual display', () => {
+    const job = workflow.jobs?.acceptance;
+    expect(job?.['runs-on']).toBe('ubuntu-latest');
+    const journey = commandsOf('acceptance').find((command) => command.includes('e2e:acceptance'));
+    expect(journey).toMatch(/^dbus-run-session -- /);
+    expect(journey).toContain('gnome-keyring-daemon --unlock --components=secrets');
+    expect(journey).toContain(
+      'xvfb-run -a pnpm --filter @harness-store/desktop run e2e:acceptance',
+    );
+  });
+
+  it('the Desktop E2E jobs keep the Electron sandbox, list flaky journeys and upload traces on failure', () => {
+    // The sandbox is allowed on the runner (Ubuntu 24.04 restricts user namespaces), never turned off.
+    for (const command of runCommands) expect(command).not.toContain('--no-sandbox');
+    expect(readText('apps', 'desktop', 'e2e', 'support', 'app.ts')).not.toContain('--no-sandbox');
+    for (const name of ['e2e-smoke', 'acceptance']) {
+      const jobSteps = workflow.jobs?.[name]?.steps ?? [];
+      const sandbox = jobSteps.find((step) => step.run?.includes('apparmor_restrict_unprivileged'));
+      expect(sandbox?.run, name).toBe(
+        'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0',
+      );
+      expect(
+        jobSteps.find((step) => step.run === 'node apps/desktop/scripts/e2e-summary.mjs'),
+        name,
+      ).toMatchObject({ if: 'always()' });
+      const upload = jobSteps.find((step) => step.uses?.startsWith('actions/upload-artifact@'));
+      expect(upload, name).toMatchObject({ if: 'failure()' });
+      expect(upload?.with?.path, name).toBe('apps/desktop/e2e/test-results/');
+    }
+  });
+
+  it('the Playwright config retries once in CI only and gives each journey a 10-minute budget', () => {
+    const config = readText('apps', 'desktop', 'e2e', 'playwright.config.ts');
+    expect(config).toContain('retries: process.env.CI ? 1 : 0,');
+    expect(config).toContain('timeout: 10 * 60_000,');
+    expect(config).toContain("['json', { outputFile: 'test-results/results.json' }]");
+    const desktop = readPackageJson('apps', 'desktop');
+    expect(desktop.scripts?.['e2e:smoke']).toBe(
+      'playwright test --config e2e/playwright.config.ts --project=smoke',
+    );
+    expect(desktop.scripts?.['e2e:acceptance']).toBe(
+      'playwright test --config e2e/playwright.config.ts --project=acceptance',
+    );
+    // `pnpm e2e` builds first, as the journeys drive the built app; `pnpm test` never runs them.
+    expect(rootManifest.scripts?.e2e).toBe(
+      'pnpm build && pnpm --filter @harness-store/desktop run e2e',
+    );
+  });
+
   it('only invokes commands that exist as root scripts (no hand-rolled subset)', () => {
     for (const command of [...ROOT_COMMANDS, 'check:catalogs']) {
       expect(rootManifest.scripts?.[command], `root script "${command}"`).toEqual(
@@ -264,7 +326,7 @@ describe('required checks (README.md)', () => {
         ? os.map((each) => name.replace('${{ matrix.os }}', String(each)))
         : [name];
     });
-    expect(checks).toHaveLength(7);
+    expect(checks).toHaveLength(11);
     for (const check of checks) expect(readme, check).toContain(`| ${check} |`);
   });
 });
@@ -382,6 +444,16 @@ describe('local CI parity (pnpm ci:local)', () => {
       expect(docker?.githubUrl).toBe('http://fake-github:8080');
     });
 
+    it('without Docker fails acceptance, saying it needs Docker, before the journey starts', () => {
+      const tools = fakeTools();
+      dirs.push(tools.dir);
+      const result = tools.runCiLocal(['acceptance']);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('acceptance needs Docker');
+      expect(tools.calls().map((call) => call.args.join(' '))).toEqual(['build', 'info']);
+      expect(result.stdout).toMatch(/failed\s+acceptance/);
+    });
+
     it('without Docker fails store-tests, saying it needs Docker, before any Supabase command', () => {
       const tools = fakeTools();
       dirs.push(tools.dir);
@@ -403,6 +475,18 @@ describe('local CI parity (pnpm ci:local)', () => {
           `pnpm([${args.map((arg) => `'${arg}'`).join(', ')}])`,
         );
       }
+    }
+  });
+
+  it('runs the same journeys as the Desktop E2E jobs', () => {
+    const script = readText('scripts', 'ci-local.mjs');
+    for (const job of ['e2e-smoke', 'acceptance']) {
+      const journey = commandsOf(job).find((command) => command.includes(' run e2e:'));
+      const name = /run (e2e:\w+)/.exec(journey ?? '')?.[1];
+      expect(name, job).toBeDefined();
+      expect(script, job).toContain(
+        `pnpm(['--filter', '@harness-store/desktop', 'run', '${name ?? ''}'])`,
+      );
     }
   });
 

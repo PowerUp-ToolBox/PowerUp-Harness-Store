@@ -33,6 +33,29 @@ export function localProbeTargets(
   );
 }
 
+/**
+ * The default targets with Ollama's base URL replaced by `ollamaUrl`: the development override
+ * `HARNESS_STORE_DEV_OLLAMA_URL` (src/main/index.ts, ignored by a packaged app), which lets the
+ * E2E journey's fake Ollama listen on another port where a real Ollama already has 11434. Only a
+ * loopback `http:` URL is accepted (a trailing slash is dropped); anything else throws, so a typo
+ * fails at startup instead of detecting nothing.
+ */
+export function localProbeTargetsWithOllama(
+  ollamaUrl: string,
+  providers: readonly ProviderInfo[] = PROVIDERS,
+): readonly LocalProbeTarget[] {
+  const url = URL.canParse(ollamaUrl) ? new URL(ollamaUrl) : null;
+  if (url?.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
+    throw new Error(
+      `Invalid Ollama URL ${JSON.stringify(ollamaUrl)}: expected a loopback http URL such as http://127.0.0.1:11435/v1.`,
+    );
+  }
+  const baseUrl = url.href.replace(/\/+$/, '');
+  return localProbeTargets(providers).map((target) =>
+    target.providerId === 'ollama' ? { ...target, baseUrl } : target,
+  );
+}
+
 export interface LocalDetectorOptions {
   /** Node's `fetch`, the one Connection tests and the Model Gateway's upstream calls use. */
   readonly fetch: typeof globalThis.fetch;

@@ -2,12 +2,12 @@ name: CI
 
 # Runs on every push and every pull request. `lint-typecheck` runs first; every other job needs
 # it and nothing else, so a lint, type or catalog failure skips the rest, and the other jobs then
-# run in parallel. Later jobs (the Desktop E2E smoke and the acceptance journey) append to this
-# graph the same way. Each job installs and builds on its own runner, because packages import
-# each other's built dist/; setup-node's pnpm cache is keyed on pnpm-lock.yaml.
+# run in parallel. Each job installs and builds on its own runner, because packages import each
+# other's built dist/; setup-node's pnpm cache is keyed on pnpm-lock.yaml.
 #
-# Playwright suites retry a failed test once when CI is set (GitHub sets it on every runner), in
-# their own config; no job here retries a step.
+# The Desktop E2E jobs (`e2e-smoke`, `acceptance`) retry a failed journey once when CI is set
+# (GitHub sets it on every runner), in apps/desktop/e2e/playwright.config.ts; no job here retries a
+# step. A journey that passed only on its retry is listed in the job summary as flaky.
 #
 # `pnpm ci:local` (scripts/ci-local.mjs) runs the same jobs once on the contributor's machine.
 on:
@@ -218,3 +218,127 @@ jobs:
 
       - name: Installer tests
         run: pnpm --filter @harness-store/desktop run test:install
+
+  # The Desktop E2E seam (docs/tech/architecture.md §8, item 5) on each desktop OS: the Store-less
+  # journey of apps/desktop/e2e over the built app (first-run wizard with the fake Provider as
+  # Ollama, "Install this folder locally" with hello-web, launch, one chat through the Model
+  # Gateway, the Usage Record, uninstall). Linux runs it on a virtual display.
+  e2e-smoke:
+    name: Desktop E2E smoke (${{ matrix.os }})
+    needs: lint-typecheck
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The journey drives electron-vite's out/ and installs hello-web's built out/ folder.
+      - name: Build
+        run: pnpm build
+
+      # Ubuntu 24.04 forbids the unprivileged user namespaces Chromium's sandbox needs; this lifts
+      # that for the runner instead of starting Electron with --no-sandbox.
+      - name: Allow the Electron sandbox
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Smoke journey
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a pnpm --filter @harness-store/desktop run e2e:smoke
+          else
+            pnpm --filter @harness-store/desktop run e2e:smoke
+          fi
+
+      - name: Flaky and failed journeys
+        if: always()
+        run: node apps/desktop/scripts/e2e-summary.mjs
+
+      - name: Upload traces, screenshots and logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-smoke-${{ matrix.os }}
+          path: apps/desktop/e2e/test-results/
+          if-no-files-found: ignore
+
+  # The acceptance journey, the P0 definition of done (P0-13.2): a fresh User sets up Ollama (the
+  # fake Provider), signs in as a Publisher (the fake GitHub), publishes hello-web, finds it with
+  # Store search, installs it with consent, launches it, chats once through the Model Gateway, sees
+  # the one Usage Record and uninstalls it, within 10 minutes. The Store is the local Supabase
+  # stack, which the journey's setup starts in Docker (outside the budget) and stops at the end.
+  # Linux only: the macOS runners have no Docker.
+  acceptance:
+    name: Acceptance journey (local Store)
+    needs: lint-typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The journey drives electron-vite's out/ and publishes hello-web's built out/ folder; the
+      # Store's seed and CLI wrapper run from apps/store/dist/.
+      - name: Build
+        run: pnpm build
+
+      - name: Allow the Electron sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # The Publisher's session is stored with Electron's safeStorage, which the app refuses to
+      # use without an OS keyring (its `basic_text` fallback is plaintext in all but name). The
+      # runner has none, so the journey runs with GNOME Keyring on a session bus of its own.
+      - name: Install GNOME Keyring
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gnome-keyring
+
+      - name: Acceptance journey
+        run: |
+          dbus-run-session -- bash -c '
+            set -e
+            eval "$(printf "\n" | gnome-keyring-daemon --unlock --components=secrets)"
+            xvfb-run -a pnpm --filter @harness-store/desktop run e2e:acceptance
+          '
+
+      - name: Flaky and failed journeys
+        if: always()
+        run: node apps/desktop/scripts/e2e-summary.mjs
+
+      # The traces and screenshots, each failed attempt's profile logs and the Edge Functions log.
+      - name: Upload traces, screenshots and logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: acceptance
+          path: apps/desktop/e2e/test-results/
+          if-no-files-found: ignore
