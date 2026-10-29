@@ -405,16 +405,18 @@ describe('launching fixture-term', () => {
     // The window's terminal takes its new size first; ConPTY then draws its screen at that size.
     windows.screens.resize(launchId, { cols: 120, rows: 40 });
     await windowCall(launchId, 'terminal.resize', { cols: 120, rows: 40 });
-    const resized = await waitFor(async () => (await reports(launchId, 'resize'))[0]).catch(
-      async (error: unknown) => {
-        // What the pty printed and what its window shows, to tell a missing report from one drawn
-        // where it does not read as a line.
-        const raw = JSON.stringify(output(launchId).slice(-3000));
-        const shown = await windows.screens.text(launchId);
-        throw new Error(`${String(error)}\nOutput: ${raw}\nScreen:\n${shown}`);
-      },
-    );
-    expect(resized).toEqual([120, 40]);
+    if (process.platform === 'win32') {
+      // A Windows console program reading lines is never told its console was resized (libuv
+      // notices only during raw reads), so fixture-term cannot report it there. ConPTY announces
+      // the size it was given instead, as `CSI 8 ; rows ; cols t`, when it draws the screen again.
+      await expect(
+        waitFor(() => (output(launchId).includes('\u001b[8;40;120t') ? true : undefined)),
+      ).resolves.toBe(true);
+      return;
+    }
+    await expect(waitFor(async () => (await reports(launchId, 'resize'))[0])).resolves.toEqual([
+      120, 40,
+    ]);
   });
 
   it.skipIf(process.platform === 'win32')(

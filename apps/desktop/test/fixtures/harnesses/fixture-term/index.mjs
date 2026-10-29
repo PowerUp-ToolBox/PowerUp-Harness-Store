@@ -14,21 +14,9 @@ process.on('SIGTERM', () => {
   if (process.env.FIXTURE_SIGNAL_FILE) appendFileSync(process.env.FIXTURE_SIGNAL_FILE, 'SIGTERM\n');
   process.exit(0);
 });
-// Windows' console tells a process it was resized only while it reads stdin raw, so there the
-// fixture reads the size itself; getWindowSize asks the console each time.
-if (process.platform === 'win32') {
-  let last = process.stdout.getWindowSize().join('x');
-  setInterval(() => {
-    const size = process.stdout.getWindowSize();
-    if (size.join('x') === last) return;
-    last = size.join('x');
-    report('resize', size);
-  }, 100).unref();
-} else {
-  process.stdout.on('resize', () => {
-    report('resize', [process.stdout.columns, process.stdout.rows]);
-  });
-}
+process.stdout.on('resize', () => {
+  report('resize', [process.stdout.columns, process.stdout.rows]);
+});
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (line) => {
   report('input', line);
