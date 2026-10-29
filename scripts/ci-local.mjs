@@ -157,9 +157,13 @@ async function storeTests() {
     if (!passed) functions.printLog();
     return passed;
   } finally {
-    functions?.stop();
-    // Also after a failure or Ctrl-C, so no container is left behind.
-    supabase(['stop', '--no-backup'], true);
+    try {
+      functions?.stop();
+    } finally {
+      // Also after a failure, Ctrl-C or a failed stop of `functions serve`, so no container is
+      // left behind.
+      supabase(['stop', '--no-backup'], true);
+    }
   }
 }
 
@@ -200,7 +204,12 @@ async function serveFunctions(jobEnv) {
           // Already gone.
         }
       }
-      rmSync(logDir, { recursive: true, force: true });
+      try {
+        // Windows may still hold the log open for a moment after taskkill (the CLI, an antivirus).
+        rmSync(logDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      } catch (error) {
+        console.error(`Could not remove ${logDir}: ${error.message}`);
+      }
     },
   };
   const deadline = Date.now() + FUNCTIONS_READY_MS;

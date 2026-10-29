@@ -45,6 +45,13 @@ const eventsOf = (from: Workflow) => {
   return Array.isArray(on) ? on : typeof on === 'string' ? [on] : Object.keys(on ?? {});
 };
 
+/** Provider credentials a developer may have exported, which no ci:local command may get. */
+const CONFORMANCE_ENV = {
+  CONFORMANCE_OPENAI_API_KEY: 'sk-from-the-shell',
+  CONFORMANCE_ANTHROPIC_API_KEY: 'sk-ant-from-the-shell',
+  CONFORMANCE_OPENAI_COMPATIBLE_BASE_URL: 'https://provider.example/v1',
+};
+
 /** The jobs of `ci`, in workflow order. P0-13.2 appends the Desktop E2E jobs. */
 const CI_JOBS = [
   'lint-typecheck',
@@ -63,14 +70,14 @@ const ciLocal = (...args: string[]) =>
 /**
  * A scratch folder with a fake pnpm (`pnpm.cjs`, which ci-local runs as the pnpm that started it)
  * and a fake `docker` on PATH, each logging its arguments and the GitHub provider variables to
- * `log`. The fake pnpm exits 0, or ends by SIGINT as Ctrl-C would, sent to ci-local too, when its
+ * `log`, with the names of the CONFORMANCE_* variables it got. The fake pnpm exits 0, or ends by SIGINT as Ctrl-C would, sent to ci-local too, when its
  * first argument is `interruptAt`. The fake docker always fails, so `store-tests` stops before it
  * reaches the Supabase CLI and a stack the developer runs.
  */
 function fakeTools(interruptAt?: string) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-local-'));
   const log = join(dir, 'log');
-  const record = `require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify({ tool, args: process.argv.slice(2), githubClientId: process.env.SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID ?? null, githubUrl: process.env.SUPABASE_AUTH_EXTERNAL_GITHUB_URL ?? null }) + '\\n');`;
+  const record = `require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify({ tool, args: process.argv.slice(2), githubClientId: process.env.SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID ?? null, githubUrl: process.env.SUPABASE_AUTH_EXTERNAL_GITHUB_URL ?? null, conformance: Object.keys(process.env).filter((name) => name.startsWith('CONFORMANCE_')) }) + '\\n');`;
   writeFileSync(
     join(dir, 'pnpm.cjs'),
     `const tool = 'pnpm';\n${record}\n` +
@@ -93,6 +100,7 @@ function fakeTools(interruptAt?: string) {
             args: string[];
             githubClientId: string | null;
             githubUrl: string | null;
+            conformance: string[];
           },
       );
   const runCiLocal = (args: string[], env: Record<string, string> = {}) =>
@@ -342,6 +350,24 @@ describe('local CI parity (pnpm ci:local)', () => {
       expect(result.stdout).toMatch(/skipped\s+supervisor-tests/);
     });
 
+    it('gives no command a CONFORMANCE_* variable of the shell, so no job reaches a real Provider', () => {
+      const tools = fakeTools();
+      dirs.push(tools.dir);
+      const result = tools.runCiLocal([], CONFORMANCE_ENV);
+      // store-tests fails at the fake docker; every other job ran.
+      expect(result.status, result.stderr).toBe(1);
+      const calls = tools.calls();
+      expect(calls.map((call) => call.args.join(' '))).toEqual(
+        expect.arrayContaining([
+          'build',
+          'test',
+          '--filter @harness-store/gateway exec vitest run conformance',
+          'info',
+        ]),
+      );
+      for (const call of calls) expect(call.conformance, call.args.join(' ')).toEqual([]);
+    });
+
     it('runs store-tests with the fake GitHub of .env.example over a real OAuth app in the shell', () => {
       const tools = fakeTools();
       dirs.push(tools.dir);
@@ -354,6 +380,16 @@ describe('local CI parity (pnpm ci:local)', () => {
       expect(docker?.args).toEqual(['info']);
       expect(docker?.githubClientId).toBe('fake-github-client');
       expect(docker?.githubUrl).toBe('http://fake-github:8080');
+    });
+
+    it('without Docker fails store-tests, saying it needs Docker, before any Supabase command', () => {
+      const tools = fakeTools();
+      dirs.push(tools.dir);
+      const result = tools.runCiLocal(['store-tests']);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('store-tests needs Docker');
+      expect(result.stdout).not.toContain('supabase.js');
+      expect(result.stdout).toMatch(/failed\s+store-tests/);
     });
   });
 
@@ -368,5 +404,34 @@ describe('local CI parity (pnpm ci:local)', () => {
         );
       }
     }
+  });
+
+  it('runs the same commands as the store-tests job', () => {
+    const script = readText('scripts', 'ci-local.mjs');
+    const commands = commandsOf('store-tests').slice(2);
+    const supabase = (args: string) => `supabase([${args}]`;
+    for (const command of commands) {
+      const start = /^node dist\/scripts\/supabase\.js start -x (\S+)$/.exec(command);
+      if (start) {
+        // The same services left out, so the two cannot drift apart.
+        expect(script).toContain(`const UNUSED_SERVICES = '${start[1] ?? ''}';`);
+        expect(script).toContain(supabase(`'start', '-x', UNUSED_SERVICES`));
+      } else if (command.startsWith('pnpm run ')) {
+        const args = command.replace(/^pnpm /, '').split(' ');
+        expect(script, command).toContain(
+          `pnpm([${args.map((arg) => `'${arg}'`).join(', ')}], STORE, jobEnv)`,
+        );
+      } else if (command.includes('supabase.js functions serve')) {
+        expect(script).toContain(`['dist/scripts/supabase.js', 'functions', 'serve']`);
+        expect(script).toContain(`'Serving functions on'`);
+      } else if (command.startsWith('node dist/scripts/supabase.js ')) {
+        const args = command.replace(/^node dist\/scripts\/supabase\.js /, '').split(' ');
+        expect(script, command).toContain(supabase(args.map((arg) => `'${arg}'`).join(', ')));
+      } else {
+        // Only the failure log is left; ci-local prints it with printLog().
+        expect(command).toBe('cat "$RUNNER_TEMP/functions.log"');
+      }
+    }
+    expect(commands.length).toBe(6);
   });
 });
