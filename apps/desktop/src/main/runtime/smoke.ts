@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { HarnessWindowEventName, HarnessWindowEvents } from '../../shared/harness-ipc.js';
@@ -69,6 +70,40 @@ export function smokeRequest(
     };
   }
   return { ok: true, request: { harnessFolder, providerUrl } };
+}
+
+/** How a smoke run in the app ends: see {@link endSmoke}. */
+export interface SmokeEnd {
+  /** The temporary profile of the run, deleted here. */
+  readonly dataDir: string;
+  /** Exits the app with this code (`app.exit`). */
+  readonly exit: (code: number) => void;
+  /** Prints an error line (stderr in the app). */
+  readonly logError: (line: string, error: unknown) => void;
+  /** Deletes a folder and everything in it; throws when it cannot. Default: `rmSync`. */
+  readonly removeDir?: (dir: string) => void;
+}
+
+/**
+ * Ends a smoke run in the app: deletes its temporary profile, then exits 0 when the run passed, 1
+ * otherwise. The exit never depends on the deletion, which can fail (EBUSY, EPERM) on Windows
+ * while Chromium's own processes, alive until the app exits, still hold files in the profile: the
+ * error is logged and the folder left in the temp folder, rather than the app staying up with no
+ * window until scripts/smoke.mjs kills it and fails a run that passed.
+ */
+export function endSmoke(passed: boolean, end: SmokeEnd): void {
+  const removeDir =
+    end.removeDir ??
+    ((dir: string) => {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    });
+  try {
+    removeDir(end.dataDir);
+  } catch (error) {
+    end.logError(`[smoke] Could not delete the temporary profile ${end.dataDir}`, error);
+  } finally {
+    end.exit(passed ? 0 : 1);
+  }
 }
 
 export interface SmokeOptions extends SmokeRequest {

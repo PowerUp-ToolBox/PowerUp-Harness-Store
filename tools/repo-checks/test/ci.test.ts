@@ -19,7 +19,9 @@ interface Step {
 interface Job {
   name?: string;
   'runs-on'?: string;
+  if?: string;
   needs?: string | string[];
+  permissions?: Record<string, string>;
   strategy?: { 'fail-fast'?: boolean; matrix?: Record<string, unknown> };
   'continue-on-error'?: unknown;
   env?: Record<string, string>;
@@ -28,12 +30,14 @@ interface Job {
 
 interface Workflow {
   on?: Record<string, unknown> | string[] | string;
+  permissions?: Record<string, string>;
   jobs?: Record<string, Job>;
 }
 
 const readWorkflow = (file: string) => parse(readText('.github', 'workflows', file)) as Workflow;
 const workflow = readWorkflow('ci.yml');
 const nightly = readWorkflow('nightly.yml');
+const build = readWorkflow('build.yml');
 const rootManifest = readPackageJson();
 const jobs = Object.entries(workflow.jobs ?? {});
 const steps = jobs.flatMap(([, job]) => job.steps ?? []);
@@ -301,17 +305,30 @@ describe('CI workflow', () => {
   });
 
   it('fails the build when any step fails', () => {
-    for (const [name, job] of [...jobs, ...Object.entries(nightly.jobs ?? {})]) {
+    const allJobs = [
+      ...jobs,
+      ...Object.entries(nightly.jobs ?? {}),
+      ...Object.entries(build.jobs ?? {}),
+    ];
+    for (const [name, job] of allJobs) {
       expect(job['continue-on-error'], `job ${name}`).toBeUndefined();
       for (const step of job.steps ?? []) {
         expect(step['continue-on-error'], step.name ?? step.run ?? step.uses).toBeUndefined();
+        expect(step.run ?? '', step.name).not.toMatch(/\|\|\s*(true|:|exit 0)/);
       }
     }
-    for (const command of runCommands) expect(command).not.toMatch(/\|\|\s*(true|:|exit 0)/);
   });
 
   it('takes Node from .nvmrc and pnpm from packageManager in every job, like a local checkout', () => {
-    for (const [name, job] of [...jobs, ...Object.entries(nightly.jobs ?? {})]) {
+    // build's `release` job only downloads the builds and runs gh: no Node, no install.
+    const packageJob = build.jobs?.package;
+    const nodeJobs = [
+      ...jobs,
+      ...Object.entries(nightly.jobs ?? {}),
+      ...(packageJob ? [['package', packageJob] as const] : []),
+    ];
+    expect(nodeJobs.map(([name]) => name)).toContain('package');
+    for (const [name, job] of nodeJobs) {
       const jobSteps = job.steps ?? [];
       const setupNode = jobSteps.find((step) => step.uses?.startsWith('actions/setup-node@'));
       expect(setupNode?.with?.['node-version-file'], `job ${name}`).toBe('.nvmrc');
@@ -533,5 +550,81 @@ describe('local CI parity (pnpm ci:local)', () => {
       }
     }
     expect(commands.length).toBe(6);
+  });
+});
+
+describe('build workflow', () => {
+  const packageJob = build.jobs?.package;
+  const release = build.jobs?.release;
+  const packageSteps = packageJob?.steps ?? [];
+  const stepIndex = (name: string) => packageSteps.findIndex((step) => step.name === name);
+
+  it('runs on pushes to main, v* tags and on demand, never on a pull request', () => {
+    expect(eventsOf(build).sort()).toEqual(['push', 'workflow_dispatch']);
+    expect(build.on).toMatchObject({ push: { branches: ['main'], tags: ['v*'] } });
+    expect(Object.keys((build.on as { push: object }).push).sort()).toEqual(['branches', 'tags']);
+  });
+
+  it('has a package job and a release job, and may only write contents in the tag-gated release', () => {
+    expect(Object.keys(build.jobs ?? {})).toEqual(['package', 'release']);
+    expect(build.permissions).toEqual({ contents: 'read' });
+    expect(packageJob?.permissions).toBeUndefined();
+    expect(release?.permissions).toEqual({ contents: 'write' });
+    expect(release?.if).toBe("startsWith(github.ref, 'refs/tags/v')");
+    expect(release?.needs).toBe('package');
+    // A draft, for the maintainer to publish, with the notes on opening an unsigned app.
+    const create = commandsOf('release', build).find((command) =>
+      command.includes('gh release create'),
+    );
+    expect(create).toContain('--draft');
+    expect(create).toContain('--notes-file .github/release-notes.md');
+  });
+
+  it('packages each target on a runner of its own OS and architecture', () => {
+    expect(packageJob?.['runs-on']).toBe('${{ matrix.os }}');
+    expect(packageJob?.strategy?.['fail-fast']).toBe(false);
+    const include = packageJob?.strategy?.matrix?.include as
+      { name: string; os: string; arch: string }[] | undefined;
+    expect(include?.map(({ name, os, arch }) => ({ name, os, arch }))).toEqual([
+      { name: 'macos-arm64', os: 'macos-latest', arch: 'arm64' },
+      { name: 'macos-x64', os: 'macos-15-intel', arch: 'x64' },
+      { name: 'windows-x64', os: 'windows-latest', arch: 'x64' },
+      { name: 'linux-x64', os: 'ubuntu-latest', arch: 'x64' },
+    ]);
+    const packaging = packageSteps.find((step) => step.name === 'Package')?.run ?? '';
+    expect(packaging).toContain(
+      'pnpm --filter @harness-store/desktop exec electron-builder --${{ matrix.arch }} --publish never',
+    );
+  });
+
+  it('signs and notarises nothing', () => {
+    expect(packageJob?.env?.CSC_IDENTITY_AUTO_DISCOVERY).toBe('false');
+    const text = readText('.github', 'workflows', 'build.yml')
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#'))
+      .join('\n');
+    expect(text).not.toMatch(/notari[sz]|codesign|CSC_LINK|CSC_KEY_PASSWORD|APPLE_ID|signtool/i);
+    expect(text).not.toMatch(/\bsecrets\./);
+  });
+
+  it('installs, builds and packages, then smoke-runs the build before checking and uploading it', () => {
+    expect(commandsOf('package', build).slice(0, 2)).toEqual([
+      'pnpm install --frozen-lockfile',
+      'pnpm build',
+    ]);
+    const order = ['Package', 'Smoke run', 'Check the build', 'Upload the build'].map(stepIndex);
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    const smoke = packageSteps[stepIndex('Smoke run')];
+    expect(smoke?.if).toBeUndefined();
+    expect(smoke?.run).toContain('xvfb-run -a pnpm --filter @harness-store/desktop run smoke');
+    expect(smoke?.run).not.toContain('--no-sandbox');
+    // The sandbox is allowed on the Linux runner before the app starts, never turned off.
+    const sandbox = stepIndex('Allow the Electron sandbox');
+    expect(packageSteps[sandbox]?.run).toBe(
+      'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0',
+    );
+    expect(sandbox).toBeLessThan(stepIndex('Smoke run'));
+    expect(packageSteps[stepIndex('Upload the build')]?.with?.['if-no-files-found']).toBe('error');
   });
 });

@@ -3,7 +3,7 @@
  * Electron's APIs; the services and IPC handlers live in src/main/runtime/, which never imports
  * Electron, so they are unit-tested under plain Node.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -41,7 +41,7 @@ import {
   mainWindowOptions,
 } from './runtime/main-window.js';
 import { createSafeStorageCipher } from './runtime/secret-cipher.js';
-import { runSmoke, smokeRequest, type SmokeRequestResult } from './runtime/smoke.js';
+import { endSmoke, runSmoke, smokeRequest, type SmokeRequestResult } from './runtime/smoke.js';
 import { STORE_ASSET_SCHEME, storeAssetSource } from '../shared/store-assets.js';
 import { AUTH_SCHEME } from './runtime/store-auth.js';
 import { initialWindowBounds } from './runtime/window-state.js';
@@ -378,7 +378,8 @@ function saveWindowState(window: BrowserWindow, started: Runtime): void {
 /**
  * The post-build smoke run instead of the app (scripts/smoke.mjs): on a new temporary profile,
  * deleted afterwards, with no window, no single-instance lock and no `harnessstore:` registration.
- * The app exits 0 when the run passed, 1 otherwise (a refused request included).
+ * The app exits 0 when the run passed, 1 otherwise (a refused request included), even when the
+ * profile cannot be deleted ({@link endSmoke}).
  */
 function runSmokeInstead(smoke: SmokeRequestResult): void {
   if (!smoke.ok) {
@@ -406,7 +407,14 @@ function runSmokeInstead(smoke: SmokeRequestResult): void {
       return false;
     })
     .then((passed) => {
-      rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-      app.exit(passed ? 0 : 1);
+      endSmoke(passed, {
+        dataDir,
+        exit: (code) => {
+          app.exit(code);
+        },
+        logError: (line, error) => {
+          console.error(line, error);
+        },
+      });
     });
 }

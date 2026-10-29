@@ -1,9 +1,10 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startFakeProvider, type FakeProvider } from '@harness-store/gateway/testing/fake-provider';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  endSmoke,
   runSmoke,
   SMOKE_HARNESS_VARIABLE,
   SMOKE_PROVIDER_VARIABLE,
@@ -139,5 +140,46 @@ describe('runSmoke', () => {
     fake = await startFakeProvider({ aliases: { 'llama3:8b': 'fake/echo' } });
     await expect(smoke({ timeoutMs: 3000 })).resolves.toBe(false);
     expect(lines.join('\n')).toContain('FAILED: Timed out after 3 s');
+  });
+});
+
+describe('endSmoke', () => {
+  const end = (removeDir?: (dir: string) => void) => {
+    const exit = vi.fn<(code: number) => void>();
+    const logError = vi.fn<(line: string, error: unknown) => void>();
+    const dataDir = join(root, 'userData');
+    return { dataDir, exit, logError, ...(removeDir ? { removeDir } : {}) };
+  };
+
+  it('deletes the temporary profile, then exits 0 when the run passed and 1 when it failed', () => {
+    for (const [passed, code] of [
+      [true, 0],
+      [false, 1],
+    ] as const) {
+      const options = end();
+      mkdirSync(join(options.dataDir, 'logs'), { recursive: true });
+      endSmoke(passed, options);
+      expect(existsSync(options.dataDir)).toBe(false);
+      expect(options.exit.mock.calls).toEqual([[code]]);
+      expect(options.logError).not.toHaveBeenCalled();
+    }
+  });
+
+  it('still exits with the result when the profile cannot be deleted, logging why', () => {
+    // As on Windows, while Chromium's own processes still hold files in the profile.
+    const busy = Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    for (const [passed, code] of [
+      [true, 0],
+      [false, 1],
+    ] as const) {
+      const options = end(() => {
+        throw busy;
+      });
+      expect(() => {
+        endSmoke(passed, options);
+      }).not.toThrow();
+      expect(options.exit.mock.calls).toEqual([[code]]);
+      expect(options.logError).toHaveBeenCalledWith(expect.stringContaining(options.dataDir), busy);
+    }
   });
 });
