@@ -596,7 +596,7 @@ A code reviewer needs a strong model with tool calling for the review itself, an
       "default": {
         "description": "Reviews the change, reading files with tools",
         "requirements": { "tools": true, "minContext": 64000 },
-        "recommended": ["anthropic/claude-sonnet-4-5", "openai/gpt-5", "ollama/qwen3-coder:30b"]
+        "recommended": ["anthropic/claude-sonnet-5-5", "openai/gpt-5", "ollama/qwen3-coder:30b"]
       },
       "fast": {
         "description": "Summarises each changed file before the review",
@@ -612,7 +612,7 @@ What each Slot resolves to, for three Users who have set no Model Override:
 
 | The User has | `default` resolves to | `fast` resolves to |
 |---|---|---|
-| An Anthropic Connection and Ollama; Default Model `ollama/llama3.2` | `anthropic/claude-sonnet-4-5` (first Recommended Model with a Connection) | `ollama/qwen3:8b` (first Recommended Model with a Connection) |
+| An Anthropic Connection and Ollama; Default Model `ollama/llama3.2` | `anthropic/claude-sonnet-5-5` (first Recommended Model with a Connection) | `ollama/qwen3:8b` (first Recommended Model with a Connection) |
 | Only Ollama; Default Model `ollama/llama3.2` | `ollama/qwen3-coder:30b` (third Recommended Model); fails with `provider_error` until the User pulls it | `ollama/qwen3:8b` |
 | Only DeepSeek; Default Model `deepseek/deepseek-chat` | `deepseek/deepseek-chat` (no Recommended Model has a Connection, so the Default Model) | `deepseek/deepseek-chat` (no Default Model for `fast`, so the one for `default`) |
 
