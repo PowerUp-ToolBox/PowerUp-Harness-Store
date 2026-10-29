@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -153,9 +154,8 @@ describe('terminalText', () => {
   });
 });
 
-// Each run stops hello-term with the shutdown sequence. On Windows the polite step of it
-// (`taskkill` without /F) cannot end a console process in a pty, so the run takes the whole
-// STOP_GRACE_MS (5 s) on top of its own time, past Vitest's default 5 s.
+// Each run starts and stops hello-term for real, and the failing ones wait out their own time
+// limits: past Vitest's default 5 s.
 describe('runSmoke', { timeout: 20_000 }, () => {
   it('installs hello-term, gets one echoed answer through the Model Gateway and one Usage Record', async () => {
     fake = await startFakeProvider({ aliases: { 'qwen3:8b': 'fake/echo' } });
@@ -225,8 +225,14 @@ describe.runIf(process.platform === 'win32')('runSmoke on Windows', { timeout: 3
       isPackaged: false,
       resourcesPath: join(electron, '..', 'resources'),
       appPath: DESKTOP,
-      nodeVersion: process.versions.node,
+      // Electron's, as the development app knows it: the vendored node.exe must be that version.
+      nodeVersion: spawnSync(electron, ['-p', 'process.versions.node'], {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        encoding: 'utf8',
+      }).stdout.trim(),
       exists: existsSync,
+      readText: (path) => readFileSync(path, 'utf8'),
+      pathNodeVersion: () => undefined,
     });
     if (runtime.warning !== undefined) throw new Error(runtime.warning);
     fake = await startFakeProvider({ aliases: { 'qwen3:8b': 'fake/echo' } });

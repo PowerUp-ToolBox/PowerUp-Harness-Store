@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import type { NodeCommand } from './supervisor.js';
 
 /**
@@ -29,12 +30,19 @@ export interface NodeRuntimeContext {
   readonly nodeVersion: string;
   /** Whether a file is there. */
   readonly exists: (path: string) => boolean;
+  /** A file's text; undefined when it cannot be read. */
+  readonly readText: (path: string) => string | undefined;
+  /**
+   * The Node version `node.exe` on PATH reports (`node.exe -p process.versions.node`); undefined
+   * when it does not run. Asked at most once, and only when that is the runtime.
+   */
+  readonly pathNodeVersion: () => string | undefined;
 }
 
 /** The Node command Node Harnesses run on, with what the Runtime reports about it. */
 export interface NodeRuntime {
   readonly command: NodeCommand;
-  /** The Node version it runs, as the diagnostics show it. */
+  /** The Node version it runs, as the diagnostics show it: `unknown` when it cannot be told. */
   readonly nodeVersion: string;
   /** Something wrong with it, logged once at startup; absent when nothing is. */
   readonly warning?: string;
@@ -51,8 +59,10 @@ export function vendoredNodePath(appPath: string, arch: string): string {
  * - Windows, packaged: `resources/node/node.exe`. When it is missing the command is kept, so every
  *   launch of a Node Harness fails with a spawn error naming it (and the smoke run fails the
  *   build); the app's executable is never used instead, as it cannot work in a pty.
- * - Windows, in development: `vendor/node/win32-<arch>/node.exe`, or else `node.exe` on PATH with a
- *   warning, as its Node version may not be Electron's.
+ * - Windows, in development: `vendor/node/win32-<arch>/node.exe`, whose version is the one the
+ *   `node.json` beside it records, with a warning when that is not Electron's Node (Electron was
+ *   updated since fetch-node ran) or no `node.json` says; or else `node.exe` on PATH, at the
+ *   version it reports, with a warning, as that may not be Electron's.
  */
 export function defaultNodeCommand(context: NodeRuntimeContext): NodeRuntime {
   const { nodeVersion } = context;
@@ -69,23 +79,53 @@ export function defaultNodeCommand(context: NodeRuntimeContext): NodeRuntime {
         : { warning: `${bundled} is missing: no Node Harness can be launched.` }),
     };
   }
+  const fetchNode = 'Run `pnpm --filter @harness-store/desktop run fetch-node`.';
   const vendored = vendoredNodePath(context.appPath, context.arch);
-  if (context.exists(vendored)) return { command: { path: vendored, env: {} }, nodeVersion };
+  if (context.exists(vendored)) {
+    const recorded = recordedVersion(context.readText(join(dirname(vendored), 'node.json')));
+    const command = { path: vendored, env: {} };
+    if (recorded === nodeVersion) return { command, nodeVersion };
+    return {
+      command,
+      nodeVersion: recorded ?? UNKNOWN,
+      warning:
+        recorded === undefined
+          ? `${vendored} has no node.json saying its Node version, which may not be Electron's ` +
+            `Node ${nodeVersion}. ${fetchNode}`
+          : `${vendored} is Node ${recorded}, not Electron's Node ${nodeVersion}. ${fetchNode}`,
+    };
+  }
+  const onPath = context.pathNodeVersion();
   return {
     command: { path: 'node.exe', env: {} },
-    nodeVersion: 'node.exe on PATH',
+    nodeVersion: onPath ?? UNKNOWN,
     warning:
-      `${vendored} is missing: Node Harnesses run on node.exe from PATH, whose version may not be ` +
-      `Electron's Node ${nodeVersion}. Run \`pnpm --filter @harness-store/desktop run fetch-node\`.`,
+      `${vendored} is missing: Node Harnesses run on node.exe from PATH, ` +
+      `${onPath === undefined ? 'whose version is unknown' : `Node ${onPath}`}, not necessarily ` +
+      `Electron's Node ${nodeVersion}. ${fetchNode}`,
   };
+}
+
+/** The diagnostics' Node version when it cannot be told. */
+const UNKNOWN = 'unknown';
+
+/** The version a fetch-node.mjs `node.json` records; undefined when there is none. */
+function recordedVersion(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+  try {
+    const { version } = JSON.parse(text) as { version?: unknown };
+    return typeof version === 'string' && version !== '' ? version : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
  * {@link defaultNodeCommand} for this process. In the app the facts come from Electron's `process`:
  * packaged unless the executable is Electron's own (`electron`, `electron.exe`), as Electron's
  * `app.isPackaged` decides; the app's folder is two above this code, which is bundled into
- * `out/main/` (as src/main/index.ts finds its preloads). Under plain Node (tests), Node itself, on
- * every platform.
+ * `out/main/` (as src/main/index.ts finds its preloads); node.exe on PATH is run once, for at most
+ * 5 s, only when it is the runtime. Under plain Node (tests), Node itself, on every platform.
  */
 export function nodeRuntimeOfThisProcess(): NodeRuntime {
   const nodeVersion = process.versions.node;
@@ -103,5 +143,23 @@ export function nodeRuntimeOfThisProcess(): NodeRuntime {
     appPath: join(import.meta.dirname, '..', '..'),
     nodeVersion,
     exists: existsSync,
+    readText: (path) => {
+      try {
+        return readFileSync(path, 'utf8');
+      } catch {
+        return undefined;
+      }
+    },
+    pathNodeVersion: () => {
+      const result = spawnSync('node.exe', ['-p', 'process.versions.node'], {
+        encoding: 'utf8',
+        timeout: 5000,
+        windowsHide: true,
+      });
+      // Not run at all (no node.exe on PATH): no status, and no output either.
+      if (result.status !== 0) return undefined;
+      const version = result.stdout.trim();
+      return /^\d+\.\d+\.\d+$/.test(version) ? version : undefined;
+    },
   });
 }
